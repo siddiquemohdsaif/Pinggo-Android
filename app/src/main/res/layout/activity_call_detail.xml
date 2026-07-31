@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/main"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/screen_background"
+    android:padding="24dp"
+    tools:context=".CallDetailActivity">
+
+    <FrameLayout
+        android:id="@+id/profileContainer"
+        android:layout_width="112dp"
+        android:layout_height="112dp"
+        app:layout_constraintBottom_toTopOf="@id/callContactNameTextView"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintVertical_chainStyle="packed" />
+
+    <TextView
+        android:id="@+id/callContactNameTextView"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:gravity="center"
+        android:textColor="@color/primary_text"
+        android:textSize="26sp"
+        android:textStyle="bold"
+        app:layout_constraintBottom_toTopOf="@id/callLogContainer"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/profileContainer"
+        tools:text="Aarav Sharma" />
+
+    <LinearLayout
+        android:id="@+id/callLogContainer"
+        android:layout_width="0dp"
+        android:layout_height="72dp"
+        android:layout_marginTop="36dp"
+        android:background="@drawable/bg_input"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="18dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/callContactNameTextView">
+
+        <ImageView
+            android:id="@+id/callTypeImageView"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:contentDescription="@string/voice_call"
+            app:tint="@color/primary_text"
+            tools:src="@drawable/ic_call" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/calledTimeTextView"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/primary_text"
+                android:textSize="17sp"
+                android:textStyle="bold"
+                tools:text="12/02/2026 10:08" />
+
+            <TextView
+                android:id="@+id/callDurationTextView"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:textColor="@color/secondary_text"
+                android:textSize="14sp"
+                tools:text="2 min 14 sec" />
+        </LinearLayout>
+    </LinearLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>
