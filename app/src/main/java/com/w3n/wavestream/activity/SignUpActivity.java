@@ -1,30 +1,52 @@
 package com.w3n.wavestream.activity;
 
-import android.app.DatePickerDialog;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.Toast;
 
-import java.util.Calendar;
-import java.util.Locale;
-
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.activity.EdgeToEdge;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
+import com.w3n.wavestream.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.wavestream.R;
+import com.w3n.wavestream.views.CropImageView;
+
+import java.io.IOException;
+import java.io.InputStream;
 
 public class SignUpActivity extends AppCompatActivity {
+    public static final String EXTRA_PHONE_NUMBER = "com.w3n.wavestream.extra.PHONE_NUMBER";
+    private static final int PROFILE_PHOTO_PREVIEW_SIZE_DP = 180;
+    private static final int PROFILE_PHOTO_EMPTY_PADDING_DP = 38;
+    private static final int PROFILE_PHOTO_CROP_BOX_SIZE_DP = 280;
+
     private EditText nameEditText;
-    private EditText emailEditText;
-    private EditText dobEditText;
-    private Button nextButton;
+    private EditText descriptionEditText;
+    private ImageView profilePhotoImageView;
+    private CropImageView cropImageView;
+    private View cropContainer;
     private Button confirmButton;
+    private Button selectProfilePhotoButton;
+    private Button okCropButton;
+    private Button retryCropButton;
+    private String phoneNumber;
+    private Uri selectedProfilePhotoUri;
+    private Uri pendingProfilePhotoUri;
+    private Bitmap pendingProfilePhotoBitmap;
+    private Bitmap selectedProfilePhotoBitmap;
+    private ActivityResultLauncher<String> profilePhotoPicker;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -37,59 +59,126 @@ public class SignUpActivity extends AppCompatActivity {
             return insets;
         });
 
-        nameEditText = findViewById(R.id.nameEditText);
-        emailEditText = findViewById(R.id.emailEditText);
-        dobEditText = findViewById(R.id.dobEditText);
-        nextButton = findViewById(R.id.nextButton);
-        confirmButton = findViewById(R.id.signUpConfirmButton);
+        profilePhotoPicker = registerForActivityResult(new ActivityResultContracts.GetContent(), uri -> {
+            if (uri == null) {
+                return;
+            }
+            pendingProfilePhotoUri = uri;
+            showCropView(uri);
+        });
 
-        nextButton.setOnClickListener(v -> showEmailStep());
-        dobEditText.setOnClickListener(v -> showDatePicker());
+        profilePhotoImageView = findViewById(R.id.profilePhotoImageView);
+        cropImageView = findViewById(R.id.cropImageView);
+        cropContainer = findViewById(R.id.cropContainer);
+        nameEditText = findViewById(R.id.nameEditText);
+        descriptionEditText = findViewById(R.id.descriptionEditText);
+        selectProfilePhotoButton = findViewById(R.id.selectProfilePhotoButton);
+        okCropButton = findViewById(R.id.okCropButton);
+        retryCropButton = findViewById(R.id.retryCropButton);
+        confirmButton = findViewById(R.id.signUpConfirmButton);
+        phoneNumber = getIntent().getStringExtra(EXTRA_PHONE_NUMBER);
+        applyProfilePhotoSizing();
+        cropImageView.setCropBoxSizeDp(PROFILE_PHOTO_CROP_BOX_SIZE_DP);
+
+        if (phoneNumber == null || phoneNumber.trim().isEmpty()) {
+            Toast.makeText(this, R.string.phone_required, Toast.LENGTH_SHORT).show();
+            startActivity(new Intent(this, LoginActivity.class));
+            finish();
+            return;
+        }
+
+        profilePhotoImageView.setOnClickListener(v -> openProfilePhotoPicker());
+        selectProfilePhotoButton.setOnClickListener(v -> openProfilePhotoPicker());
+        okCropButton.setOnClickListener(v -> confirmCrop());
+        retryCropButton.setOnClickListener(v -> {
+            hideCropView();
+            openProfilePhotoPicker();
+        });
         confirmButton.setOnClickListener(v -> confirmSignUp());
     }
 
-    private void showEmailStep() {
+    private void applyProfilePhotoSizing() {
+        int previewSize = dp(PROFILE_PHOTO_PREVIEW_SIZE_DP);
+        profilePhotoImageView.getLayoutParams().width = previewSize;
+        profilePhotoImageView.getLayoutParams().height = previewSize;
+        profilePhotoImageView.setPadding(
+                dp(PROFILE_PHOTO_EMPTY_PADDING_DP),
+                dp(PROFILE_PHOTO_EMPTY_PADDING_DP),
+                dp(PROFILE_PHOTO_EMPTY_PADDING_DP),
+                dp(PROFILE_PHOTO_EMPTY_PADDING_DP)
+        );
+        profilePhotoImageView.requestLayout();
+    }
+
+    private void openProfilePhotoPicker() {
+        profilePhotoPicker.launch("image/*");
+    }
+
+    private void showCropView(Uri uri) {
+        pendingProfilePhotoBitmap = decodeBitmap(uri);
+        if (pendingProfilePhotoBitmap == null) {
+            Toast.makeText(this, R.string.image_load_failed, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        cropImageView.setBitmap(pendingProfilePhotoBitmap);
+        cropContainer.setVisibility(View.VISIBLE);
+    }
+
+    private void confirmCrop() {
+        Bitmap croppedBitmap = cropImageView.getCroppedBitmap();
+        if (croppedBitmap == null) {
+            Toast.makeText(this, R.string.image_load_failed, Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        selectedProfilePhotoUri = pendingProfilePhotoUri;
+        selectedProfilePhotoBitmap = croppedBitmap;
+        profilePhotoImageView.setPadding(0, 0, 0, 0);
+        profilePhotoImageView.setImageBitmap(selectedProfilePhotoBitmap);
+        hideCropView();
+    }
+
+    private void hideCropView() {
+        cropContainer.setVisibility(View.GONE);
+    }
+
+    private Bitmap decodeBitmap(Uri uri) {
+        try (InputStream inputStream = getContentResolver().openInputStream(uri)) {
+            return BitmapFactory.decodeStream(inputStream);
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private void confirmSignUp() {
         if (nameEditText.getText().toString().trim().isEmpty()) {
             nameEditText.setError(getString(R.string.name_required));
             return;
         }
 
-        emailEditText.setVisibility(View.VISIBLE);
-        dobEditText.setVisibility(View.VISIBLE);
-        confirmButton.setVisibility(View.VISIBLE);
-        nextButton.setVisibility(View.GONE);
-        emailEditText.requestFocus();
-    }
-
-    private void confirmSignUp() {
-        if (emailEditText.getText().toString().trim().isEmpty()) {
-            emailEditText.setError(getString(R.string.email_required));
+        String name = nameEditText.getText().toString().trim();
+        String description = descriptionEditText.getText().toString().trim();
+        if (description.isEmpty()) {
+            descriptionEditText.setError(getString(R.string.description_required));
             return;
         }
 
-        if (dobEditText.getText().toString().trim().isEmpty()) {
-            dobEditText.setError(getString(R.string.dob_required));
-            return;
-        }
+        AppFunctionManager.getInstance().userSignUp(name, phoneNumber, description, new AppFunctionManager.Callback() {
+            @Override
+            public void onSuccess(Object object) {
+                Toast.makeText(SignUpActivity.this, R.string.sign_up_complete, Toast.LENGTH_SHORT).show();
+                startActivity(new Intent(SignUpActivity.this, HomeActivity.class));
+                finish();
+            }
 
-        Toast.makeText(this, R.string.sign_up_complete, Toast.LENGTH_SHORT).show();
-        startActivity(new Intent(this, HomeActivity.class));
-        finish();
+            @Override
+            public void onError(String error) {
+                Toast.makeText(SignUpActivity.this, error, Toast.LENGTH_SHORT).show();
+            }
+        });
     }
 
-    private void showDatePicker() {
-        Calendar calendar = Calendar.getInstance();
-        DatePickerDialog datePickerDialog = new DatePickerDialog(
-                this,
-                (view, year, month, dayOfMonth) -> {
-                    String selectedDate = String.format(Locale.getDefault(), "%02d/%02d/%04d", dayOfMonth, month + 1, year);
-                    dobEditText.setText(selectedDate);
-                },
-                calendar.get(Calendar.YEAR),
-                calendar.get(Calendar.MONTH),
-                calendar.get(Calendar.DAY_OF_MONTH)
-        );
-        datePickerDialog.getDatePicker().setMaxDate(System.currentTimeMillis());
-        datePickerDialog.show();
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 }

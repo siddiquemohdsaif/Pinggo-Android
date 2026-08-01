@@ -6,12 +6,21 @@
     <string name="name">Name</string>
     <string name="email">Email</string>
     <string name="dob">Date of birth</string>
+    <string name="description">Description</string>
+    <string name="default_description">Hey There !</string>
     <string name="next">Next</string>
     <string name="name_required">Enter name</string>
+    <string name="description_required">Enter description</string>
     <string name="email_required">Enter email</string>
     <string name="dob_required">Enter date of birth</string>
     <string name="sign_up_complete">Sign up complete</string>
     <string name="phone_number">Phone number</string>
+    <string name="profile_photo">Profile photo</string>
+    <string name="preview_profile_photo">Preview profile photo</string>
+    <string name="select_crop_region">Select crop region</string>
+    <string name="select_profile_photo">Select profile photo</string>
+    <string name="image_load_failed">Could not load image</string>
+    <string name="retry">Retry</string>
     <string name="get_otp">Get OTP</string>
     <string name="otp_hint">Use fixed OTP 123456</string>
     <string name="enter_otp">Enter OTP</string>
@@ -22,6 +31,7 @@
     <string name="call">Call</string>
     <string name="search">Search</string>
     <string name="more_options">More options</string>
+    <string name="settings">Settings</string>
     <string name="new_chat">New chat</string>
     <string name="make_call">Make call</string>
     <string name="voice_call">Voice call</string>
@@ -40,5 +50,10 @@
     <string name="phone_required">Enter phone number</string>
     <string name="invalid_phone">Enter a valid phone number</string>
     <string name="invalid_otp">Invalid OTP</string>
+    <string name="invalid_dob">Use date format YYYY-MM-DD</string>
+    <string name="invalid_email">Enter a valid email</string>
+    <string name="field_required">This field is required</string>
+    <string name="profile_updated">Profile updated</string>
+    <string name="phone_cannot_be_changed">%1$s\n\nPhone number cannot be changed.</string>
     <string name="fixed_otp_message">OTP is %1$s for %2$s</string>
 </resources>

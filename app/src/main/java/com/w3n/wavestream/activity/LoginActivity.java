@@ -1,5 +1,7 @@
 package com.w3n.wavestream.activity;
 
+import static android.widget.Toast.LENGTH_SHORT;
+
 import android.content.Intent;
 import android.os.Bundle;
 import android.view.View;
@@ -15,6 +17,7 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import com.hbb20.CountryCodePicker;
+import com.w3n.wavestream.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.wavestream.R;
 
 public class LoginActivity extends AppCompatActivity {
@@ -25,6 +28,7 @@ public class LoginActivity extends AppCompatActivity {
     private EditText otpEditText;
     private TextView otpHintTextView;
     private Button confirmButton;
+    private String fullPhoneNumber;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -45,7 +49,6 @@ public class LoginActivity extends AppCompatActivity {
         countryCodePicker.registerCarrierNumberEditText(phoneNumberEditText);
 
         findViewById(R.id.getOtpButton).setOnClickListener(v -> showOtpFields());
-        findViewById(R.id.signUpButton).setOnClickListener(v -> startActivity(new Intent(this, SignUpActivity.class)));
         confirmButton.setOnClickListener(v -> confirmOtp());
     }
 
@@ -60,12 +63,12 @@ public class LoginActivity extends AppCompatActivity {
             return;
         }
 
-        String fullPhoneNumber = countryCodePicker.getFullNumberWithPlus();
+        fullPhoneNumber = countryCodePicker.getFullNumberWithPlus();
         otpHintTextView.setVisibility(View.VISIBLE);
         otpEditText.setVisibility(View.VISIBLE);
         confirmButton.setVisibility(View.VISIBLE);
         otpEditText.requestFocus();
-        Toast.makeText(this, getString(R.string.fixed_otp_message, FIXED_OTP, fullPhoneNumber), Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, getString(R.string.fixed_otp_message, FIXED_OTP, fullPhoneNumber), LENGTH_SHORT).show();
     }
 
     private void confirmOtp() {
@@ -75,7 +78,27 @@ public class LoginActivity extends AppCompatActivity {
             return;
         }
 
-        startActivity(new Intent(this, HomeActivity.class));
-        finish();
+        userLogin();
+    }
+
+    private void userLogin() {
+        AppFunctionManager.getInstance().userLogin(fullPhoneNumber, new AppFunctionManager.Callback() {
+            @Override
+            public void onSuccess(Object object) {
+                startActivity(new Intent(LoginActivity.this, HomeActivity.class));
+                finish();
+            }
+
+            @Override
+            public void onError(String error) {
+                if(error.equals("No user found.")){
+                    startActivity(new Intent(LoginActivity.this, SignUpActivity.class)
+                            .putExtra(SignUpActivity.EXTRA_PHONE_NUMBER, fullPhoneNumber));
+                    finish();
+                }else {
+                    Toast.makeText(getApplicationContext(),error,LENGTH_SHORT).show();
+                }
+            }
+        });
     }
 }

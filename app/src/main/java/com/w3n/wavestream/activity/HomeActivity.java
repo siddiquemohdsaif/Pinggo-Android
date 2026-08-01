@@ -3,6 +3,7 @@ package com.w3n.wavestream.activity;
 import android.content.Intent;
 import android.os.Bundle;
 import android.view.View;
+import android.widget.PopupMenu;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -48,6 +49,7 @@ public class HomeActivity extends AppCompatActivity {
         chatsView = new ChatsView(this, this::openChat);
         callsView = new CallsView(this, this::openCallLog);
 
+        findViewById(R.id.overflowButton).setOnClickListener(this::showOverflowMenu);
         findViewById(R.id.bottomNavigationView).setOnApplyWindowInsetsListener(null);
         com.google.android.material.bottomnavigation.BottomNavigationView bottomNavigationView = findViewById(R.id.bottomNavigationView);
         bottomNavigationView.setOnItemSelectedListener(item -> {
@@ -69,6 +71,7 @@ public class HomeActivity extends AppCompatActivity {
     private void showChats() {
         topTitleTextView.setText(R.string.app_name);
         searchEditText.setVisibility(View.VISIBLE);
+        findViewById(R.id.overflowButton).setVisibility(View.VISIBLE);
         showContent(chatsView);
         newChatFab.setVisibility(View.VISIBLE);
         makeCallFab.setVisibility(View.GONE);
@@ -77,9 +80,20 @@ public class HomeActivity extends AppCompatActivity {
     private void showCalls() {
         topTitleTextView.setText(R.string.call);
         searchEditText.setVisibility(View.GONE);
+        findViewById(R.id.overflowButton).setVisibility(View.GONE);
         showContent(callsView);
         newChatFab.setVisibility(View.GONE);
         makeCallFab.setVisibility(View.VISIBLE);
+    }
+
+    private void showOverflowMenu(View anchor) {
+        PopupMenu popupMenu = new PopupMenu(this, anchor);
+        popupMenu.getMenu().add(R.string.settings);
+        popupMenu.setOnMenuItemClickListener(item -> {
+            startActivity(new Intent(this, SettingsActivity.class));
+            return true;
+        });
+        popupMenu.show();
     }
 
     private void showContent(View contentView) {

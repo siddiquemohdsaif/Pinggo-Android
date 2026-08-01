@@ -1,0 +1,131 @@
+Wave Stream Roadmap
+===================
+
+Goal
+----
+Connect and run the full Wave Stream app with real backend/database data instead of predefined local demo data.
+
+Milestone 1: Stabilize Current App Flow
+---------------------------------------
+- Verify SplashScreenActivity opens the correct first screen.
+- Verify LoginActivity phone OTP flow works end to end.
+- Verify SignUpActivity collects name, email, and DOB correctly.
+- Verify HomeActivity tabs, chat list, calls list, chat detail, and call detail screens open correctly.
+- Remove unused placeholder text and demo-only behavior once backend integration starts.
+
+Milestone 2: Finalize Data Models
+---------------------------------
+- Create final user model with id, name, phone number, email, DOB, profile image, and created time.
+- Create final chat model with chat id, participants, last message, last message time, unread count, and status.
+- Create final message model with message id, chat id, sender id, text, attachments, sent time, delivery status, and read status.
+- Create final call log model with call id, caller id, receiver id, call type, started time, duration, and call status.
+- Replace temporary model names and fields where needed.
+
+Milestone 3: Choose Backend And Database
+----------------------------------------
+- Select backend option: Firebase, custom REST API, or WebSocket backend.
+- Select database: Firestore, Realtime Database, PostgreSQL, MongoDB, or another project-approved database.
+- Define database collections/tables for users, chats, messages, and calls.
+- Define indexes for chat list sorting, recent calls sorting, and user lookup by phone number.
+
+Milestone 4: Authentication Integration
+---------------------------------------
+- Replace fixed OTP 123456 with real OTP provider or backend OTP verification.
+- Store authenticated user session securely.
+- Route logged-in users directly to HomeActivity.
+- Route new users to SignUpActivity after phone verification.
+- Add logout and session expiry handling.
+
+Milestone 5: Database Repository Layer
+--------------------------------------
+- Create repository classes for users, chats, messages, and calls.
+- Move all database fetch/update logic out of activities and views.
+- Add callbacks or observable state for loading, success, and error.
+- Replace ContactsData, ChatsData, and CallLogsData with repository-backed data.
+- Keep demo data only as fallback data for local development if needed.
+
+Milestone 6: Chats From Database
+--------------------------------
+- Fetch chat list from database for the logged-in user.
+- Sort chats by latest message time.
+- Show profile, name, last message, and time from database.
+- Open ChatActivity with real chat id instead of only contact name.
+- Fetch messages for selected chat from database.
+- Send new messages from the bottom composer and save them to database.
+
+Milestone 7: Message Send And Receive Flow
+------------------------------------------
+- Create a Message model with message id, chat id, sender id, receiver id, text, attachment URL, sent time, delivery status, and read status.
+- On Send button click, read text from ChatActivity message input.
+- Validate that message text or attachment is not empty.
+- Create a new Message object with the logged-in user as sender.
+- Save the message into the database under the selected chat.
+- Update the parent chat record with last message, last message time, and unread count.
+- Clear the message input after successful send.
+- Listen to the selected chat messages in real time.
+- When a new message is received from the database listener, add it to the ChatActivity message list.
+- Show current user's messages on the right side and received messages on the left side.
+- Mark received messages as delivered/read when ChatActivity is open.
+- Handle send failure with retry or failed message status.
+
+Milestone 8: Calls From Database
+--------------------------------
+- Fetch call logs from database for the logged-in user.
+- Sort calls by newest call time first.
+- Show relative time for recent calls and date for older calls.
+- Open CallDetailActivity with real call id.
+- Show profile, name, call type, full date/time, and duration from database.
+- Save new voice/video call records after each call attempt.
+
+Milestone 9: Profile And Media
+------------------------------
+- Add profile image upload and display.
+- Replace initial-only profile icons with stored profile images where available.
+- Add attachment support in ChatActivity.
+- Store uploaded attachments in cloud storage or backend media storage.
+- Save attachment URLs in message records.
+
+Milestone 10: Real-Time Updates
+------------------------------
+- Add real-time chat list updates.
+- Add real-time message updates inside ChatActivity.
+- Add delivery/read status updates.
+- Add real-time incoming call notification flow if calls are supported live.
+- Handle offline, retry, and sync states.
+
+Milestone 11: Error Handling And Loading States
+-----------------------------------------------
+- Add loading views for chats, calls, messages, login, and signup.
+- Add empty states for no chats and no calls.
+- Add error states for failed network/database requests.
+- Add retry actions where useful.
+- Validate all input fields before sending data to backend.
+
+Milestone 12: Security And Rules
+--------------------------------
+- Ensure users can only read/write their own chats, messages, and calls.
+- Add backend/database security rules.
+- Validate phone, email, DOB, and message payloads server-side.
+- Avoid storing sensitive data in plain local storage.
+- Add rate limiting for OTP and message sending.
+
+Milestone 13: Testing And Release Readiness
+-------------------------------------------
+- Add unit tests for models and repository data mapping.
+- Add UI tests for login, signup, chat list, calls list, chat detail, and call detail.
+- Test first install, returning user, logout, offline mode, and failed backend calls.
+- Test debug and release builds.
+- Prepare release signing configuration.
+- Create a final QA checklist before publishing.
+
+Suggested Implementation Order
+------------------------------
+1. Finalize backend/database choice.
+2. Create final models and repository layer.
+3. Replace chat predefined data with database fetch.
+4. Replace calls predefined data with database fetch.
+5. Replace fixed OTP with real authentication.
+6. Add real message sending and fetching.
+7. Add real call log saving and detail fetching.
+8. Add loading/error/empty states.
+9. Add tests and release checks.

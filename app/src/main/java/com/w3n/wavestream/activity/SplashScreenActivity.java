@@ -11,6 +11,8 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
+import com.w3n.wavestream.Database.CloudFunction.AppFunction.AppFunctionManager;
+import com.w3n.wavestream.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.wavestream.R;
 
 public class SplashScreenActivity extends AppCompatActivity {
@@ -28,7 +30,14 @@ public class SplashScreenActivity extends AppCompatActivity {
         });
 
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
-            startActivity(new Intent(SplashScreenActivity.this, SignUpActivity.class));
+            boolean isLoggedIn = LoginStateManager.getInstance().isLoggedIn(this);
+            if (isLoggedIn) {
+                AppFunctionManager.getInstance().applyAuth(this);
+            }
+            Class<?> destination = isLoggedIn
+                    ? HomeActivity.class
+                    : LoginActivity.class;
+            startActivity(new Intent(SplashScreenActivity.this, destination));
             finish();
         }, SPLASH_DURATION_MS);
     }
