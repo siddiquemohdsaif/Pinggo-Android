@@ -93,6 +93,8 @@ public class UserData {
         private String phoneNumber;
         private String email;
         private String description;
+        private String profilePhotoUrl;
+        private String localProfilePhotoPath;
         private String P_ID;
 
         public ProfileData() {
@@ -144,6 +146,22 @@ public class UserData {
 
         public void setDescription(String description) {
             this.description = description;
+        }
+
+        public String getProfilePhotoUrl() {
+            return profilePhotoUrl;
+        }
+
+        public void setProfilePhotoUrl(String profilePhotoUrl) {
+            this.profilePhotoUrl = profilePhotoUrl;
+        }
+
+        public String getLocalProfilePhotoPath() {
+            return localProfilePhotoPath;
+        }
+
+        public void setLocalProfilePhotoPath(String localProfilePhotoPath) {
+            this.localProfilePhotoPath = localProfilePhotoPath;
         }
 
         public String getPId() {

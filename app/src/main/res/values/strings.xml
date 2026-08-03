@@ -16,6 +16,7 @@
     <string name="sign_up_complete">Sign up complete</string>
     <string name="phone_number">Phone number</string>
     <string name="profile_photo">Profile photo</string>
+    <string name="edit_profile_photo">Edit profile photo</string>
     <string name="preview_profile_photo">Preview profile photo</string>
     <string name="select_crop_region">Select crop region</string>
     <string name="select_profile_photo">Select profile photo</string>
@@ -32,6 +33,7 @@
     <string name="search">Search</string>
     <string name="more_options">More options</string>
     <string name="settings">Settings</string>
+    <string name="log_out">Log out</string>
     <string name="new_chat">New chat</string>
     <string name="make_call">Make call</string>
     <string name="voice_call">Voice call</string>

@@ -20,7 +20,10 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import com.w3n.wavestream.Database.CloudFunction.AppFunction.AppFunctionManager;
+import com.w3n.wavestream.Database.CloudFunction.Utils.LoginStateManager;
+import com.w3n.wavestream.Database.CloudFunction.Utils.ProfilePhotoLocalStore;
 import com.w3n.wavestream.R;
+import com.w3n.wavestream.modals.UserData;
 import com.w3n.wavestream.views.CropImageView;
 
 import java.io.IOException;
@@ -166,9 +169,7 @@ public class SignUpActivity extends AppCompatActivity {
         AppFunctionManager.getInstance().userSignUp(name, phoneNumber, description, new AppFunctionManager.Callback() {
             @Override
             public void onSuccess(Object object) {
-                Toast.makeText(SignUpActivity.this, R.string.sign_up_complete, Toast.LENGTH_SHORT).show();
-                startActivity(new Intent(SignUpActivity.this, HomeActivity.class));
-                finish();
+                uploadProfilePhotoIfNeeded();
             }
 
             @Override
@@ -176,6 +177,54 @@ public class SignUpActivity extends AppCompatActivity {
                 Toast.makeText(SignUpActivity.this, error, Toast.LENGTH_SHORT).show();
             }
         });
+    }
+
+    private void uploadProfilePhotoIfNeeded() {
+        if (selectedProfilePhotoBitmap == null) {
+            completeSignUp();
+            return;
+        }
+
+        AppFunctionManager.getInstance().uploadProfilePhoto(selectedProfilePhotoBitmap, new AppFunctionManager.Callback() {
+            @Override
+            public void onSuccess(Object object) {
+                UserData userData = object instanceof UserData
+                        ? (UserData) object
+                        : LoginStateManager.getInstance().getUserDataModal(SignUpActivity.this);
+                saveLocalProfilePhoto(userData);
+                completeSignUp();
+            }
+
+            @Override
+            public void onError(String error) {
+                Toast.makeText(SignUpActivity.this, error, Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    private void saveLocalProfilePhoto(UserData userData) {
+        if (userData == null || selectedProfilePhotoBitmap == null) {
+            return;
+        }
+
+        UserData.ProfileData profileData = userData.getProfileData();
+        if (profileData == null) {
+            profileData = new UserData.ProfileData();
+            profileData.setPhoneNumber(userData.getPhoneNumber());
+            userData.setProfileData(profileData);
+        }
+
+        String localPath = ProfilePhotoLocalStore.save(this, selectedProfilePhotoBitmap);
+        if (localPath != null) {
+            profileData.setLocalProfilePhotoPath(localPath);
+        }
+        LoginStateManager.getInstance().setUserData(this, userData);
+    }
+
+    private void completeSignUp() {
+        Toast.makeText(SignUpActivity.this, R.string.sign_up_complete, Toast.LENGTH_SHORT).show();
+        startActivity(new Intent(SignUpActivity.this, HomeActivity.class));
+        finish();
     }
 
     private int dp(int value) {

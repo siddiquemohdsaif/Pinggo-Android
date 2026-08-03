@@ -8,7 +8,10 @@ import com.w3n.wavestream.Database.CloudFunction.RestApi.API;
 import com.w3n.wavestream.Database.CloudFunction.RestApi.APIAuth;
 import com.w3n.wavestream.Database.CloudFunction.RestApi.AppRestAPI;
 import com.w3n.wavestream.Database.CloudFunction.Utils.LoginHandler;
+import com.w3n.wavestream.Database.CloudFunction.Utils.ProfilePhotoHandler;
 import com.w3n.wavestream.Database.CloudFunction.Utils.ProfileUpdateHandler;
+
+import android.graphics.Bitmap;
 
 public class AppFunctionManager {
 
@@ -62,6 +65,14 @@ public class AppFunctionManager {
 
     public void updateUserEmail(String email, Callback callback) {
         ProfileUpdateHandler.updateEmail(appApi, email, callback);
+    }
+
+    public void updateUserDescription(String description, Callback callback) {
+        ProfileUpdateHandler.updateDescription(appApi, description, callback);
+    }
+
+    public void uploadProfilePhoto(Bitmap profilePhoto, Callback callback) {
+        ProfilePhotoHandler.uploadProfilePhoto(appApi, profilePhoto, callback);
     }
 
     public interface Callback{

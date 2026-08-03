@@ -38,4 +38,14 @@ public interface AppRestAPI {
             @Body RequestBody body
     );
 
+    @POST("updateDescription")
+    Call<JsonObject> updateDescription(
+            @Body RequestBody body
+    );
+
+    @POST("uploadProfilePhoto")
+    Call<JsonObject> uploadProfilePhoto(
+            @Body RequestBody body
+    );
+
 }

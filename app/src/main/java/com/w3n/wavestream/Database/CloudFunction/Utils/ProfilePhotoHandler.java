@@ -1,7 +1,8 @@
 package com.w3n.wavestream.Database.CloudFunction.Utils;
 
 import android.content.Context;
-import android.util.Log;
+import android.graphics.Bitmap;
+import android.util.Base64;
 
 import androidx.annotation.NonNull;
 
@@ -15,6 +16,8 @@ import com.w3n.wavestream.modals.UserData;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
+
 import okhttp3.MediaType;
 import okhttp3.RequestBody;
 import okhttp3.ResponseBody;
@@ -22,33 +25,26 @@ import retrofit2.Call;
 import retrofit2.Callback;
 import retrofit2.Response;
 
-public class LoginHandler {
-    private static final String TAG = "LoginHandler";
+public class ProfilePhotoHandler {
+    private static final int JPEG_QUALITY = 88;
+    private static final int MAX_UPLOAD_SIZE_PX = 512;
 
-
-    public static void login(AppRestAPI appApi, String phoneNumber, AppFunctionManager.Callback callback){
-
-        JSONObject jsonObject = new JSONObject();
-        String body;
-        try {
-            jsonObject.put("phoneNumber",phoneNumber);
-            body = jsonObject.toString();
-        } catch (JSONException e) {
-            e.printStackTrace();
-            callback.onError("json error:"+e);
+    public static void uploadProfilePhoto(AppRestAPI appApi, Bitmap profilePhoto, AppFunctionManager.Callback callback) {
+        if (profilePhoto == null) {
+            if (callback != null) {
+                callback.onError("Profile photo is empty.");
+            }
             return;
         }
 
-
-        Call<JsonObject> login = appApi.login(RequestBody.create(body , MediaType.parse("application/json; charset=utf-8")));
-        login.enqueue(new Callback<JsonObject>() {
+        appApi.uploadProfilePhoto(createBody(profilePhoto)).enqueue(new Callback<JsonObject>() {
             @Override
             public void onResponse(@NonNull Call<JsonObject> call, @NonNull Response<JsonObject> response) {
-                handleUserResponse(response, callback);
+                handleUploadResponse(response, callback);
             }
 
             @Override
-            public void onFailure(Call<JsonObject> call, Throwable t) {
+            public void onFailure(@NonNull Call<JsonObject> call, @NonNull Throwable t) {
                 if (callback != null) {
                     callback.onError(getFailureMessage(t));
                 }
@@ -56,39 +52,32 @@ public class LoginHandler {
         });
     }
 
-    public static void signUp(AppRestAPI appApi, String name, String phoneNumber, String description, AppFunctionManager.Callback callback){
+    private static RequestBody createBody(Bitmap profilePhoto) {
+        Bitmap uploadBitmap = resizeForUpload(profilePhoto);
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        uploadBitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, outputStream);
+        String imageBase64 = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP);
 
         JSONObject jsonObject = new JSONObject();
-        String body;
         try {
-            jsonObject.put("name",name);
-            jsonObject.put("phoneNumber",phoneNumber);
-            jsonObject.put("description",description);
-            body = jsonObject.toString();
-        } catch (JSONException e) {
-            e.printStackTrace();
-            callback.onError("json error:"+e);
-            return;
+            jsonObject.put("profilePhotoBase64", imageBase64);
+            jsonObject.put("mimeType", "image/jpeg");
+        } catch (JSONException ignored) {
         }
 
-
-        Call<JsonObject> signup = appApi.signup(RequestBody.create(body , MediaType.parse("application/json; charset=utf-8")));
-        signup.enqueue(new Callback<JsonObject>() {
-            @Override
-            public void onResponse(@NonNull Call<JsonObject> call, @NonNull Response<JsonObject> response) {
-                handleUserResponse(response, callback);
-            }
-
-            @Override
-            public void onFailure(Call<JsonObject> call, Throwable t) {
-                if (callback != null) {
-                    callback.onError(getFailureMessage(t));
-                }
-            }
-        });
+        return RequestBody.create(jsonObject.toString(), MediaType.parse("application/json; charset=utf-8"));
     }
 
-    private static void handleUserResponse(Response<JsonObject> response, AppFunctionManager.Callback callback) {
+    private static Bitmap resizeForUpload(Bitmap bitmap) {
+        int sourceSize = Math.min(bitmap.getWidth(), bitmap.getHeight());
+        if (sourceSize <= MAX_UPLOAD_SIZE_PX) {
+            return bitmap;
+        }
+
+        return Bitmap.createScaledBitmap(bitmap, MAX_UPLOAD_SIZE_PX, MAX_UPLOAD_SIZE_PX, true);
+    }
+
+    private static void handleUploadResponse(Response<JsonObject> response, AppFunctionManager.Callback callback) {
         if (callback == null) {
             return;
         }
@@ -105,20 +94,7 @@ public class LoginHandler {
         }
 
         if (!getBoolean(responseBody, "success")) {
-            callback.onError(getString(responseBody, "message", "Request failed."));
-            return;
-        }
-
-        JsonObject userData = getObject(responseBody, "userData");
-        if (userData == null) {
-            callback.onError("Missing user data.");
-            return;
-        }
-
-        String uid = getString(userData, "_id", getString(userData, "phoneNumber", null));
-        String encryptedCredential = getString(userData, "encryptedCredential", null);
-        if (uid == null || encryptedCredential == null) {
-            callback.onError("Invalid user data received.");
+            callback.onError(getString(responseBody, "message", "Profile photo upload failed."));
             return;
         }
 
@@ -128,12 +104,34 @@ public class LoginHandler {
             return;
         }
 
-        UserData parsedUserData = UserData.fromJson(userData.toString());
-        LoginStateManager.getInstance().setLogin(context, uid, encryptedCredential, parsedUserData);
-        AppFunctionManager.getInstance().applyAuth(context);
-        Log.d(TAG, "Login/signup success stored. Starting profile photo background download if URL exists.");
-        ProfilePhotoLocalStore.downloadAndStore(context, parsedUserData);
+        UserData userData = null;
+        JsonObject responseUserData = getObject(responseBody, "userData");
+        if (responseUserData != null) {
+            userData = UserData.fromJson(responseUserData.toString());
+        }
+
+        String profilePhotoUrl = getString(responseBody, "profilePhotoUrl", null);
+        if (userData == null) {
+            userData = LoginStateManager.getInstance().getUserDataModal(context);
+        }
+        patchProfilePhotoUrl(userData, profilePhotoUrl);
+
+        LoginStateManager.getInstance().setUserData(context, userData);
         callback.onSuccess(userData);
+    }
+
+    private static void patchProfilePhotoUrl(UserData userData, String profilePhotoUrl) {
+        if (userData == null || profilePhotoUrl == null) {
+            return;
+        }
+
+        UserData.ProfileData profileData = userData.getProfileData();
+        if (profileData == null) {
+            profileData = new UserData.ProfileData();
+            profileData.setPhoneNumber(userData.getPhoneNumber());
+            userData.setProfileData(profileData);
+        }
+        profileData.setProfilePhotoUrl(profilePhotoUrl);
     }
 
     private static String getErrorMessage(Response<JsonObject> response) {
@@ -154,7 +152,7 @@ public class LoginHandler {
         if (message != null && !message.isEmpty()) {
             return message;
         }
-        return "Request failed. Code: " + response.code();
+        return "Profile photo upload failed. Code: " + response.code();
     }
 
     private static String getFailureMessage(Throwable throwable) {

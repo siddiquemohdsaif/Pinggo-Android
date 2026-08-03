@@ -35,6 +35,10 @@ public class ProfileUpdateHandler {
         enqueueUpdate(appApi.updateEmail(createBody("email", email)), "email", email, callback);
     }
 
+    public static void updateDescription(AppRestAPI appApi, String description, AppFunctionManager.Callback callback) {
+        enqueueUpdate(appApi.updateDescription(createBody("description", description)), "description", description, callback);
+    }
+
     private static RequestBody createBody(String key, String value) {
         JSONObject jsonObject = new JSONObject();
         try {
@@ -124,6 +128,8 @@ public class ProfileUpdateHandler {
             profileData.setDob(value);
         } else if ("email".equals(field)) {
             profileData.setEmail(value);
+        } else if ("description".equals(field)) {
+            profileData.setDescription(value);
         }
         return userData;
     }

@@ -93,7 +93,7 @@ public class LoginStateManager {
                 .putString(PREF_UID, UID)
                 .putString(PREF_ENC, ENC)
                 .putString(PREF_USER_DATA, userDataJson)
-                .apply();
+                .commit();
         LoginStateManager.UID = UID;
         LoginStateManager.ENC = ENC;
         LoginStateManager.USER_DATA = userDataJson;

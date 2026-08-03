@@ -49,6 +49,26 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/headerRow">
 
+        <com.google.android.material.imageview.ShapeableImageView
+            android:id="@+id/profilePhotoImageView"
+            android:layout_width="150dp"
+            android:layout_height="150dp"
+            android:layout_gravity="center_horizontal"
+            android:background="@drawable/bg_input"
+            android:contentDescription="@string/profile_photo"
+            android:padding="32dp"
+            android:scaleType="centerCrop"
+            android:src="@android:drawable/ic_menu_camera"
+            app:shapeAppearanceOverlay="@style/ShapeAppearanceOverlay.WaveStream.Circle" />
+
+        <Button
+            android:id="@+id/editProfilePhotoButton"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="12dp"
+            android:text="@string/edit_profile_photo"
+            android:visibility="gone" />
+
         <LinearLayout
             android:id="@+id/nameRow"
             style="@style/Widget.WaveStream.SettingsRow">
@@ -64,31 +84,17 @@
         </LinearLayout>
 
         <LinearLayout
-            android:id="@+id/dobRow"
+            android:id="@+id/descriptionRow"
             style="@style/Widget.WaveStream.SettingsRow">
 
             <TextView
                 style="@style/Widget.WaveStream.SettingsLabel"
-                android:text="@string/dob" />
+                android:text="@string/description" />
 
             <TextView
-                android:id="@+id/dobValueTextView"
+                android:id="@+id/descriptionValueTextView"
                 style="@style/Widget.WaveStream.SettingsValue"
-                tools:text="2000-01-02" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/emailRow"
-            style="@style/Widget.WaveStream.SettingsRow">
-
-            <TextView
-                style="@style/Widget.WaveStream.SettingsLabel"
-                android:text="@string/email" />
-
-            <TextView
-                android:id="@+id/emailValueTextView"
-                style="@style/Widget.WaveStream.SettingsValue"
-                tools:text="test@example.com" />
+                tools:text="Hey There !" />
         </LinearLayout>
 
         <LinearLayout
@@ -103,6 +109,66 @@
                 android:id="@+id/phoneValueTextView"
                 style="@style/Widget.WaveStream.SettingsValue"
                 tools:text="&lt;plus&gt;1234567890" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/logOutButton"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginTop="24dp"
+            android:text="@string/log_out" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/cropContainer"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:background="@color/screen_background"
+        android:orientation="vertical"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/select_crop_region"
+            android:textColor="@color/primary_text"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+
+        <com.w3n.wavestream.views.CropImageView
+            android:id="@+id/cropImageView"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="16dp"
+            android:layout_weight="1"
+            android:background="@color/black" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginTop="16dp"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/retryCropButton"
+                android:layout_width="0dp"
+                android:layout_height="56dp"
+                android:layout_marginEnd="8dp"
+                android:layout_weight="1"
+                android:text="@string/retry" />
+
+            <Button
+                android:id="@+id/okCropButton"
+                android:layout_width="0dp"
+                android:layout_height="56dp"
+                android:layout_marginStart="8dp"
+                android:layout_weight="1"
+                android:text="@android:string/ok" />
         </LinearLayout>
     </LinearLayout>
 </androidx.constraintlayout.widget.ConstraintLayout>
