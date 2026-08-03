@@ -1,6 +1,6 @@
 <resources>
-    <string name="app_name">Wave Stream</string>
-    <string name="app_logo">Wave Stream logo</string>
+    <string name="app_name">PingGo</string>
+    <string name="app_logo">PingGo logo</string>
     <string name="login_title">Login</string>
     <string name="sign_up">Sign up</string>
     <string name="name">Name</string>
@@ -15,6 +15,14 @@
     <string name="dob_required">Enter date of birth</string>
     <string name="sign_up_complete">Sign up complete</string>
     <string name="phone_number">Phone number</string>
+    <string name="pinggo_brand">PingGo</string>
+    <string name="pinggo_tagline">HD Video Calls. Crystal Clear.</string>
+    <string name="pinggo_security">Fast. Secure. Private.</string>
+    <string name="enter_phone_number">Enter your phone number</string>
+    <string name="verification_code_hint">We\'ll send you a verification code\nto confirm your number.</string>
+    <string name="country">Country</string>
+    <string name="phone_safe_message">Your number is safe and secure with PingGo.</string>
+    <string name="terms_notice">By continuing, you agree to our\nTerms of Service and Privacy Policy.</string>
     <string name="profile_photo">Profile photo</string>
     <string name="edit_profile_photo">Edit profile photo</string>
     <string name="preview_profile_photo">Preview profile photo</string>

@@ -8,4 +8,11 @@
     <color name="input_background">#FFFFFFFF</color>
     <color name="input_stroke">#D8E0EA</color>
     <color name="send_button">#1D67D2</color>
+    <color name="pinggo_action">#019BC5</color>
+    <color name="pinggo_title">#05A7D5</color>
+    <color name="pinggo_body_text">#333333</color>
+    <color name="pinggo_muted_text">#7B8493</color>
+    <color name="pinggo_input_stroke">#E0E5EC</color>
+    <color name="pinggo_card_shadow_ambient">#06000000</color>
+    <color name="pinggo_card_shadow_spot">#12000000</color>
 </resources>

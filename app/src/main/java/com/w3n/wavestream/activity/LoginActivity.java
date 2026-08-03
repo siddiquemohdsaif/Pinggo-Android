@@ -4,6 +4,9 @@ import static android.widget.Toast.LENGTH_SHORT;
 
 import android.content.Intent;
 import android.os.Bundle;
+import android.text.SpannableString;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -12,6 +15,7 @@ import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
@@ -27,6 +31,7 @@ public class LoginActivity extends AppCompatActivity {
     private EditText phoneNumberEditText;
     private EditText otpEditText;
     private TextView otpHintTextView;
+    private TextView phoneCodeTextView;
     private Button confirmButton;
     private String fullPhoneNumber;
 
@@ -35,9 +40,11 @@ public class LoginActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_login);
+        View loginScrollView = findViewById(R.id.loginScrollView);
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
             Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
+            int horizontalPadding = Math.round(getResources().getDisplayMetrics().density * 26);
+            loginScrollView.setPadding(horizontalPadding, systemBars.top, horizontalPadding, systemBars.bottom);
             return insets;
         });
 
@@ -45,11 +52,40 @@ public class LoginActivity extends AppCompatActivity {
         phoneNumberEditText = findViewById(R.id.phoneNumberEditText);
         otpEditText = findViewById(R.id.otpEditText);
         otpHintTextView = findViewById(R.id.otpHintTextView);
+        phoneCodeTextView = findViewById(R.id.phoneCodeTextView);
         confirmButton = findViewById(R.id.confirmButton);
         countryCodePicker.registerCarrierNumberEditText(phoneNumberEditText);
+        updatePhoneCode();
+        countryCodePicker.setOnCountryChangeListener(this::updatePhoneCode);
+        tintTermsLinks();
 
         findViewById(R.id.getOtpButton).setOnClickListener(v -> showOtpFields());
         confirmButton.setOnClickListener(v -> confirmOtp());
+    }
+
+    private void updatePhoneCode() {
+        phoneCodeTextView.setText(countryCodePicker.getSelectedCountryCodeWithPlus());
+    }
+
+    private void tintTermsLinks() {
+        TextView termsTextView = findViewById(R.id.termsTextView);
+        SpannableString termsText = new SpannableString(getString(R.string.terms_notice));
+        int accentColor = ContextCompat.getColor(this, R.color.pinggo_action);
+        setTextColorSpan(termsText, "Terms of Service", accentColor);
+        setTextColorSpan(termsText, "Privacy Policy", accentColor);
+        termsTextView.setText(termsText);
+    }
+
+    private void setTextColorSpan(SpannableString text, String target, int color) {
+        int start = text.toString().indexOf(target);
+        if (start >= 0) {
+            text.setSpan(
+                    new ForegroundColorSpan(color),
+                    start,
+                    start + target.length(),
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            );
+        }
     }
 
     private void showOtpFields() {
