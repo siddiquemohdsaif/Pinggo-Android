@@ -7,6 +7,12 @@
     android:layout_height="match_parent"
     tools:context=".activity.LoginActivity">
 
+    <TextView
+        android:id="@+id/countryFlagTextView"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="countryFlagTextView" />
+
     <ImageView
         android:id="@+id/backgroundImageView"
         android:layout_width="match_parent"
@@ -56,7 +62,7 @@
                 android:includeFontPadding="false"
                 android:text="@string/pinggo_brand"
                 android:textColor="@color/pinggo_title"
-                android:textSize="40sp"
+                android:textSize="45sp"
                 android:textStyle="bold"
                 app:layout_constraintEnd_toEndOf="parent"
                 app:layout_constraintStart_toStartOf="parent"
@@ -74,6 +80,7 @@
                 android:textSize="14sp"
                 app:layout_constraintEnd_toEndOf="parent"
                 app:layout_constraintStart_toStartOf="parent"
+                android:textFontWeight="1000"
                 app:layout_constraintTop_toBottomOf="@id/loginTitleTextView" />
 
             <TextView
@@ -128,8 +135,8 @@
                     android:gravity="center"
                     android:lineSpacingExtra="3dp"
                     android:text="@string/verification_code_hint"
-                    android:textColor="@color/pinggo_muted_text"
-                    android:textSize="12sp" />
+                    android:textColor="@color/pinggo_body_text"
+                    android:textSize="13sp" />
 
                 <FrameLayout
                     android:layout_width="match_parent"

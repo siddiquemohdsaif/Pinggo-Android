@@ -32,6 +32,7 @@ public class LoginActivity extends AppCompatActivity {
     private EditText otpEditText;
     private TextView otpHintTextView;
     private TextView phoneCodeTextView;
+    private TextView countryFlagTextView;
     private Button confirmButton;
     private String fullPhoneNumber;
 
@@ -53,18 +54,31 @@ public class LoginActivity extends AppCompatActivity {
         otpEditText = findViewById(R.id.otpEditText);
         otpHintTextView = findViewById(R.id.otpHintTextView);
         phoneCodeTextView = findViewById(R.id.phoneCodeTextView);
+        countryFlagTextView = findViewById(R.id.countryFlagTextView);
         confirmButton = findViewById(R.id.confirmButton);
         countryCodePicker.registerCarrierNumberEditText(phoneNumberEditText);
-        updatePhoneCode();
-        countryCodePicker.setOnCountryChangeListener(this::updatePhoneCode);
+        updateSelectedCountryViews();
+        countryCodePicker.setOnCountryChangeListener(this::updateSelectedCountryViews);
         tintTermsLinks();
 
         findViewById(R.id.getOtpButton).setOnClickListener(v -> showOtpFields());
         confirmButton.setOnClickListener(v -> confirmOtp());
     }
 
-    private void updatePhoneCode() {
+    private void updateSelectedCountryViews() {
         phoneCodeTextView.setText(countryCodePicker.getSelectedCountryCodeWithPlus());
+        countryFlagTextView.setText(countryCodeToFlagEmoji(countryCodePicker.getSelectedCountryNameCode()));
+    }
+
+    private String countryCodeToFlagEmoji(String countryCode) {
+        if (countryCode == null || countryCode.length() != 2) {
+            return "";
+        }
+
+        String upperCountryCode = countryCode.toUpperCase();
+        int firstLetter = Character.codePointAt(upperCountryCode, 0) - 'A' + 0x1F1E6;
+        int secondLetter = Character.codePointAt(upperCountryCode, 1) - 'A' + 0x1F1E6;
+        return new String(Character.toChars(firstLetter)) + new String(Character.toChars(secondLetter));
     }
 
     private void tintTermsLinks() {
