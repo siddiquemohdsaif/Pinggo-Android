@@ -5,11 +5,10 @@ import static android.widget.Toast.LENGTH_SHORT;
 import android.graphics.RectF;
 import android.content.Intent;
 import android.os.Bundle;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
@@ -19,7 +18,6 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
-import com.hbb20.CountryCodePicker;
 import com.w3n.wavestream.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.wavestream.R;
 import com.w3n.wavestream.views.animator.TextViewAnimator;
@@ -29,13 +27,6 @@ import com.w3n.wavestream.views.login.LoginPhoneCardView;
 public class LoginActivity extends AppCompatActivity {
     private static final String FIXED_OTP = "123456";
 
-    private CountryCodePicker countryCodePicker;
-    private EditText phoneNumberEditText;
-    private EditText otpEditText;
-    private TextView otpHintTextView;
-    private TextView phoneCodeTextView;
-    private TextView countryFlagTextView;
-    private View confirmButton;
     private String fullPhoneNumber;
     private View mainView;
     private LinearLayout loginContentLayout;
@@ -73,25 +64,24 @@ public class LoginActivity extends AppCompatActivity {
 
         loginContentLayout = findViewById(R.id.loginContentLayout);
         loginHeaderAnimatorView = findViewById(R.id.loginHeaderAnimatorView);
-        countryCodePicker = findViewById(R.id.countryCodePicker);
-        phoneNumberEditText = findViewById(R.id.phoneNumberEditText);
-        otpEditText = findViewById(R.id.otpEditText);
-        otpHintTextView = findViewById(R.id.otpHintTextView);
-        phoneCodeTextView = findViewById(R.id.phoneCodeTextView);
-        countryFlagTextView = findViewById(R.id.countryFlagTextView);
-        confirmButton = findViewById(R.id.confirmButton);
         loginPhoneCardView = findViewById(R.id.loginPhoneCardView);
         termsAnimatorView = findViewById(R.id.termsAnimatorView);
-        countryCodePicker.registerCarrierNumberEditText(phoneNumberEditText);
-        updateSelectedCountryViews();
-        countryCodePicker.setOnCountryChangeListener(this::updateSelectedCountryViews);
         ViewCompat.requestApplyInsets(mainView);
         findViewById(R.id.main).post(this::applyResponsiveLoginLayout);
-        phoneNumberEditText.setOnFocusChangeListener((v, hasFocus) -> mainView.post(this::applyKeyboardLift));
-        otpEditText.setOnFocusChangeListener((v, hasFocus) -> mainView.post(this::applyKeyboardLift));
 
         loginPhoneCardView.setOnOtpAnimatorClickListener(this::showOtpFields);
         loginPhoneCardView.setOnConfirmAnimatorClickListener(this::confirmOtp);
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN
+                && loginPhoneCardView != null
+                && !loginPhoneCardView.isRawTouchInsideCountryField(event.getRawX(), event.getRawY())
+                && loginPhoneCardView.handleCountryOutsideTap(imeVisible)) {
+            return true;
+        }
+        return super.dispatchTouchEvent(event);
     }
 
     private void applyResponsiveLoginLayout() {
@@ -125,26 +115,21 @@ public class LoginActivity extends AppCompatActivity {
             setLoginContentTranslation(0f);
             return;
         }
-        View focusedInput = otpEditText != null && otpEditText.hasFocus()
-                ? otpEditText
-                : phoneNumberEditText;
-        if (focusedInput == null || focusedInput.getHeight() == 0 || mainView.getHeight() == 0) {
+        if (loginPhoneCardView == null || loginPhoneCardView.getHeight() == 0 || mainView.getHeight() == 0) {
             return;
         }
-
         int[] mainLocation = new int[2];
-        int[] inputLocation = new int[2];
         mainView.getLocationOnScreen(mainLocation);
-        focusedInput.getLocationOnScreen(inputLocation);
 
         int width = mainView.getWidth() > 0
                 ? mainView.getWidth()
                 : getResources().getDisplayMetrics().widthPixels;
-        int inputBottom = inputLocation[1] - mainLocation[1] + focusedInput.getHeight();
+        int inputBottom = loginPhoneCardView.getActiveInputBottomOnScreen() - mainLocation[1];
         int keyboardTop = mainView.getHeight() - imeInsets.bottom;
         int visibleMargin = (int) (0.040741f * width);
         int neededLift = Math.max(0, inputBottom + visibleMargin - keyboardTop);
         setLoginContentTranslation(-neededLift);
+        loginPhoneCardView.post(loginPhoneCardView::updateCountryPopupPosition);
     }
 
     private void setLoginContentTranslation(float translationY) {
@@ -154,6 +139,11 @@ public class LoginActivity extends AppCompatActivity {
         loginContentLayout.animate()
                 .translationY(translationY)
                 .setDuration(180L)
+                .withEndAction(() -> {
+                    if (loginPhoneCardView != null) {
+                        loginPhoneCardView.updateCountryPopupPosition();
+                    }
+                })
                 .start();
     }
 
@@ -199,29 +189,6 @@ public class LoginActivity extends AppCompatActivity {
         return 0;
     }
 
-    private void updateSelectedCountryViews() {
-        try {
-            phoneCodeTextView.setText(countryCodePicker.getSelectedCountryCodeWithPlus());
-            countryFlagTextView.setText(countryCodeToFlagEmoji(countryCodePicker.getSelectedCountryNameCode()));
-        } catch (NullPointerException ignored) {
-            countryCodePicker.setDefaultCountryUsingNameCode("IN");
-            countryCodePicker.resetToDefaultCountry();
-            phoneCodeTextView.setText("+91");
-            countryFlagTextView.setText(countryCodeToFlagEmoji("IN"));
-        }
-    }
-
-    private String countryCodeToFlagEmoji(String countryCode) {
-        if (countryCode == null || countryCode.length() != 2) {
-            return "";
-        }
-
-        String upperCountryCode = countryCode.toUpperCase();
-        int firstLetter = Character.codePointAt(upperCountryCode, 0) - 'A' + 0x1F1E6;
-        int secondLetter = Character.codePointAt(upperCountryCode, 1) - 'A' + 0x1F1E6;
-        return new String(Character.toChars(firstLetter)) + new String(Character.toChars(secondLetter));
-    }
-
     private void setupTermsAnimator() {
         int width = termsAnimatorView.getWidth();
         termsAnimatorView.getTextAnimators().clear();
@@ -245,23 +212,18 @@ public class LoginActivity extends AppCompatActivity {
     }
 
     private void showOtpFields() {
-        if (phoneNumberEditText.getText().toString().trim().isEmpty()) {
-            phoneNumberEditText.setError(getString(R.string.phone_required));
+        if (loginPhoneCardView.getPhoneNumber().trim().isEmpty()) {
             showAnimatorDialog(getString(R.string.phone_required));
             return;
         }
 
-        if (!countryCodePicker.isValidFullNumber()) {
-            phoneNumberEditText.setError(getString(R.string.invalid_phone));
+        if (!loginPhoneCardView.isValidFullNumber()) {
             showAnimatorDialog(getString(R.string.invalid_phone));
             return;
         }
 
-        fullPhoneNumber = countryCodePicker.getFullNumberWithPlus();
-        otpHintTextView.setVisibility(View.VISIBLE);
-        otpEditText.setVisibility(View.VISIBLE);
-        confirmButton.setVisibility(View.VISIBLE);
-        otpEditText.requestFocus();
+        fullPhoneNumber = loginPhoneCardView.getFullNumberWithPlus();
+        loginPhoneCardView.showOtpFields();
         Toast.makeText(this, getString(R.string.fixed_otp_message, FIXED_OTP, fullPhoneNumber), LENGTH_SHORT).show();
         loginContentLayout.post(() -> {
             applyBottomAnchoredSpacing();
@@ -270,9 +232,8 @@ public class LoginActivity extends AppCompatActivity {
     }
 
     private void confirmOtp() {
-        String otp = otpEditText.getText().toString().trim();
+        String otp = loginPhoneCardView.getOtp().trim();
         if (!FIXED_OTP.equals(otp)) {
-            otpEditText.setError(getString(R.string.invalid_otp));
             showAnimatorDialog(getString(R.string.invalid_otp));
             return;
         }

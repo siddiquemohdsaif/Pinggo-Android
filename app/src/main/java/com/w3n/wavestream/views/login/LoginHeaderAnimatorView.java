@@ -66,14 +66,14 @@ public class LoginHeaderAnimatorView extends View {
         }
 
         textAnimators.add(new TextViewAnimator("brand", getContext().getString(R.string.pinggo_brand),
-                new RectF(0, 0.208796f * getWidth(), width, 0.336111f * getWidth()), 0.114583f * getWidth(),
-                ContextCompat.getColor(getContext(), R.color.pinggo_title), null));
+                new RectF(0, 0.238796f * getWidth(), width, 0.366111f * getWidth()), 0.114583f * getWidth(),
+                ContextCompat.getColor(getContext(), R.color.pinggo_title),Paint.Align.CENTER,TextViewAnimator.FONT_INTER,TextViewAnimator.WEIGHT_BOLD, null));
         textAnimators.add(new TextViewAnimator("tagline", getContext().getString(R.string.pinggo_tagline),
-                new RectF(0, 0.346296f * getWidth(), width, 0.407407f * getWidth()), 0.035648f * getWidth(),
-                ContextCompat.getColor(getContext(), R.color.pinggo_body_text), null));
+                new RectF(0, 0.376296f * getWidth(), width, 0.437407f * getWidth()), 0.035648f * getWidth(),
+                ContextCompat.getColor(getContext(), R.color.pinggo_body_text),Paint.Align.CENTER,TextViewAnimator.FONT_INTER,TextViewAnimator.WEIGHT_MEDIUM, null));
         textAnimators.add(new TextViewAnimator("security", getContext().getString(R.string.pinggo_security),
-                new RectF(0, 0.415046f * getWidth(), width, 0.471065f * getWidth()), 0.030556f * getWidth(),
-                ContextCompat.getColor(getContext(), R.color.pinggo_action), null));
+                new RectF(0, 0.445046f * getWidth(), width, 0.501065f * getWidth()), 0.030556f * getWidth(),
+                ContextCompat.getColor(getContext(), R.color.pinggo_action),Paint.Align.CENTER,TextViewAnimator.FONT_INTER,TextViewAnimator.WEIGHT_MEDIUM, null));
     }
 
     @Override

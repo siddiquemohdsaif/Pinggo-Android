@@ -1,18 +1,37 @@
 package com.w3n.wavestream.views.animator;
 
+import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.graphics.Typeface;
+import android.os.Build;
 import android.view.MotionEvent;
 
+import androidx.core.content.res.ResourcesCompat;
+
+import com.w3n.wavestream.R;
 import com.w3n.wavestream.views.animator.button.Region;
 
 import java.util.ArrayList;
 
 public class TextViewAnimator {
     private static final float SHRINK_SCALE = 0.96f;
+    public static final String FONT_ROBOTO = "roboto";
+    public static final String FONT_INTER = "inter";
+    public static final String FONT_SANS_SERIF = "sans-serif";
+
+    public static final int WEIGHT_THIN = 100;
+    public static final int WEIGHT_EXTRA_LIGHT = 200;
+    public static final int WEIGHT_LIGHT = 300;
+    public static final int WEIGHT_REGULAR = 400;
+    public static final int WEIGHT_MEDIUM = 500;
+    public static final int WEIGHT_SEMI_BOLD = 600;
+    public static final int WEIGHT_BOLD = 700;
+    public static final int WEIGHT_EXTRA_BOLD = 800;
+    public static final int WEIGHT_BLACK = 900;
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
     private final String id;
@@ -32,6 +51,19 @@ public class TextViewAnimator {
     public TextViewAnimator(String id, String text, RectF rectF, float textSize,
                             int textColor, Paint.Align align, boolean bold,
                             OnClickListener clickListener) {
+        this(id, text, rectF, textSize, textColor, align, FONT_SANS_SERIF,
+                bold ? WEIGHT_BOLD : WEIGHT_REGULAR, clickListener);
+    }
+
+    public TextViewAnimator(String id, String text, RectF rectF, float textSize,
+                            int textColor, Paint.Align align, String fontFamily,
+                            int fontWeight, OnClickListener clickListener) {
+        this(null, id, text, rectF, textSize, textColor, align, fontFamily, fontWeight, clickListener);
+    }
+
+    public TextViewAnimator(Context context, String id, String text, RectF rectF, float textSize,
+                            int textColor, Paint.Align align, String fontFamily,
+                            int fontWeight, OnClickListener clickListener) {
         this.id = id;
         this.text = text;
         this.rectF = new RectF(rectF);
@@ -41,7 +73,32 @@ public class TextViewAnimator {
         paint.setColor(textColor);
         paint.setTextSize(textSize);
         paint.setTextAlign(align);
-        paint.setFakeBoldText(bold);
+        paint.setTypeface(createTypeface(context, fontFamily, fontWeight));
+        paint.setFakeBoldText(Build.VERSION.SDK_INT < Build.VERSION_CODES.P && fontWeight >= WEIGHT_SEMI_BOLD);
+    }
+
+    private static Typeface createTypeface(Context context, String fontFamily, int fontWeight) {
+        String family = fontFamily == null || fontFamily.trim().isEmpty()
+                ? FONT_SANS_SERIF
+                : fontFamily;
+        int clampedWeight = Math.max(WEIGHT_THIN, Math.min(WEIGHT_BLACK, fontWeight));
+        Typeface baseTypeface = getBaseTypeface(context, family);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            return Typeface.create(baseTypeface, clampedWeight, false);
+        }
+        return Typeface.create(baseTypeface, clampedWeight >= WEIGHT_SEMI_BOLD
+                ? Typeface.BOLD
+                : Typeface.NORMAL);
+    }
+
+    private static Typeface getBaseTypeface(Context context, String fontFamily) {
+        if (context != null && FONT_INTER.equalsIgnoreCase(fontFamily)) {
+            Typeface interTypeface = ResourcesCompat.getFont(context, R.font.inter_opsz_wght);
+            if (interTypeface != null) {
+                return interTypeface;
+            }
+        }
+        return Typeface.create(fontFamily, Typeface.NORMAL);
     }
 
     public void setRect(RectF rectF) {
@@ -57,7 +114,9 @@ public class TextViewAnimator {
         float scale = pressed ? SHRINK_SCALE : 1f;
         canvas.save();
         canvas.scale(scale, scale, rectF.centerX(), rectF.centerY());
-        paint.getTextBounds(text, 0, text.length(), textBounds);
+        String[] lines = text.split("\\n", -1);
+        String boundsText = text.replace('\n', ' ');
+        paint.getTextBounds(boundsText, 0, boundsText.length(), textBounds);
         Paint.FontMetrics metrics = paint.getFontMetrics();
         float x;
         if (paint.getTextAlign() == Paint.Align.LEFT) {
@@ -67,8 +126,12 @@ public class TextViewAnimator {
         } else {
             x = rectF.centerX();
         }
-        float y = rectF.centerY() - ((metrics.ascent + metrics.descent) / 2f);
-        canvas.drawText(text, x, y, paint);
+        float lineHeight = metrics.descent - metrics.ascent;
+        float totalTextHeight = lineHeight * lines.length;
+        float firstBaseline = rectF.centerY() - (totalTextHeight / 2f) - metrics.ascent;
+        for (int i = 0; i < lines.length; i++) {
+            canvas.drawText(lines[i], x, firstBaseline + (i * lineHeight), paint);
+        }
         canvas.restore();
     }
 
