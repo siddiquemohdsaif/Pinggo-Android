@@ -44,6 +44,8 @@ public class LoginActivity extends AppCompatActivity {
     private WaveAnimatorView termsAnimatorView;
     private Insets systemBarInsets = Insets.NONE;
     private Insets navigationBarInsets = Insets.NONE;
+    private Insets imeInsets = Insets.NONE;
+    private boolean imeVisible = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -54,6 +56,8 @@ public class LoginActivity extends AppCompatActivity {
         ViewCompat.setOnApplyWindowInsetsListener(mainView, (v, insets) -> {
             systemBarInsets = insets.getInsets(WindowInsetsCompat.Type.systemBars());
             navigationBarInsets = insets.getInsets(WindowInsetsCompat.Type.navigationBars());
+            imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime());
+            imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime());
             int width = mainView.getWidth() > 0
                     ? mainView.getWidth()
                     : getResources().getDisplayMetrics().widthPixels;
@@ -63,6 +67,7 @@ public class LoginActivity extends AppCompatActivity {
                         horizontalPadding, loginContentLayout.getPaddingBottom());
                 loginContentLayout.post(this::applyResponsiveLoginLayout);
             }
+            mainView.post(this::applyKeyboardLift);
             return insets;
         });
 
@@ -82,6 +87,8 @@ public class LoginActivity extends AppCompatActivity {
         countryCodePicker.setOnCountryChangeListener(this::updateSelectedCountryViews);
         ViewCompat.requestApplyInsets(mainView);
         findViewById(R.id.main).post(this::applyResponsiveLoginLayout);
+        phoneNumberEditText.setOnFocusChangeListener((v, hasFocus) -> mainView.post(this::applyKeyboardLift));
+        otpEditText.setOnFocusChangeListener((v, hasFocus) -> mainView.post(this::applyKeyboardLift));
 
         loginPhoneCardView.setOnOtpAnimatorClickListener(this::showOtpFields);
         loginPhoneCardView.setOnConfirmAnimatorClickListener(this::confirmOtp);
@@ -106,10 +113,48 @@ public class LoginActivity extends AppCompatActivity {
 
         loginContentLayout.requestLayout();
         termsAnimatorView.post(this::setupTermsAnimator);
+        mainView.post(this::applyKeyboardLift);
     }
 
     private void applyBottomAnchoredSpacing() {
         loginContentLayout.requestLayout();
+    }
+
+    private void applyKeyboardLift() {
+        if (loginContentLayout == null || !imeVisible) {
+            setLoginContentTranslation(0f);
+            return;
+        }
+        View focusedInput = otpEditText != null && otpEditText.hasFocus()
+                ? otpEditText
+                : phoneNumberEditText;
+        if (focusedInput == null || focusedInput.getHeight() == 0 || mainView.getHeight() == 0) {
+            return;
+        }
+
+        int[] mainLocation = new int[2];
+        int[] inputLocation = new int[2];
+        mainView.getLocationOnScreen(mainLocation);
+        focusedInput.getLocationOnScreen(inputLocation);
+
+        int width = mainView.getWidth() > 0
+                ? mainView.getWidth()
+                : getResources().getDisplayMetrics().widthPixels;
+        int inputBottom = inputLocation[1] - mainLocation[1] + focusedInput.getHeight();
+        int keyboardTop = mainView.getHeight() - imeInsets.bottom;
+        int visibleMargin = (int) (0.040741f * width);
+        int neededLift = Math.max(0, inputBottom + visibleMargin - keyboardTop);
+        setLoginContentTranslation(-neededLift);
+    }
+
+    private void setLoginContentTranslation(float translationY) {
+        if (loginContentLayout.getTranslationY() == translationY) {
+            return;
+        }
+        loginContentLayout.animate()
+                .translationY(translationY)
+                .setDuration(180L)
+                .start();
     }
 
     private void setLayoutHeight(View view, int height) {
