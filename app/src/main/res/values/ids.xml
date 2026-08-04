@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="countryFlagTextView" type="id" />
+    <item name="countryCodePicker" type="id" />
+    <item name="phoneNumberEditText" type="id" />
+    <item name="otpEditText" type="id" />
+    <item name="otpHintTextView" type="id" />
+    <item name="phoneCodeTextView" type="id" />
+    <item name="phoneInputContainer" type="id" />
+    <item name="confirmButton" type="id" />
+    <item name="termsTextView" type="id" />
+    <item name="getOtpButton" type="id" />
+</resources>

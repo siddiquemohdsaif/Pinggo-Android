@@ -2,14 +2,13 @@ package com.w3n.wavestream.activity;
 
 import static android.widget.Toast.LENGTH_SHORT;
 
+import android.graphics.RectF;
 import android.content.Intent;
 import android.os.Bundle;
-import android.text.SpannableString;
-import android.text.Spanned;
-import android.text.style.ForegroundColorSpan;
 import android.view.View;
-import android.widget.Button;
+import android.view.ViewGroup;
 import android.widget.EditText;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -23,6 +22,9 @@ import androidx.core.view.WindowInsetsCompat;
 import com.hbb20.CountryCodePicker;
 import com.w3n.wavestream.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.wavestream.R;
+import com.w3n.wavestream.views.animator.TextViewAnimator;
+import com.w3n.wavestream.views.animator.WaveAnimatorView;
+import com.w3n.wavestream.views.login.LoginPhoneCardView;
 
 public class LoginActivity extends AppCompatActivity {
     private static final String FIXED_OTP = "123456";
@@ -33,22 +35,39 @@ public class LoginActivity extends AppCompatActivity {
     private TextView otpHintTextView;
     private TextView phoneCodeTextView;
     private TextView countryFlagTextView;
-    private Button confirmButton;
+    private View confirmButton;
     private String fullPhoneNumber;
+    private View mainView;
+    private LinearLayout loginContentLayout;
+    private View loginHeaderAnimatorView;
+    private LoginPhoneCardView loginPhoneCardView;
+    private WaveAnimatorView termsAnimatorView;
+    private Insets systemBarInsets = Insets.NONE;
+    private Insets navigationBarInsets = Insets.NONE;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_login);
-        View loginScrollView = findViewById(R.id.loginScrollView);
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
-            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            int horizontalPadding = Math.round(getResources().getDisplayMetrics().density * 26);
-            loginScrollView.setPadding(horizontalPadding, systemBars.top, horizontalPadding, systemBars.bottom);
+        mainView = findViewById(R.id.main);
+        ViewCompat.setOnApplyWindowInsetsListener(mainView, (v, insets) -> {
+            systemBarInsets = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            navigationBarInsets = insets.getInsets(WindowInsetsCompat.Type.navigationBars());
+            int width = mainView.getWidth() > 0
+                    ? mainView.getWidth()
+                    : getResources().getDisplayMetrics().widthPixels;
+            int horizontalPadding = (int) (0.066204f * width);
+            if (loginContentLayout != null) {
+                loginContentLayout.setPadding(horizontalPadding, systemBarInsets.top,
+                        horizontalPadding, loginContentLayout.getPaddingBottom());
+                loginContentLayout.post(this::applyResponsiveLoginLayout);
+            }
             return insets;
         });
 
+        loginContentLayout = findViewById(R.id.loginContentLayout);
+        loginHeaderAnimatorView = findViewById(R.id.loginHeaderAnimatorView);
         countryCodePicker = findViewById(R.id.countryCodePicker);
         phoneNumberEditText = findViewById(R.id.phoneNumberEditText);
         otpEditText = findViewById(R.id.otpEditText);
@@ -56,18 +75,95 @@ public class LoginActivity extends AppCompatActivity {
         phoneCodeTextView = findViewById(R.id.phoneCodeTextView);
         countryFlagTextView = findViewById(R.id.countryFlagTextView);
         confirmButton = findViewById(R.id.confirmButton);
+        loginPhoneCardView = findViewById(R.id.loginPhoneCardView);
+        termsAnimatorView = findViewById(R.id.termsAnimatorView);
         countryCodePicker.registerCarrierNumberEditText(phoneNumberEditText);
         updateSelectedCountryViews();
         countryCodePicker.setOnCountryChangeListener(this::updateSelectedCountryViews);
-        tintTermsLinks();
+        ViewCompat.requestApplyInsets(mainView);
+        findViewById(R.id.main).post(this::applyResponsiveLoginLayout);
 
-        findViewById(R.id.getOtpButton).setOnClickListener(v -> showOtpFields());
-        confirmButton.setOnClickListener(v -> confirmOtp());
+        loginPhoneCardView.setOnOtpAnimatorClickListener(this::showOtpFields);
+        loginPhoneCardView.setOnConfirmAnimatorClickListener(this::confirmOtp);
+    }
+
+    private void applyResponsiveLoginLayout() {
+        int width = mainView.getWidth() > 0
+                ? mainView.getWidth()
+                : getResources().getDisplayMetrics().widthPixels;
+        int horizontalPadding = (int) (0.066204f * width);
+        int bottomSafePadding = Math.max(systemBarInsets.bottom, navigationBarInsets.bottom)
+                + (int) (0.071296f * width);
+
+        loginContentLayout.setPadding(horizontalPadding, 0, horizontalPadding, bottomSafePadding);
+        setHorizontalMargins(loginHeaderAnimatorView, horizontalPadding);
+        setTopMargin(loginHeaderAnimatorView, systemBarInsets.top + (int) (0.224074f * width));
+
+        setLayoutHeight(loginHeaderAnimatorView, (int) (0.560185f * width));
+        setLinearTopMargin(loginPhoneCardView, 0);
+        setLayoutHeight(termsAnimatorView, (int) (0.112037f * width));
+        setLinearTopMargin(termsAnimatorView, (int) (0.063657f * width));
+
+        loginContentLayout.requestLayout();
+        termsAnimatorView.post(this::setupTermsAnimator);
+    }
+
+    private void applyBottomAnchoredSpacing() {
+        loginContentLayout.requestLayout();
+    }
+
+    private void setLayoutHeight(View view, int height) {
+        ViewGroup.LayoutParams params = view.getLayoutParams();
+        params.height = height;
+        view.setLayoutParams(params);
+    }
+
+    private void setLinearTopMargin(View view, int topMargin) {
+        ViewGroup.LayoutParams baseParams = view.getLayoutParams();
+        if (baseParams instanceof LinearLayout.LayoutParams) {
+            LinearLayout.LayoutParams params = (LinearLayout.LayoutParams) baseParams;
+            params.topMargin = topMargin;
+            view.setLayoutParams(params);
+        }
+    }
+
+    private void setTopMargin(View view, int topMargin) {
+        ViewGroup.LayoutParams baseParams = view.getLayoutParams();
+        if (baseParams instanceof ViewGroup.MarginLayoutParams) {
+            ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) baseParams;
+            params.topMargin = topMargin;
+            view.setLayoutParams(params);
+        }
+    }
+
+    private void setHorizontalMargins(View view, int horizontalMargin) {
+        ViewGroup.LayoutParams baseParams = view.getLayoutParams();
+        if (baseParams instanceof ViewGroup.MarginLayoutParams) {
+            ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) baseParams;
+            params.leftMargin = horizontalMargin;
+            params.rightMargin = horizontalMargin;
+            view.setLayoutParams(params);
+        }
+    }
+
+    private int getLinearTopMargin(View view) {
+        ViewGroup.LayoutParams baseParams = view.getLayoutParams();
+        if (baseParams instanceof LinearLayout.LayoutParams) {
+            return ((LinearLayout.LayoutParams) baseParams).topMargin;
+        }
+        return 0;
     }
 
     private void updateSelectedCountryViews() {
-        phoneCodeTextView.setText(countryCodePicker.getSelectedCountryCodeWithPlus());
-        countryFlagTextView.setText(countryCodeToFlagEmoji(countryCodePicker.getSelectedCountryNameCode()));
+        try {
+            phoneCodeTextView.setText(countryCodePicker.getSelectedCountryCodeWithPlus());
+            countryFlagTextView.setText(countryCodeToFlagEmoji(countryCodePicker.getSelectedCountryNameCode()));
+        } catch (NullPointerException ignored) {
+            countryCodePicker.setDefaultCountryUsingNameCode("IN");
+            countryCodePicker.resetToDefaultCountry();
+            phoneCodeTextView.setText("+91");
+            countryFlagTextView.setText(countryCodeToFlagEmoji("IN"));
+        }
     }
 
     private String countryCodeToFlagEmoji(String countryCode) {
@@ -81,35 +177,38 @@ public class LoginActivity extends AppCompatActivity {
         return new String(Character.toChars(firstLetter)) + new String(Character.toChars(secondLetter));
     }
 
-    private void tintTermsLinks() {
-        TextView termsTextView = findViewById(R.id.termsTextView);
-        SpannableString termsText = new SpannableString(getString(R.string.terms_notice));
-        int accentColor = ContextCompat.getColor(this, R.color.pinggo_action);
-        setTextColorSpan(termsText, "Terms of Service", accentColor);
-        setTextColorSpan(termsText, "Privacy Policy", accentColor);
-        termsTextView.setText(termsText);
-    }
-
-    private void setTextColorSpan(SpannableString text, String target, int color) {
-        int start = text.toString().indexOf(target);
-        if (start >= 0) {
-            text.setSpan(
-                    new ForegroundColorSpan(color),
-                    start,
-                    start + target.length(),
-                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-            );
-        }
+    private void setupTermsAnimator() {
+        int width = termsAnimatorView.getWidth();
+        termsAnimatorView.getTextAnimators().clear();
+        termsAnimatorView.getTextAnimators().add(new TextViewAnimator(
+                "terms_line_1",
+                "By continuing, you agree to our",
+                new RectF(0, 0, width, 0.050926f * width),
+                0.025463f * width,
+                ContextCompat.getColor(this, R.color.pinggo_muted_text),
+                null
+        ));
+        termsAnimatorView.getTextAnimators().add(new TextViewAnimator(
+                "terms_line_2",
+                "Terms of Service and Privacy Policy.",
+                new RectF(0, 0.045833f * width, width, 0.101852f * width),
+                0.025463f * width,
+                ContextCompat.getColor(this, R.color.pinggo_action),
+                null
+        ));
+        termsAnimatorView.invalidate();
     }
 
     private void showOtpFields() {
         if (phoneNumberEditText.getText().toString().trim().isEmpty()) {
             phoneNumberEditText.setError(getString(R.string.phone_required));
+            showAnimatorDialog(getString(R.string.phone_required));
             return;
         }
 
         if (!countryCodePicker.isValidFullNumber()) {
             phoneNumberEditText.setError(getString(R.string.invalid_phone));
+            showAnimatorDialog(getString(R.string.invalid_phone));
             return;
         }
 
@@ -119,12 +218,17 @@ public class LoginActivity extends AppCompatActivity {
         confirmButton.setVisibility(View.VISIBLE);
         otpEditText.requestFocus();
         Toast.makeText(this, getString(R.string.fixed_otp_message, FIXED_OTP, fullPhoneNumber), LENGTH_SHORT).show();
+        loginContentLayout.post(() -> {
+            applyBottomAnchoredSpacing();
+            loginPhoneCardView.refreshAnimators();
+        });
     }
 
     private void confirmOtp() {
         String otp = otpEditText.getText().toString().trim();
         if (!FIXED_OTP.equals(otp)) {
             otpEditText.setError(getString(R.string.invalid_otp));
+            showAnimatorDialog(getString(R.string.invalid_otp));
             return;
         }
 
@@ -150,5 +254,9 @@ public class LoginActivity extends AppCompatActivity {
                 }
             }
         });
+    }
+
+    private void showAnimatorDialog(String message) {
+        loginPhoneCardView.showAnimatorDialog(message);
     }
 }

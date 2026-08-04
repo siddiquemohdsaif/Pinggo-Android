@@ -170,4 +170,14 @@
             app:tint="@color/white" />
     </LinearLayout>
 
+    <com.w3n.wavestream.views.animator.WaveAnimatorView
+        android:id="@+id/waveAnimatorView"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:importantForAccessibility="no"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
 </androidx.constraintlayout.widget.ConstraintLayout>
