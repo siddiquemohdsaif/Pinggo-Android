@@ -4,8 +4,8 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.Paint;
-import android.graphics.RectF;
 import android.util.AttributeSet;
 import android.view.View;
 
@@ -15,6 +15,7 @@ import androidx.core.content.ContextCompat;
 import com.w3n.wavestream.R;
 import com.w3n.wavestream.views.animator.TextViewAnimator;
 import com.w3n.wavestream.views.animator.core.BitmapViewAnimator;
+import com.w3n.wavestream.views.animator.utils.PixelRectF;
 
 import java.util.ArrayList;
 
@@ -54,9 +55,10 @@ public class LoginHeaderAnimatorView extends View {
         textAnimators.clear();
         bitmapAnimators.clear();
 
-        float centerX = getWidth() / 2f;
-        float logoSize = 0.224074f * getWidth();
-        RectF logoRect = new RectF(centerX - logoSize / 2f, 0.020370f * getWidth(), centerX + logoSize / 2f, 0.020370f * getWidth() + logoSize);
+        int logoLeftPx = (getRootView().getWidth() - 242) / 2;
+        PixelRectF logoRect = new PixelRectF(width,logoLeftPx, 22,
+                logoLeftPx + 242, 22 + 242);
+        float logoSize = logoRect.width();
         if (logoBitmap != null) {
             BitmapViewAnimator.addAnimation("login_logo_in", bitmapAnimators, logoBitmap, 0f, 1f,
                     logoSize * 0.82f, logoSize, logoSize * 0.82f, logoSize,
@@ -66,13 +68,16 @@ public class LoginHeaderAnimatorView extends View {
         }
 
         textAnimators.add(new TextViewAnimator("brand", getContext().getString(R.string.pinggo_brand),
-                new RectF(0, 0.238796f * getWidth(), width, 0.366111f * getWidth()), 0.114583f * getWidth(),
+                new PixelRectF(width, 0, 258, 1080, 395),
+                124,
                 ContextCompat.getColor(getContext(), R.color.pinggo_title),Paint.Align.CENTER,TextViewAnimator.FONT_INTER,TextViewAnimator.WEIGHT_BOLD, null));
         textAnimators.add(new TextViewAnimator("tagline", getContext().getString(R.string.pinggo_tagline),
-                new RectF(0, 0.376296f * getWidth(), width, 0.437407f * getWidth()), 0.035648f * getWidth(),
+                new PixelRectF(width,0, 406, 1080, 472),
+                38,
                 ContextCompat.getColor(getContext(), R.color.pinggo_body_text),Paint.Align.CENTER,TextViewAnimator.FONT_INTER,TextViewAnimator.WEIGHT_MEDIUM, null));
         textAnimators.add(new TextViewAnimator("security", getContext().getString(R.string.pinggo_security),
-                new RectF(0, 0.445046f * getWidth(), width, 0.501065f * getWidth()), 0.030556f * getWidth(),
+                new PixelRectF(width, 0, 481, 1080, 541),
+                33,
                 ContextCompat.getColor(getContext(), R.color.pinggo_action),Paint.Align.CENTER,TextViewAnimator.FONT_INTER,TextViewAnimator.WEIGHT_MEDIUM, null));
     }
 
@@ -80,11 +85,6 @@ public class LoginHeaderAnimatorView extends View {
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
         BitmapViewAnimator.Draw(canvas, bitmapAnimators);
-        if (bitmapAnimators.isEmpty() && logoBitmap != null) {
-            float logoSize = 0.224074f * getWidth();
-            float left = (getWidth() - logoSize) / 2f;
-            canvas.drawBitmap(logoBitmap, null, new RectF(left, 0.020370f * getWidth(), left + logoSize, 0.020370f * getWidth() + logoSize), paint);
-        }
         TextViewAnimator.Draw(canvas, textAnimators);
         postInvalidateOnAnimation();
     }

@@ -39,6 +39,7 @@ import com.w3n.wavestream.views.animator.TextViewAnimator;
 import com.w3n.wavestream.views.animator.button.ButtonViewAnimator;
 import com.w3n.wavestream.views.animator.dialog.CustomViewDialog;
 import com.w3n.wavestream.views.animator.dialog.MessageBubbleDialog;
+import com.w3n.wavestream.views.animator.utils.PixelRectF;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -56,6 +57,7 @@ public class LoginPhoneCardView extends View {
     private static final int TEXT_SIZE_INPUT = 14;
     private static final int TEXT_SIZE_LABEL = 12;
     private static final float FIELD_HEIGHT_SCALE = 0.90f;
+    private static final long CURSOR_BLINK_INTERVAL_MS = 300L;
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
     private final ArrayList<TextViewAnimator> textAnimators = new ArrayList<>();
@@ -66,8 +68,8 @@ public class LoginPhoneCardView extends View {
     private final RectF countryDropdownRect = new RectF();
     private final RectF phoneRect = new RectF();
     private final RectF otpRect = new RectF();
-    private final RectF nextButtonRect = new RectF();
-    private final RectF confirmButtonRect = new RectF();
+    private final PixelRectF nextButtonRect = new PixelRectF(0f, 0f, 0f, 0f);
+    private final PixelRectF confirmButtonRect = new PixelRectF(0f, 0f, 0f, 0f);
     private final RectF countryLabelBackgroundRect = new RectF();
     private final RectF phoneLabelBackgroundRect = new RectF();
     private final RectF countryLabelRect = new RectF();
@@ -94,6 +96,7 @@ public class LoginPhoneCardView extends View {
     private boolean otpVisible;
     private boolean countryPopupOpen;
     private int activeField = FIELD_NONE;
+    private String pressedButtonId;
 
     public LoginPhoneCardView(Context context) {
         super(context);
@@ -277,6 +280,8 @@ public class LoginPhoneCardView extends View {
         CustomViewDialog.Draw(canvas, dialogs);
         if (!dialogs.isEmpty()) {
             postInvalidateOnAnimation();
+        } else if (hasActiveInputCursor()) {
+            postInvalidateDelayed(CURSOR_BLINK_INTERVAL_MS);
         }
     }
 
@@ -287,8 +292,7 @@ public class LoginPhoneCardView extends View {
             invalidate();
             return true;
         }
-        if (ButtonViewAnimator.HandleTouch(event, buttonAnimators)) {
-            invalidate();
+        if (handleAnimatorButtonTouch(event)) {
             return true;
         }
         if (event.getActionMasked() == MotionEvent.ACTION_UP) {
@@ -458,12 +462,12 @@ public class LoginPhoneCardView extends View {
         buttonAnimators.clear();
 
         addText("title", getString(R.string.enter_phone_number),
-                new RectF(horizontal, y, width - horizontal, y + textHeight(20)),
+                new PixelRectF(horizontal, y, width - horizontal, y + textHeight(20)),
                 20, R.color.primary_text, TextViewAnimator.WEIGHT_BOLD, Paint.Align.CENTER);
         y += textHeight(20) + 0.030556f * w;
 
         addText("hint", getString(R.string.verification_code_hint),
-                new RectF(horizontal, y, width - horizontal, y + textHeight(13) * 2f),
+                new PixelRectF(horizontal, y, width - horizontal, y + textHeight(13) * 2f),
                 13, R.color.pinggo_body_text, TextViewAnimator.WEIGHT_REGULAR, Paint.Align.CENTER);
         y += textHeight(13) * 2f + 0.045833f * w;
 
@@ -478,7 +482,7 @@ public class LoginPhoneCardView extends View {
         y = phoneRect.bottom + 0.045833f * w;
 
         addText("security", getString(R.string.phone_safe_message),
-                new RectF(horizontal + 0.071111f * w, y, width - horizontal, y + 0.040741f * w),
+                new PixelRectF(horizontal + 0.071111f * w, y, width - horizontal, y + 0.040741f * w),
                 13, R.color.pinggo_body_text, TextViewAnimator.WEIGHT_REGULAR, Paint.Align.LEFT);
         y += 0.040741f * w + 0.063657f * w;
 
@@ -493,7 +497,7 @@ public class LoginPhoneCardView extends View {
         if (otpVisible) {
             y += 0.045833f * w;
             addText("otp_hint", getString(R.string.otp_hint),
-                    new RectF(horizontal, y, width - horizontal, y + textHeight(14)),
+                    new PixelRectF(horizontal, y, width - horizontal, y + textHeight(14)),
                     14, R.color.secondary_text, TextViewAnimator.WEIGHT_REGULAR, Paint.Align.CENTER);
             y += textHeight(14) + 0.020370f * w;
             otpRect.set(horizontal, y, width - horizontal, y + getOtpFieldHeight(w));
@@ -531,7 +535,7 @@ public class LoginPhoneCardView extends View {
                 0.081481f * w, 0.05f * w);
         String countryDisplayText = countryFocused ? countryQuery : countryName;
         float countryValueLeft = countryRect.left + 0.172222f * w;
-        RectF countryValueRect = new RectF(countryValueLeft, countryRect.top,
+        PixelRectF countryValueRect = new PixelRectF(countryValueLeft, countryRect.top,
                 countryRect.right - 0.112037f * w, countryRect.bottom);
         addText("country_value", countryDisplayText,
                 countryValueRect,
@@ -546,13 +550,13 @@ public class LoginPhoneCardView extends View {
         float phoneCodeLeft = phoneRect.left + 0.045833f * w;
         float dividerX = phoneRect.left + 0.185f * w;
         addText("phone_code", countryCode,
-                new RectF(phoneCodeLeft, phoneRect.top, dividerX - 0.025f * w, phoneRect.bottom),
+                new PixelRectF(phoneCodeLeft, phoneRect.top, dividerX - 0.025f * w, phoneRect.bottom),
                 TEXT_SIZE_INPUT, R.color.primary_text, TextViewAnimator.WEIGHT_REGULAR, Paint.Align.LEFT);
         paint.setColor(ContextCompat.getColor(getContext(), R.color.pinggo_input_stroke));
         paint.setStrokeWidth(dp(1));
         canvas.drawLine(dividerX, phoneRect.centerY() - 0.031829f * w, dividerX, phoneRect.centerY() + 0.031829f * w, paint);
         float phoneValueLeft = dividerX + 0.045f * w;
-        RectF phoneValueRect = new RectF(phoneValueLeft, phoneRect.top,
+        PixelRectF phoneValueRect = new PixelRectF(phoneValueLeft, phoneRect.top,
                 phoneRect.right - 0.035648f * w, phoneRect.bottom);
         addText("phone_value", phoneNumber.isEmpty() ? getString(R.string.phone_number) : formattedPhoneNumber,
                 phoneValueRect,
@@ -564,7 +568,8 @@ public class LoginPhoneCardView extends View {
         if (otpVisible) {
             drawRoundedBox(canvas, otpRect, R.color.white, R.color.pinggo_input_stroke, dp(1), dp(12));
             addText("otp_value", otp.isEmpty() ? getString(R.string.enter_otp) : otp,
-                    new RectF(otpRect.left + 0.040741f * w, otpRect.top, otpRect.right - 0.040741f * w, otpRect.bottom),
+                    new PixelRectF(otpRect.left + 0.040741f * w, otpRect.top,
+                            otpRect.right - 0.040741f * w, otpRect.bottom),
                     TEXT_SIZE_INPUT, otp.isEmpty() ? R.color.secondary_text : R.color.primary_text,
                     TextViewAnimator.WEIGHT_REGULAR, Paint.Align.LEFT);
         }
@@ -576,6 +581,9 @@ public class LoginPhoneCardView extends View {
     }
 
     private void drawInputCursors(Canvas canvas) {
+        if (!shouldDrawCursor()) {
+            return;
+        }
         float w = getRefWidth();
         if (activeField == FIELD_COUNTRY) {
             drawCursor(canvas, true,
@@ -595,6 +603,15 @@ public class LoginPhoneCardView extends View {
                             otpRect.right - 0.040741f * w, otpRect.bottom),
                     otp);
         }
+    }
+
+    private boolean hasActiveInputCursor() {
+        return activeField == FIELD_COUNTRY || activeField == FIELD_PHONE || activeField == FIELD_OTP;
+    }
+
+    private boolean shouldDrawCursor() {
+        return hasActiveInputCursor()
+                && ((System.currentTimeMillis() / CURSOR_BLINK_INTERVAL_MS) % 2L == 0L);
     }
 
     private void drawRoundedBox(Canvas canvas, RectF rect, int fillColorId, int strokeColorId, float strokeWidth, float radius) {
@@ -664,10 +681,72 @@ public class LoginPhoneCardView extends View {
         canvas.drawLine(x, baseline + metrics.ascent, x, baseline + metrics.descent, cursorPaint);
     }
 
-    private void addText(String id, String text, RectF rect, int textSize, int colorId,
+    private boolean handleAnimatorButtonTouch(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            if (nextButtonRect.isEmpty()) {
+                buildLayout();
+            }
+            pressedButtonId = buttonIdAt(event.getX(), event.getY());
+            if (pressedButtonId != null) {
+                ButtonViewAnimator.HandleTouch(event, buttonAnimators);
+                invalidate();
+                return true;
+            }
+            return false;
+        }
+
+        if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+            String buttonId = pressedButtonId;
+            pressedButtonId = null;
+            if (buttonId != null && isButtonTouchInside(buttonId, event.getX(), event.getY())) {
+                if ("next".equals(buttonId) && otpClickListener != null) {
+                    otpClickListener.onClick();
+                } else if ("confirm".equals(buttonId) && confirmClickListener != null) {
+                    confirmClickListener.onClick();
+                }
+                invalidate();
+                return true;
+            }
+            invalidate();
+            return buttonId != null;
+        }
+
+        if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+            pressedButtonId = null;
+            ButtonViewAnimator.HandleTouch(event, buttonAnimators);
+            invalidate();
+            return false;
+        }
+
+        if (pressedButtonId != null) {
+            ButtonViewAnimator.HandleTouch(event, buttonAnimators);
+            invalidate();
+            return true;
+        }
+        return false;
+    }
+
+    private String buttonIdAt(float x, float y) {
+        if (nextButtonRect.contains(x, y)) {
+            return "next";
+        }
+        if (otpVisible && confirmButtonRect.contains(x, y)) {
+            return "confirm";
+        }
+        return null;
+    }
+
+    private boolean isButtonTouchInside(String buttonId, float x, float y) {
+        if ("next".equals(buttonId)) {
+            return nextButtonRect.contains(x, y);
+        }
+        return "confirm".equals(buttonId) && confirmButtonRect.contains(x, y);
+    }
+
+    private void addText(String id, String text, PixelRectF rect, int textSize, int colorId,
                          int weight, Paint.Align align) {
         textAnimators.add(new TextViewAnimator(
-                getContext(), id, text, rect, textSizeInPixels(textSize),
+                getContext(), id, text, rect, textSizePx(textSize),
                 ContextCompat.getColor(getContext(), colorId), align,
                 TextViewAnimator.FONT_INTER, weight, null));
     }
@@ -733,16 +812,16 @@ public class LoginPhoneCardView extends View {
         return new int[]{textView.getMeasuredWidth() + dp(2), textView.getMeasuredHeight() + dp(2)};
     }
 
-    private void addButton(String id, RectF rect, String label, ButtonViewAnimator.OnClickListener listener) {
+    private void addButton(String id, PixelRectF rect, String label, ButtonViewAnimator.OnClickListener listener) {
         Bitmap bitmap = Bitmap.createBitmap(Math.max(1, Math.round(rect.width())),
                 Math.max(1, Math.round(rect.height())), Bitmap.Config.ARGB_8888);
         Canvas buttonCanvas = new Canvas(bitmap);
         Paint buttonPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
-        RectF localRect = new RectF(0, 0, bitmap.getWidth(), bitmap.getHeight());
+        PixelRectF localRect = new PixelRectF(0f, 0f, bitmap.getWidth(), bitmap.getHeight());
         buttonPaint.setColor(ContextCompat.getColor(getContext(), R.color.pinggo_action));
         buttonCanvas.drawRoundRect(localRect, dp(10), dp(10), buttonPaint);
         TextViewAnimator labelAnimator = new TextViewAnimator(
-                getContext(), id + "_label", label, localRect, textSizeInPixels(18),
+                getContext(), id + "_label", label, localRect, textSizePx(18),
                 ContextCompat.getColor(getContext(), R.color.white), Paint.Align.CENTER,
                 TextViewAnimator.FONT_INTER, TextViewAnimator.WEIGHT_BOLD, null);
         labelAnimator.onDraw(buttonCanvas);
@@ -1122,6 +1201,23 @@ public class LoginPhoneCardView extends View {
                 return 0.030556f * getRefWidth();
             default:
                 return 0.033102f * getRefWidth();
+        }
+    }
+
+    private int textSizePx(int textSize) {
+        switch (textSize) {
+            case 20:
+                return 55;
+            case 18:
+                return 50;
+            case 14:
+                return 38;
+            case 13:
+                return 36;
+            case 12:
+                return 33;
+            default:
+                return 36;
         }
     }
 

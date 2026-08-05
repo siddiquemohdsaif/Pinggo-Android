@@ -196,7 +196,7 @@ public class LoginActivity extends AppCompatActivity {
                 "terms_line_1",
                 "By continuing, you agree to our",
                 new RectF(0, 0, width, 0.050926f * width),
-                0.025463f * width,
+                28,
                 ContextCompat.getColor(this, R.color.pinggo_muted_text),
                 null
         ));
@@ -204,7 +204,7 @@ public class LoginActivity extends AppCompatActivity {
                 "terms_line_2",
                 "Terms of Service and Privacy Policy.",
                 new RectF(0, 0.045833f * width, width, 0.101852f * width),
-                0.025463f * width,
+                28,
                 ContextCompat.getColor(this, R.color.pinggo_action),
                 null
         ));

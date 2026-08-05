@@ -1,6 +1,7 @@
 package com.w3n.wavestream.views.animator;
 
 import android.content.Context;
+import android.content.res.Resources;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -14,6 +15,7 @@ import androidx.core.content.res.ResourcesCompat;
 
 import com.w3n.wavestream.R;
 import com.w3n.wavestream.views.animator.button.Region;
+import com.w3n.wavestream.views.animator.utils.PixelRectF;
 
 import java.util.ArrayList;
 
@@ -39,42 +41,68 @@ public class TextViewAnimator {
     private final OnClickListener clickListener;
     private final Region region;
     private final Rect textBounds = new Rect();
-    private RectF rectF;
+    private PixelRectF rectF;
     private boolean clickable;
     private boolean pressed;
 
-    public TextViewAnimator(String id, String text, RectF rectF, float textSize,
+    public TextViewAnimator(String id, String text, RectF rectF, int textSizePx,
                             int textColor, OnClickListener clickListener) {
-        this(id, text, rectF, textSize, textColor, Paint.Align.CENTER, false, clickListener);
+        this(id, text, PixelRectF.fromRect(rectF), textSizePx, textColor, clickListener);
     }
 
-    public TextViewAnimator(String id, String text, RectF rectF, float textSize,
+    public TextViewAnimator(String id, String text, PixelRectF rectF, int textSizePx,
+                            int textColor, OnClickListener clickListener) {
+        this(id, text, rectF, textSizePx, textColor, Paint.Align.CENTER, false, clickListener);
+    }
+
+    public TextViewAnimator(String id, String text, PixelRectF rectF, int textSizePx,
                             int textColor, Paint.Align align, boolean bold,
                             OnClickListener clickListener) {
-        this(id, text, rectF, textSize, textColor, align, FONT_SANS_SERIF,
+        this(id, text, rectF, textSizePx, textColor, align, FONT_SANS_SERIF,
                 bold ? WEIGHT_BOLD : WEIGHT_REGULAR, clickListener);
     }
 
-    public TextViewAnimator(String id, String text, RectF rectF, float textSize,
+    public TextViewAnimator(String id, String text, RectF rectF, int textSizePx,
                             int textColor, Paint.Align align, String fontFamily,
                             int fontWeight, OnClickListener clickListener) {
-        this(null, id, text, rectF, textSize, textColor, align, fontFamily, fontWeight, clickListener);
+        this(id, text, PixelRectF.fromRect(rectF), textSizePx, textColor, align, fontFamily,
+                fontWeight, clickListener);
     }
 
-    public TextViewAnimator(Context context, String id, String text, RectF rectF, float textSize,
+    public TextViewAnimator(String id, String text, PixelRectF rectF, int textSizePx,
+                            int textColor, Paint.Align align, String fontFamily,
+                            int fontWeight, OnClickListener clickListener) {
+        this(null, id, text, rectF, textSizePx, textColor, align, fontFamily, fontWeight, clickListener);
+    }
+
+    public TextViewAnimator(Context context, String id, String text, RectF rectF, int textSizePx,
+                            int textColor, Paint.Align align, String fontFamily,
+                            int fontWeight, OnClickListener clickListener) {
+        this(context, id, text, PixelRectF.fromRect(rectF), textSizePx, textColor, align,
+                fontFamily, fontWeight, clickListener);
+    }
+
+    public TextViewAnimator(Context context, String id, String text, PixelRectF rectF, int textSizePx,
                             int textColor, Paint.Align align, String fontFamily,
                             int fontWeight, OnClickListener clickListener) {
         this.id = id;
         this.text = text;
-        this.rectF = new RectF(rectF);
+        this.rectF = new PixelRectF(rectF);
         this.clickListener = clickListener;
         this.clickable = clickListener != null;
         this.region = new Region(rectF.left, rectF.right, rectF.top, rectF.bottom, id);
         paint.setColor(textColor);
-        paint.setTextSize(textSize);
+        paint.setTextSize(textSizeInPixels(context, textSizePx));
         paint.setTextAlign(align);
         paint.setTypeface(createTypeface(context, fontFamily, fontWeight));
         paint.setFakeBoldText(Build.VERSION.SDK_INT < Build.VERSION_CODES.P && fontWeight >= WEIGHT_SEMI_BOLD);
+    }
+
+    private static float textSizeInPixels(Context context, int textSizePx) {
+        int width = context != null
+                ? context.getResources().getDisplayMetrics().widthPixels
+                : Resources.getSystem().getDisplayMetrics().widthPixels;
+        return textSizePx / 1080f * width;
     }
 
     private static Typeface createTypeface(Context context, String fontFamily, int fontWeight) {
@@ -102,7 +130,11 @@ public class TextViewAnimator {
     }
 
     public void setRect(RectF rectF) {
-        this.rectF = new RectF(rectF);
+        setRect(PixelRectF.fromRect(rectF));
+    }
+
+    public void setRect(PixelRectF rectF) {
+        this.rectF = new PixelRectF(rectF);
         region.updateRegion(rectF.left, rectF.right, rectF.top, rectF.bottom);
     }
 
@@ -173,9 +205,14 @@ public class TextViewAnimator {
         return false;
     }
 
-    public static TextViewAnimator create(String id, String text, RectF rectF, float textSize,
+    public static TextViewAnimator create(String id, String text, RectF rectF, int textSizePx,
                                           OnClickListener clickListener) {
-        return new TextViewAnimator(id, text, rectF, textSize, Color.WHITE, clickListener);
+        return create(id, text, PixelRectF.fromRect(rectF), textSizePx, clickListener);
+    }
+
+    public static TextViewAnimator create(String id, String text, PixelRectF rectF, int textSizePx,
+                                          OnClickListener clickListener) {
+        return new TextViewAnimator(id, text, rectF, textSizePx, Color.WHITE, clickListener);
     }
 
     public static void Draw(Canvas canvas, ArrayList<TextViewAnimator> textAnimators) {

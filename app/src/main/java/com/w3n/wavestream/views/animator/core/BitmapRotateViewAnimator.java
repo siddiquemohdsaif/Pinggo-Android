@@ -7,6 +7,8 @@ import android.graphics.RectF;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.Interpolator;
 
+import com.w3n.wavestream.views.animator.utils.PixelRectF;
+
 import java.util.ArrayList;
 import java.util.Iterator;
 
@@ -25,10 +27,17 @@ public class BitmapRotateViewAnimator {
     private float endAlpha;
     private float startAngle;
     private float endAngle;
-    private RectF rectF;
+    private PixelRectF rectF;
 
     public void startAnimation(String animName, Bitmap bitmap, float startAlpha, float endAlpha,
                                float startAngle, float endAngle, RectF rectF, long duration,
+                               boolean repeat) {
+        startAnimation(animName, bitmap, startAlpha, endAlpha, startAngle, endAngle,
+                PixelRectF.fromRect(rectF), duration, repeat);
+    }
+
+    public void startAnimation(String animName, Bitmap bitmap, float startAlpha, float endAlpha,
+                               float startAngle, float endAngle, PixelRectF rectF, long duration,
                                boolean repeat) {
         this.animName = animName;
         this.bitmap = bitmap;
@@ -36,7 +45,7 @@ public class BitmapRotateViewAnimator {
         this.endAlpha = endAlpha;
         this.startAngle = startAngle;
         this.endAngle = endAngle;
-        this.rectF = new RectF(rectF);
+        this.rectF = new PixelRectF(rectF);
         this.duration = Math.max(1L, duration);
         this.repeat = repeat;
         this.startTime = System.currentTimeMillis();
@@ -79,6 +88,14 @@ public class BitmapRotateViewAnimator {
     public static void addAnimation(String animName, ArrayList<BitmapRotateViewAnimator> animators,
                                     Bitmap bitmap, float startAlpha, float endAlpha,
                                     float startAngle, float endAngle, RectF rectF,
+                                    long duration, boolean repeat) {
+        addAnimation(animName, animators, bitmap, startAlpha, endAlpha, startAngle, endAngle,
+                PixelRectF.fromRect(rectF), duration, repeat);
+    }
+
+    public static void addAnimation(String animName, ArrayList<BitmapRotateViewAnimator> animators,
+                                    Bitmap bitmap, float startAlpha, float endAlpha,
+                                    float startAngle, float endAngle, PixelRectF rectF,
                                     long duration, boolean repeat) {
         removeAnimation(animName, animators);
         BitmapRotateViewAnimator animator = new BitmapRotateViewAnimator();

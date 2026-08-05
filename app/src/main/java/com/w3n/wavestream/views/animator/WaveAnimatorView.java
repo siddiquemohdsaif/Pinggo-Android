@@ -18,6 +18,7 @@ import com.w3n.wavestream.views.animator.core.BitmapViewAnimator;
 import com.w3n.wavestream.views.animator.dialog.CustomViewDialog;
 import com.w3n.wavestream.views.animator.dynamic.DynamicViewAnimator;
 import com.w3n.wavestream.views.animator.dynamic.TypingDotsView;
+import com.w3n.wavestream.views.animator.utils.PixelRectF;
 
 import java.util.ArrayList;
 
@@ -76,6 +77,10 @@ public class WaveAnimatorView extends View {
     }
 
     public void showTypingDots(RectF rectF) {
+        showTypingDots(PixelRectF.fromRect(rectF));
+    }
+
+    public void showTypingDots(PixelRectF rectF) {
         dynamicAnimators.clear();
         dynamicAnimators.add(new DynamicViewAnimator(new TypingDotsView(Color.GRAY), -1, rectF));
         invalidate();
@@ -87,11 +92,15 @@ public class WaveAnimatorView extends View {
     }
 
     public void pulseBitmap(String id, Bitmap bitmap, RectF rectF) {
+        pulseBitmap(id, bitmap, PixelRectF.fromRect(rectF));
+    }
+
+    public void pulseBitmap(String id, Bitmap bitmap, PixelRectF rectF) {
         BitmapViewAnimator.addAnimation(id, bitmapAnimators, bitmap, 0f, 1f,
                 rectF.width() * 0.8f, rectF.width(), rectF.height() * 0.8f, rectF.height(),
                 rectF.left + (rectF.width() * 0.1f), rectF.left,
                 rectF.top + (rectF.height() * 0.1f), rectF.top, 180L, false,
-                null, true);
+                (PixelRectF) null, true);
         invalidate();
     }
 

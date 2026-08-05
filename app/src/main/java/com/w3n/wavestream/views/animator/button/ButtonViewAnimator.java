@@ -6,6 +6,8 @@ import android.graphics.Paint;
 import android.graphics.RectF;
 import android.view.MotionEvent;
 
+import com.w3n.wavestream.views.animator.utils.PixelRectF;
+
 import java.util.ArrayList;
 import java.util.Iterator;
 
@@ -17,17 +19,21 @@ public class ButtonViewAnimator {
     private final String id;
     private final OnClickListener clickListener;
     private final Region buttonRegion;
-    private RectF rectF;
+    private PixelRectF rectF;
     private Bitmap bitmap;
     private boolean clickable = true;
     private boolean pressed;
     private PressAnimation pressAnimation;
 
     public ButtonViewAnimator(OnClickListener clickListener, String id, Bitmap bitmap, RectF rectF) {
+        this(clickListener, id, bitmap, PixelRectF.fromRect(rectF));
+    }
+
+    public ButtonViewAnimator(OnClickListener clickListener, String id, Bitmap bitmap, PixelRectF rectF) {
         this.clickListener = clickListener;
         this.id = id;
         this.bitmap = bitmap;
-        this.rectF = new RectF(rectF);
+        this.rectF = new PixelRectF(rectF);
         this.buttonRegion = new Region(rectF.left, rectF.right, rectF.top, rectF.bottom, id);
         if (clickListener == null) {
             clickable = false;
@@ -39,7 +45,11 @@ public class ButtonViewAnimator {
     }
 
     public void setRect(RectF rectF) {
-        this.rectF = new RectF(rectF);
+        setRect(PixelRectF.fromRect(rectF));
+    }
+
+    public void setRect(PixelRectF rectF) {
+        this.rectF = new PixelRectF(rectF);
         buttonRegion.updateRegion(rectF.left, rectF.right, rectF.top, rectF.bottom);
     }
 

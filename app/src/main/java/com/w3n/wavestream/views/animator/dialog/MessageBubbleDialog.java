@@ -3,18 +3,18 @@ package com.w3n.wavestream.views.animator.dialog;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
-import android.graphics.RectF;
 import android.view.MotionEvent;
 import android.view.View;
 
 import com.w3n.wavestream.views.animator.button.Region;
+import com.w3n.wavestream.views.animator.utils.PixelRectF;
 
 public class MessageBubbleDialog extends CustomViewDialog {
     private final Paint scrimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint cardPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final String message;
-    private RectF cardRect = new RectF();
+    private PixelRectF cardRect = new PixelRectF(0f, 0f, 0f, 0f);
     private Region cardRegion;
 
     public MessageBubbleDialog(String message) {
@@ -33,7 +33,7 @@ public class MessageBubbleDialog extends CustomViewDialog {
         float height = 180f;
         float left = (view.getWidth() - width) / 2f;
         float top = (view.getHeight() - height) / 2f;
-        cardRect = new RectF(left, top, left + width, top + height);
+        cardRect = new PixelRectF(left, top, left + width, top + height);
         cardRegion = new Region(cardRect.left, cardRect.right, cardRect.top, cardRect.bottom, id);
     }
 

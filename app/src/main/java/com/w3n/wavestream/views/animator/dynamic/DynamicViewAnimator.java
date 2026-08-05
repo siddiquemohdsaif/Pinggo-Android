@@ -3,20 +3,26 @@ package com.w3n.wavestream.views.animator.dynamic;
 import android.graphics.Canvas;
 import android.graphics.RectF;
 
+import com.w3n.wavestream.views.animator.utils.PixelRectF;
+
 import java.util.ArrayList;
 import java.util.Iterator;
 
 public class DynamicViewAnimator {
     private final CustomDynamicView customDynamicView;
-    private final RectF rectF;
+    private final PixelRectF rectF;
     private final int repeatCount;
     private long startTime;
     private boolean stopped;
 
     public DynamicViewAnimator(CustomDynamicView customDynamicView, int repeatCount, RectF rectF) {
+        this(customDynamicView, repeatCount, PixelRectF.fromRect(rectF));
+    }
+
+    public DynamicViewAnimator(CustomDynamicView customDynamicView, int repeatCount, PixelRectF rectF) {
         this.customDynamicView = customDynamicView;
         this.repeatCount = repeatCount;
-        this.rectF = new RectF(rectF);
+        this.rectF = new PixelRectF(rectF);
         this.startTime = System.currentTimeMillis();
     }
 

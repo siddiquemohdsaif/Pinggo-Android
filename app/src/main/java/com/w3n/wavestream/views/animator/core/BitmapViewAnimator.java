@@ -7,6 +7,8 @@ import android.graphics.RectF;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.Interpolator;
 
+import com.w3n.wavestream.views.animator.utils.PixelRectF;
+
 import java.util.ArrayList;
 import java.util.Iterator;
 
@@ -21,7 +23,7 @@ public class BitmapViewAnimator {
     private boolean repeat;
     private boolean autoDelete;
     private boolean stopped;
-    private RectF visibleWindow;
+    private PixelRectF visibleWindow;
 
     private float startAlpha;
     private float endAlpha;
@@ -38,6 +40,15 @@ public class BitmapViewAnimator {
                                float startWidth, float endWidth, float startHeight, float endHeight,
                                float startLeft, float endLeft, float startTop, float endTop,
                                long duration, boolean repeat, RectF visibleWindow, boolean autoDelete) {
+        startAnimation(animName, bitmap, startAlpha, endAlpha, startWidth, endWidth,
+                startHeight, endHeight, startLeft, endLeft, startTop, endTop, duration, repeat,
+                visibleWindow == null ? null : PixelRectF.fromRect(visibleWindow), autoDelete);
+    }
+
+    public void startAnimation(String animName, Bitmap bitmap, float startAlpha, float endAlpha,
+                               float startWidth, float endWidth, float startHeight, float endHeight,
+                               float startLeft, float endLeft, float startTop, float endTop,
+                               long duration, boolean repeat, PixelRectF visibleWindow, boolean autoDelete) {
         this.animName = animName;
         this.bitmap = bitmap;
         this.startAlpha = startAlpha;
@@ -52,7 +63,7 @@ public class BitmapViewAnimator {
         this.endTop = endTop;
         this.duration = Math.max(1L, duration);
         this.repeat = repeat;
-        this.visibleWindow = visibleWindow;
+        this.visibleWindow = visibleWindow == null ? null : new PixelRectF(visibleWindow);
         this.autoDelete = autoDelete;
         this.startTime = System.currentTimeMillis();
         this.stopped = false;
@@ -120,6 +131,16 @@ public class BitmapViewAnimator {
                                     float startWidth, float endWidth, float startHeight, float endHeight,
                                     float startLeft, float endLeft, float startTop, float endTop,
                                     long duration, boolean repeat, RectF visibleWindow, boolean autoDelete) {
+        addAnimation(animName, animators, bitmap, startAlpha, endAlpha, startWidth, endWidth,
+                startHeight, endHeight, startLeft, endLeft, startTop, endTop, duration, repeat,
+                visibleWindow == null ? null : PixelRectF.fromRect(visibleWindow), autoDelete);
+    }
+
+    public static void addAnimation(String animName, ArrayList<BitmapViewAnimator> animators,
+                                    Bitmap bitmap, float startAlpha, float endAlpha,
+                                    float startWidth, float endWidth, float startHeight, float endHeight,
+                                    float startLeft, float endLeft, float startTop, float endTop,
+                                    long duration, boolean repeat, PixelRectF visibleWindow, boolean autoDelete) {
         removeAnimation(animName, animators);
         BitmapViewAnimator animator = new BitmapViewAnimator();
         animator.startAnimation(animName, bitmap, startAlpha, endAlpha, startWidth, endWidth,

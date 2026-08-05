@@ -1,10 +1,11 @@
 package com.w3n.wavestream.views.animator.dynamic;
 
 import android.graphics.Canvas;
-import android.graphics.RectF;
+
+import com.w3n.wavestream.views.animator.utils.PixelRectF;
 
 public interface CustomDynamicView {
-    void onDraw(Canvas canvas, float progress, RectF rectF);
+    void onDraw(Canvas canvas, float progress, PixelRectF rectF);
 
     long getDuration();
 }

@@ -2,7 +2,8 @@ package com.w3n.wavestream.views.animator.dynamic;
 
 import android.graphics.Canvas;
 import android.graphics.Paint;
-import android.graphics.RectF;
+
+import com.w3n.wavestream.views.animator.utils.PixelRectF;
 
 public class TypingDotsView implements CustomDynamicView {
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -13,7 +14,7 @@ public class TypingDotsView implements CustomDynamicView {
     }
 
     @Override
-    public void onDraw(Canvas canvas, float progress, RectF rectF) {
+    public void onDraw(Canvas canvas, float progress, PixelRectF rectF) {
         paint.setColor(color);
         float radius = Math.min(rectF.width(), rectF.height()) / 12f;
         float gap = radius * 3f;
