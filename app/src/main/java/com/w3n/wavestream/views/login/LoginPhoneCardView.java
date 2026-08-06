@@ -94,8 +94,11 @@ public class LoginPhoneCardView extends View {
     private String countryCode = "+91";
     private final Editable inputEditable = new SpannableStringBuilder();
     private boolean otpVisible;
+    private boolean otpRequestInProgress;
+    private boolean otpVerifyInProgress;
     private boolean countryPopupOpen;
     private int activeField = FIELD_NONE;
+    private int retryCountdownSeconds;
     private String pressedButtonId;
 
     public LoginPhoneCardView(Context context) {
@@ -330,6 +333,21 @@ public class LoginPhoneCardView extends View {
         invalidate();
     }
 
+    public void setOtpRequestInProgress(boolean otpRequestInProgress) {
+        this.otpRequestInProgress = otpRequestInProgress;
+        invalidate();
+    }
+
+    public void setOtpVerifyInProgress(boolean otpVerifyInProgress) {
+        this.otpVerifyInProgress = otpVerifyInProgress;
+        invalidate();
+    }
+
+    public void setRetryCountdownSeconds(int retryCountdownSeconds) {
+        this.retryCountdownSeconds = Math.max(0, retryCountdownSeconds);
+        invalidate();
+    }
+
     public void showAnimatorDialog(String message) {
         CustomViewDialog.addDialog(dialogs, new MessageBubbleDialog(message),
                 this, true, "login_card_message", id -> invalidate());
@@ -487,7 +505,8 @@ public class LoginPhoneCardView extends View {
         y += 0.040741f * w + 0.063657f * w;
 
         nextButtonRect.set(horizontal, y, width - horizontal, y + 0.127315f * w);
-        addButton("next", nextButtonRect, getString(R.string.next), id -> {
+        boolean otpButtonEnabled = !otpRequestInProgress && (!otpVisible || retryCountdownSeconds == 0);
+        addButton("next", nextButtonRect, getOtpButtonLabel(), otpButtonEnabled, id -> {
             if (otpClickListener != null) {
                 otpClickListener.onClick();
             }
@@ -503,7 +522,7 @@ public class LoginPhoneCardView extends View {
             otpRect.set(horizontal, y, width - horizontal, y + getOtpFieldHeight(w));
             y = otpRect.bottom + 0.040741f * w;
             confirmButtonRect.set(horizontal, y, width - horizontal, y + 0.142593f * w);
-            addButton("confirm", confirmButtonRect, getString(R.string.confirm), id -> {
+            addButton("confirm", confirmButtonRect, getConfirmButtonLabel(), !otpVerifyInProgress, id -> {
                 if (confirmClickListener != null) {
                     confirmClickListener.onClick();
                 }
@@ -812,20 +831,37 @@ public class LoginPhoneCardView extends View {
         return new int[]{textView.getMeasuredWidth() + dp(2), textView.getMeasuredHeight() + dp(2)};
     }
 
-    private void addButton(String id, PixelRectF rect, String label, ButtonViewAnimator.OnClickListener listener) {
+    private String getOtpButtonLabel() {
+        if (otpRequestInProgress) {
+            return getString(R.string.sending_otp);
+        }
+        if (otpVisible && retryCountdownSeconds > 0) {
+            return getContext().getString(R.string.retry_otp_countdown, retryCountdownSeconds);
+        }
+        if (otpVisible) {
+            return getString(R.string.retry_otp);
+        }
+        return getString(R.string.get_otp);
+    }
+
+    private String getConfirmButtonLabel() {
+        return otpVerifyInProgress ? getString(R.string.verifying_otp) : getString(R.string.confirm);
+    }
+
+    private void addButton(String id, PixelRectF rect, String label, boolean enabled, ButtonViewAnimator.OnClickListener listener) {
         Bitmap bitmap = Bitmap.createBitmap(Math.max(1, Math.round(rect.width())),
                 Math.max(1, Math.round(rect.height())), Bitmap.Config.ARGB_8888);
         Canvas buttonCanvas = new Canvas(bitmap);
         Paint buttonPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
         PixelRectF localRect = new PixelRectF(0f, 0f, bitmap.getWidth(), bitmap.getHeight());
-        buttonPaint.setColor(ContextCompat.getColor(getContext(), R.color.pinggo_action));
+        buttonPaint.setColor(ContextCompat.getColor(getContext(), enabled ? R.color.pinggo_action : R.color.pinggo_muted_text));
         buttonCanvas.drawRoundRect(localRect, dp(10), dp(10), buttonPaint);
         TextViewAnimator labelAnimator = new TextViewAnimator(
                 getContext(), id + "_label", label, localRect, textSizePx(18),
                 ContextCompat.getColor(getContext(), R.color.white), Paint.Align.CENTER,
                 TextViewAnimator.FONT_INTER, TextViewAnimator.WEIGHT_BOLD, null);
         labelAnimator.onDraw(buttonCanvas);
-        if (arrowBitmap != null && "next".equals(id)) {
+        if (enabled && arrowBitmap != null && "next".equals(id)) {
             float size = 0.050926f * getRefWidth();
             RectF arrowRect = new RectF(bitmap.getWidth() - 0.071296f * getRefWidth() - size,
                     (bitmap.getHeight() - size) / 2f,
@@ -833,7 +869,7 @@ public class LoginPhoneCardView extends View {
                     (bitmap.getHeight() + size) / 2f);
             buttonCanvas.drawBitmap(arrowBitmap, null, arrowRect, buttonPaint);
         }
-        buttonAnimators.add(new ButtonViewAnimator(listener, id, bitmap, rect));
+        buttonAnimators.add(new ButtonViewAnimator(enabled ? listener : null, id, bitmap, rect));
     }
 
     private void focusField(int field) {

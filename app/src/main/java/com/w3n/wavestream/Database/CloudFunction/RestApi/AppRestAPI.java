@@ -23,27 +23,42 @@ public interface AppRestAPI {
             @Body RequestBody body
     );
 
-    @POST("updateName")
+    @POST("otp/send")
+    Call<JsonObject> sendOtp(
+            @Body RequestBody body
+    );
+
+    @POST("otp/verify")
+    Call<JsonObject> verifyOtp(
+            @Body RequestBody body
+    );
+
+    @POST("otp/retry")
+    Call<JsonObject> retryOtp(
+            @Body RequestBody body
+    );
+
+    @POST("profile/updateName")
     Call<JsonObject> updateName(
             @Body RequestBody body
     );
 
-    @POST("updateDob")
+    @POST("profile/updateDob")
     Call<JsonObject> updateDob(
             @Body RequestBody body
     );
 
-    @POST("updateEmail")
+    @POST("profile/updateEmail")
     Call<JsonObject> updateEmail(
             @Body RequestBody body
     );
 
-    @POST("updateDescription")
+    @POST("profile/updateDescription")
     Call<JsonObject> updateDescription(
             @Body RequestBody body
     );
 
-    @POST("uploadProfilePhoto")
+    @POST("profile/uploadProfilePhoto")
     Call<JsonObject> uploadProfilePhoto(
             @Body RequestBody body
     );

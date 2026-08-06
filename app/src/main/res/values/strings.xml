@@ -31,7 +31,16 @@
     <string name="image_load_failed">Could not load image</string>
     <string name="retry">Retry</string>
     <string name="get_otp">Get OTP</string>
-    <string name="otp_hint">Use fixed OTP 123456</string>
+    <string name="sending_otp">Sending...</string>
+    <string name="retry_otp">Retry OTP</string>
+    <string name="retry_otp_countdown">Retry in %1$ds</string>
+    <string name="verifying_otp">Verifying...</string>
+    <string name="otp_sent">OTP sent</string>
+    <string name="otp_verified">OTP verified</string>
+    <string name="otp_send_failed">Could not send OTP</string>
+    <string name="otp_request_first">Please request OTP first</string>
+    <string name="otp_phone_changed">Phone number changed. Request OTP again.</string>
+    <string name="otp_hint">Enter the code sent to your phone</string>
     <string name="enter_otp">Enter OTP</string>
     <string name="confirm">Confirm</string>
     <string name="hello">Hello</string>
@@ -65,5 +74,4 @@
     <string name="field_required">This field is required</string>
     <string name="profile_updated">Profile updated</string>
     <string name="phone_cannot_be_changed">%1$s\n\nPhone number cannot be changed.</string>
-    <string name="fixed_otp_message">OTP is %1$s for %2$s</string>
 </resources>

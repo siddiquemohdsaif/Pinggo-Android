@@ -8,6 +8,7 @@ import com.w3n.wavestream.Database.CloudFunction.RestApi.API;
 import com.w3n.wavestream.Database.CloudFunction.RestApi.APIAuth;
 import com.w3n.wavestream.Database.CloudFunction.RestApi.AppRestAPI;
 import com.w3n.wavestream.Database.CloudFunction.Utils.LoginHandler;
+import com.w3n.wavestream.Database.CloudFunction.Utils.OtpHandler;
 import com.w3n.wavestream.Database.CloudFunction.Utils.ProfilePhotoHandler;
 import com.w3n.wavestream.Database.CloudFunction.Utils.ProfileUpdateHandler;
 
@@ -53,6 +54,18 @@ public class AppFunctionManager {
 
     public void userSignUp(String name, String phoneNumber, String description, Callback callback){
         LoginHandler.signUp(appApi, name, phoneNumber, description, callback);
+    }
+
+    public void sendOtp(String identifier, Callback callback) {
+        OtpHandler.sendOtp(appApi, identifier, callback);
+    }
+
+    public void verifyOtp(String reqId, String otp, Callback callback) {
+        OtpHandler.verifyOtp(appApi, reqId, otp, callback);
+    }
+
+    public void retryOtp(String reqId, Callback callback) {
+        OtpHandler.retryOtp(appApi, reqId, OtpHandler.RETRY_CHANNEL_SMS, callback);
     }
 
     public void updateUserName(String name, Callback callback) {

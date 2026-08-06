@@ -5,6 +5,7 @@ import static android.widget.Toast.LENGTH_SHORT;
 import android.graphics.RectF;
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.CountDownTimer;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -25,18 +26,23 @@ import com.w3n.wavestream.views.animator.WaveAnimatorView;
 import com.w3n.wavestream.views.login.LoginPhoneCardView;
 
 public class LoginActivity extends AppCompatActivity {
-    private static final String FIXED_OTP = "123456";
+    private static final long OTP_RETRY_SECONDS = 60L;
 
     private String fullPhoneNumber;
+    private String otpPhoneNumber;
+    private String otpRequestId;
     private View mainView;
     private LinearLayout loginContentLayout;
     private View loginHeaderAnimatorView;
     private LoginPhoneCardView loginPhoneCardView;
     private WaveAnimatorView termsAnimatorView;
+    private CountDownTimer otpRetryTimer;
     private Insets systemBarInsets = Insets.NONE;
     private Insets navigationBarInsets = Insets.NONE;
     private Insets imeInsets = Insets.NONE;
     private boolean imeVisible = false;
+    private boolean otpRequestInProgress = false;
+    private boolean otpVerifyInProgress = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -71,6 +77,12 @@ public class LoginActivity extends AppCompatActivity {
 
         loginPhoneCardView.setOnOtpAnimatorClickListener(this::showOtpFields);
         loginPhoneCardView.setOnConfirmAnimatorClickListener(this::confirmOtp);
+    }
+
+    @Override
+    protected void onDestroy() {
+        cancelOtpRetryTimer();
+        super.onDestroy();
     }
 
     @Override
@@ -222,23 +234,164 @@ public class LoginActivity extends AppCompatActivity {
             return;
         }
 
-        fullPhoneNumber = loginPhoneCardView.getFullNumberWithPlus();
-        loginPhoneCardView.showOtpFields();
-        Toast.makeText(this, getString(R.string.fixed_otp_message, FIXED_OTP, fullPhoneNumber), LENGTH_SHORT).show();
-        loginContentLayout.post(() -> {
-            applyBottomAnchoredSpacing();
-            loginPhoneCardView.refreshAnimators();
-        });
+        String currentPhoneNumber = loginPhoneCardView.getFullNumberWithPlus();
+        if (fullPhoneNumber == null || !fullPhoneNumber.equals(currentPhoneNumber)) {
+            fullPhoneNumber = currentPhoneNumber;
+            otpPhoneNumber = null;
+            otpRequestId = null;
+            cancelOtpRetryTimer();
+            loginPhoneCardView.setRetryCountdownSeconds(0);
+        }
+        if (otpRequestId == null || otpRequestId.trim().isEmpty()) {
+            sendOtp();
+        } else {
+            retryOtp();
+        }
     }
 
     private void confirmOtp() {
         String otp = loginPhoneCardView.getOtp().trim();
-        if (!FIXED_OTP.equals(otp)) {
+        if (otp.length() != 6) {
             showAnimatorDialog(getString(R.string.invalid_otp));
             return;
         }
 
-        userLogin();
+        if (otpRequestId == null || otpRequestId.trim().isEmpty()) {
+            showAnimatorDialog(getString(R.string.otp_request_first));
+            return;
+        }
+
+        String currentPhoneNumber = loginPhoneCardView.getFullNumberWithPlus();
+        if (otpPhoneNumber == null || !otpPhoneNumber.equals(currentPhoneNumber)) {
+            showAnimatorDialog(getString(R.string.otp_phone_changed));
+            return;
+        }
+
+        if (otpVerifyInProgress) {
+            return;
+        }
+
+        setOtpVerifyInProgress(true);
+        AppFunctionManager.getInstance().verifyOtp(otpRequestId, otp, new AppFunctionManager.Callback() {
+            @Override
+            public void onSuccess(Object object) {
+                runOnUiThread(() -> {
+                    setOtpVerifyInProgress(false);
+                    Toast.makeText(LoginActivity.this, R.string.otp_verified, LENGTH_SHORT).show();
+                    userLogin();
+                });
+            }
+
+            @Override
+            public void onError(String error) {
+                runOnUiThread(() -> {
+                    setOtpVerifyInProgress(false);
+                    showAnimatorDialog(error == null || error.trim().isEmpty()
+                            ? getString(R.string.invalid_otp)
+                            : error);
+                });
+            }
+        });
+    }
+
+    private void sendOtp() {
+        if (otpRequestInProgress) {
+            return;
+        }
+
+        setOtpRequestInProgress(true);
+        AppFunctionManager.getInstance().sendOtp(fullPhoneNumber, new AppFunctionManager.Callback() {
+            @Override
+            public void onSuccess(Object object) {
+                runOnUiThread(() -> {
+                    otpRequestId = object == null ? null : object.toString();
+                    otpPhoneNumber = fullPhoneNumber;
+                    setOtpRequestInProgress(false);
+                    loginPhoneCardView.showOtpFields();
+                    loginContentLayout.post(() -> {
+                        applyBottomAnchoredSpacing();
+                        loginPhoneCardView.refreshAnimators();
+                    });
+                    startOtpRetryTimer();
+                    Toast.makeText(LoginActivity.this, R.string.otp_sent, LENGTH_SHORT).show();
+                });
+            }
+
+            @Override
+            public void onError(String error) {
+                runOnUiThread(() -> {
+                    setOtpRequestInProgress(false);
+                    showAnimatorDialog(error == null || error.trim().isEmpty()
+                            ? getString(R.string.otp_send_failed)
+                            : error);
+                });
+            }
+        });
+    }
+
+    private void retryOtp() {
+        if (otpRequestInProgress) {
+            return;
+        }
+
+        setOtpRequestInProgress(true);
+        AppFunctionManager.getInstance().retryOtp(otpRequestId, new AppFunctionManager.Callback() {
+            @Override
+            public void onSuccess(Object object) {
+                runOnUiThread(() -> {
+                    otpRequestId = object == null ? otpRequestId : object.toString();
+                    otpPhoneNumber = fullPhoneNumber;
+                    setOtpRequestInProgress(false);
+                    startOtpRetryTimer();
+                    Toast.makeText(LoginActivity.this, R.string.otp_sent, LENGTH_SHORT).show();
+                });
+            }
+
+            @Override
+            public void onError(String error) {
+                runOnUiThread(() -> {
+                    setOtpRequestInProgress(false);
+                    showAnimatorDialog(error == null || error.trim().isEmpty()
+                            ? getString(R.string.otp_send_failed)
+                            : error);
+                });
+            }
+        });
+    }
+
+    private void startOtpRetryTimer() {
+        cancelOtpRetryTimer();
+        loginPhoneCardView.setRetryCountdownSeconds((int) OTP_RETRY_SECONDS);
+        otpRetryTimer = new CountDownTimer(OTP_RETRY_SECONDS * 1000L, 1000L) {
+            @Override
+            public void onTick(long millisUntilFinished) {
+                int secondsRemaining = (int) Math.ceil(millisUntilFinished / 1000.0);
+                loginPhoneCardView.setRetryCountdownSeconds(secondsRemaining);
+            }
+
+            @Override
+            public void onFinish() {
+                loginPhoneCardView.setRetryCountdownSeconds(0);
+            }
+        };
+        otpRetryTimer.start();
+    }
+
+    private void cancelOtpRetryTimer() {
+        if (otpRetryTimer != null) {
+            otpRetryTimer.cancel();
+            otpRetryTimer = null;
+        }
+    }
+
+    private void setOtpRequestInProgress(boolean inProgress) {
+        otpRequestInProgress = inProgress;
+        loginPhoneCardView.setOtpRequestInProgress(inProgress);
+    }
+
+    private void setOtpVerifyInProgress(boolean inProgress) {
+        otpVerifyInProgress = inProgress;
+        loginPhoneCardView.setOtpVerifyInProgress(inProgress);
     }
 
     private void userLogin() {
