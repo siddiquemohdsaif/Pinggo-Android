@@ -16,6 +16,7 @@ import androidx.core.view.WindowInsetsCompat;
 
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 import com.w3n.wavestream.R;
+import com.w3n.wavestream.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.wavestream.modals.CallLog;
 import com.w3n.wavestream.modals.Chat;
 import com.w3n.wavestream.views.CallsView;
@@ -73,6 +74,7 @@ public class HomeActivity extends AppCompatActivity {
         searchEditText.setVisibility(View.VISIBLE);
         findViewById(R.id.overflowButton).setVisibility(View.VISIBLE);
         showContent(chatsView);
+        chatsView.loadChats();
         newChatFab.setVisibility(View.VISIBLE);
         makeCallFab.setVisibility(View.GONE);
     }
@@ -107,6 +109,13 @@ public class HomeActivity extends AppCompatActivity {
     private void openChat(Chat chat) {
         Intent intent = new Intent(this, ChatActivity.class);
         intent.putExtra(ChatActivity.EXTRA_CHAT_NAME, chat.getContactName());
+        intent.putExtra(ChatActivity.EXTRA_CHAT_ID, chat.getChatId());
+        intent.putExtra(ChatActivity.EXTRA_PROFILE_PHOTO_URL, chat.getProfilePhotoUrl());
+        String localProfilePhotoPath = chat.getLocalProfilePhotoPath();
+        if (localProfilePhotoPath == null || localProfilePhotoPath.trim().isEmpty()) {
+            localProfilePhotoPath = ChatProfilePhotoStore.getLocalPath(this, chat.getPhoneNumber());
+        }
+        intent.putExtra(ChatActivity.EXTRA_LOCAL_PROFILE_PHOTO_PATH, localProfilePhotoPath);
         startActivity(intent);
     }
 

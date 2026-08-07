@@ -11,7 +11,6 @@ import android.widget.TextView;
 
 import com.w3n.wavestream.R;
 import com.w3n.wavestream.modals.CallLog;
-import com.w3n.wavestream.utils.CallLogsData;
 
 public class CallsView extends ScrollView {
     public interface OnCallClickListener {
@@ -35,9 +34,16 @@ public class CallsView extends ScrollView {
         listContainer.setOrientation(LinearLayout.VERTICAL);
         listContainer.setPadding(dp(16), dp(8), dp(16), dp(96));
 
-        for (CallLog callLog : CallLogsData.getCallLogs()) {
-            listContainer.addView(createCallRow(callLog));
-        }
+        TextView emptyTextView = new TextView(getContext());
+        emptyTextView.setText("No calls found.");
+        emptyTextView.setTextColor(getContext().getColor(R.color.secondary_text));
+        emptyTextView.setTextSize(16);
+        emptyTextView.setGravity(Gravity.CENTER);
+        emptyTextView.setPadding(dp(16), dp(32), dp(16), dp(32));
+        listContainer.addView(emptyTextView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
 
         return listContainer;
     }

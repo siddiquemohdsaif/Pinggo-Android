@@ -63,4 +63,49 @@ public interface AppRestAPI {
             @Body RequestBody body
     );
 
+    @POST("chats/list")
+    Call<JsonObject> getChatList(
+            @Body RequestBody body
+    );
+
+    @POST("chats/getChat")
+    Call<JsonObject> getChat(
+            @Body RequestBody body
+    );
+
+    @POST("chats/addMessage")
+    Call<JsonObject> addMessage(
+            @Body RequestBody body
+    );
+
+    @POST("chats/editMessage")
+    Call<JsonObject> editMessage(
+            @Body RequestBody body
+    );
+
+    @POST("chats/deleteMessage")
+    Call<JsonObject> deleteMessage(
+            @Body RequestBody body
+    );
+
+    @POST("chats/deleteOpponentMessage")
+    Call<JsonObject> deleteOpponentMessage(
+            @Body RequestBody body
+    );
+
+    @POST("chats/replyMessage")
+    Call<JsonObject> replyMessage(
+            @Body RequestBody body
+    );
+
+    @POST("chats/deliveredMessage")
+    Call<JsonObject> deliveredMessage(
+            @Body RequestBody body
+    );
+
+    @POST("chats/seenMessage")
+    Call<JsonObject> seenMessage(
+            @Body RequestBody body
+    );
+
 }

@@ -1,16 +1,30 @@
 package com.w3n.wavestream.views;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Typeface;
 import android.view.Gravity;
 import android.view.View;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.w3n.wavestream.R;
+import com.w3n.wavestream.Database.CloudFunction.AppFunction.AppFunctionManager;
+import com.w3n.wavestream.Database.CloudFunction.Utils.ChatProfilePhotoStore;
+import com.w3n.wavestream.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.wavestream.modals.Chat;
-import com.w3n.wavestream.utils.ChatsData;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class ChatsView extends ScrollView {
     public interface OnChatClickListener {
@@ -18,27 +32,67 @@ public class ChatsView extends ScrollView {
     }
 
     private final OnChatClickListener onChatClickListener;
+    private final LinearLayout listContainer;
+    private final ExecutorService imageExecutor = Executors.newFixedThreadPool(3);
+    private boolean hasLoadedChats;
 
     public ChatsView(Context context, OnChatClickListener onChatClickListener) {
         super(context);
         this.onChatClickListener = onChatClickListener;
         setFillViewport(true);
-        addView(createChatList(), new ScrollView.LayoutParams(
+        listContainer = createChatList();
+        addView(listContainer, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT,
                 ScrollView.LayoutParams.WRAP_CONTENT
         ));
     }
 
-    private View createChatList() {
+    public void loadChats() {
+        if (hasLoadedChats) {
+            return;
+        }
+        hasLoadedChats = true;
+        showStatus("Loading chats...");
+
+        String phoneNumber = getCurrentPhoneNumber();
+        if (phoneNumber == null || phoneNumber.trim().isEmpty()) {
+            showStatus("Login data missing.");
+            return;
+        }
+
+        AppFunctionManager.getInstance().getChatList(phoneNumber, new AppFunctionManager.Callback() {
+            @Override
+            public void onSuccess(Object object) {
+                post(() -> renderChats(parseChats(object)));
+            }
+
+            @Override
+            public void onError(String error) {
+                post(() -> {
+                    hasLoadedChats = false;
+                    showStatus(error);
+                });
+            }
+        });
+    }
+
+    private LinearLayout createChatList() {
         LinearLayout listContainer = new LinearLayout(getContext());
         listContainer.setOrientation(LinearLayout.VERTICAL);
         listContainer.setPadding(dp(16), dp(8), dp(16), dp(96));
+        return listContainer;
+    }
 
-        for (Chat chat : ChatsData.getChats()) {
-            listContainer.addView(createChatRow(chat));
+    private void renderChats(List<Chat> chats) {
+        listContainer.removeAllViews();
+        if (chats.isEmpty()) {
+            showStatus("No chats found.");
+            return;
         }
 
-        return listContainer;
+        for (Chat chat : chats) {
+            listContainer.addView(createChatRow(chat));
+        }
     }
 
     private View createChatRow(Chat chat) {
@@ -49,11 +103,18 @@ public class ChatsView extends ScrollView {
         row.setBackgroundResource(android.R.drawable.list_selector_background);
         row.setOnClickListener(v -> onChatClickListener.onChatClick(chat));
 
-        ContactAvatarView profileIcon = new ContactAvatarView(getContext(), chat.getContactName());
-        row.addView(profileIcon, new LinearLayout.LayoutParams(dp(52), dp(52)));
+        FrameLayout profileContainer = new FrameLayout(getContext());
+        profileContainer.setTag(chat);
+        ContactAvatarView profileIcon = new ContactAvatarView(getContext(), getAvatarText(chat));
+        profileContainer.addView(profileIcon, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+        loadProfilePhoto(chat.getProfilePhotoUrl(), profileContainer);
+        row.addView(profileContainer, new LinearLayout.LayoutParams(dp(52), dp(52)));
 
         TextView nameTextView = new TextView(getContext());
-        nameTextView.setText(chat.getContactName());
+        nameTextView.setText(chat.getPhoneNumber());
         nameTextView.setTextColor(getContext().getColor(R.color.primary_text));
         nameTextView.setTextSize(18);
         nameTextView.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -66,6 +127,129 @@ public class ChatsView extends ScrollView {
 
         return row;
     }
+
+    private void showStatus(String message) {
+        listContainer.removeAllViews();
+        TextView statusTextView = new TextView(getContext());
+        statusTextView.setText(message);
+        statusTextView.setTextColor(getContext().getColor(R.color.secondary_text));
+        statusTextView.setTextSize(16);
+        statusTextView.setGravity(Gravity.CENTER);
+        statusTextView.setPadding(dp(16), dp(32), dp(16), dp(32));
+        listContainer.addView(statusTextView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+    }
+
+    private List<Chat> parseChats(Object object) {
+        List<Chat> chats = new ArrayList<>();
+        if (!(object instanceof JsonObject)) {
+            return chats;
+        }
+
+        JsonArray userProfiles = getArray((JsonObject) object, "userProfiles");
+        if (userProfiles == null) {
+            return chats;
+        }
+
+        for (JsonElement element : userProfiles) {
+            if (element == null || !element.isJsonObject()) {
+                continue;
+            }
+            JsonObject profile = element.getAsJsonObject();
+            String phoneNumber = getString(profile, "phoneNumber");
+            if (phoneNumber.isEmpty()) {
+                continue;
+            }
+            chats.add(new Chat(
+                    getString(profile, "chatId"),
+                    phoneNumber,
+                    getString(profile, "profilePhotoUrl"),
+                    ChatProfilePhotoStore.getLocalPath(getContext(), phoneNumber)
+            ));
+        }
+        return chats;
+    }
+
+    private JsonArray getArray(JsonObject object, String key) {
+        JsonElement element = object.get(key);
+        if (element == null || element.isJsonNull() || !element.isJsonArray()) {
+            return null;
+        }
+        return element.getAsJsonArray();
+    }
+
+    private String getString(JsonObject object, String key) {
+        JsonElement element = object.get(key);
+        if (element == null || element.isJsonNull()) {
+            return "";
+        }
+        return element.getAsString();
+    }
+
+    private String getCurrentPhoneNumber() {
+        String uid = LoginStateManager.getInstance().getUID(getContext());
+        if (uid == null) {
+            return "";
+        }
+        if (uid.startsWith("<plus>")) {
+            return "+" + uid.substring("<plus>".length());
+        }
+        return uid;
+    }
+
+    private String getAvatarText(Chat chat) {
+        String phoneNumber = chat.getPhoneNumber();
+        return phoneNumber == null || phoneNumber.isEmpty() ? "?" : phoneNumber;
+    }
+
+    private void loadProfilePhoto(String profilePhotoUrl, FrameLayout profileContainer) {
+        Object chatTag = profileContainer.getTag();
+        if (chatTag instanceof Chat) {
+            String localPath = ((Chat) chatTag).getLocalProfilePhotoPath();
+            Bitmap cachedBitmap = BitmapFactory.decodeFile(localPath);
+            if (cachedBitmap != null) {
+                showProfileBitmap(profileContainer, cachedBitmap);
+                return;
+            }
+        }
+
+        if (profilePhotoUrl == null || profilePhotoUrl.trim().isEmpty()) {
+            return;
+        }
+
+        imageExecutor.execute(() -> {
+            Object tag = profileContainer.getTag();
+            if (!(tag instanceof Chat)) {
+                return;
+            }
+            Chat chat = (Chat) tag;
+            String localPath = ChatProfilePhotoStore.downloadAndStore(
+                    getContext(),
+                    chat.getPhoneNumber(),
+                    profilePhotoUrl
+            );
+            Bitmap bitmap = BitmapFactory.decodeFile(localPath);
+            if (bitmap == null) {
+                return;
+            }
+            post(() -> showProfileBitmap(profileContainer, bitmap));
+        });
+    }
+
+    private void showProfileBitmap(FrameLayout profileContainer, Bitmap bitmap) {
+        ImageView imageView = new ImageView(getContext());
+        imageView.setImageBitmap(bitmap);
+        imageView.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        imageView.setClipToOutline(true);
+        profileContainer.removeAllViews();
+        profileContainer.addView(imageView, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+    }
+
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
