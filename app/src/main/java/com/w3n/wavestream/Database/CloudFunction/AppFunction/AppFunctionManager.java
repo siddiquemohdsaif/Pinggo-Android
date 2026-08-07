@@ -60,12 +60,25 @@ public class AppFunctionManager {
         OtpHandler.sendOtp(appApi, identifier, callback);
     }
 
+    public void sendOtp(String identifier, String provider, Callback callback) {
+        OtpHandler.sendOtp(appApi, identifier,provider, callback);
+    }
+
+
     public void verifyOtp(String reqId, String otp, Callback callback) {
         OtpHandler.verifyOtp(appApi, reqId, otp, callback);
     }
 
+    public void verifyOtp(String reqId, String provider, String otp, Callback callback) {
+        OtpHandler.verifyOtp(appApi, reqId, provider, otp, callback);
+    }
+
     public void retryOtp(String reqId, Callback callback) {
         OtpHandler.retryOtp(appApi, reqId, OtpHandler.RETRY_CHANNEL_SMS, callback);
+    }
+
+    public void retryOtp(String reqId, String provider, Callback callback) {
+        OtpHandler.retryOtp(appApi, reqId, provider, OtpHandler.RETRY_CHANNEL_SMS, callback);
     }
 
     public void updateUserName(String name, Callback callback) {

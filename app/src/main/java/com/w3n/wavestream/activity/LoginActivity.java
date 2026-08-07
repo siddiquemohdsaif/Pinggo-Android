@@ -20,6 +20,7 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import com.w3n.wavestream.Database.CloudFunction.AppFunction.AppFunctionManager;
+import com.w3n.wavestream.Database.CloudFunction.Utils.OtpHandler;
 import com.w3n.wavestream.R;
 import com.w3n.wavestream.views.animator.TextViewAnimator;
 import com.w3n.wavestream.views.animator.WaveAnimatorView;
@@ -31,6 +32,7 @@ public class LoginActivity extends AppCompatActivity {
     private String fullPhoneNumber;
     private String otpPhoneNumber;
     private String otpRequestId;
+    private String otpProvider;
     private View mainView;
     private LinearLayout loginContentLayout;
     private View loginHeaderAnimatorView;
@@ -239,6 +241,7 @@ public class LoginActivity extends AppCompatActivity {
             fullPhoneNumber = currentPhoneNumber;
             otpPhoneNumber = null;
             otpRequestId = null;
+            otpProvider = null;
             cancelOtpRetryTimer();
             loginPhoneCardView.setRetryCountdownSeconds(0);
         }
@@ -272,7 +275,7 @@ public class LoginActivity extends AppCompatActivity {
         }
 
         setOtpVerifyInProgress(true);
-        AppFunctionManager.getInstance().verifyOtp(otpRequestId, otp, new AppFunctionManager.Callback() {
+        AppFunctionManager.getInstance().verifyOtp(otpRequestId, otpProvider, otp, new AppFunctionManager.Callback() {
             @Override
             public void onSuccess(Object object) {
                 runOnUiThread(() -> {
@@ -300,11 +303,15 @@ public class LoginActivity extends AppCompatActivity {
         }
 
         setOtpRequestInProgress(true);
-        AppFunctionManager.getInstance().sendOtp(fullPhoneNumber, new AppFunctionManager.Callback() {
+        AppFunctionManager.getInstance().sendOtp(fullPhoneNumber,new AppFunctionManager.Callback() {
             @Override
             public void onSuccess(Object object) {
                 runOnUiThread(() -> {
-                    otpRequestId = object == null ? null : object.toString();
+                    OtpHandler.OtpResult otpResult = object instanceof OtpHandler.OtpResult
+                            ? (OtpHandler.OtpResult) object
+                            : null;
+                    otpRequestId = otpResult == null ? null : otpResult.getReqId();
+                    otpProvider = otpResult == null ? null : otpResult.getProvider();
                     otpPhoneNumber = fullPhoneNumber;
                     setOtpRequestInProgress(false);
                     loginPhoneCardView.showOtpFields();
@@ -335,11 +342,19 @@ public class LoginActivity extends AppCompatActivity {
         }
 
         setOtpRequestInProgress(true);
-        AppFunctionManager.getInstance().retryOtp(otpRequestId, new AppFunctionManager.Callback() {
+        AppFunctionManager.getInstance().retryOtp(otpRequestId, otpProvider, new AppFunctionManager.Callback() {
             @Override
             public void onSuccess(Object object) {
                 runOnUiThread(() -> {
-                    otpRequestId = object == null ? otpRequestId : object.toString();
+                    OtpHandler.OtpResult otpResult = object instanceof OtpHandler.OtpResult
+                            ? (OtpHandler.OtpResult) object
+                            : null;
+                    if (otpResult != null && otpResult.getReqId() != null && !otpResult.getReqId().trim().isEmpty()) {
+                        otpRequestId = otpResult.getReqId();
+                    }
+                    if (otpResult != null && otpResult.getProvider() != null && !otpResult.getProvider().trim().isEmpty()) {
+                        otpProvider = otpResult.getProvider();
+                    }
                     otpPhoneNumber = fullPhoneNumber;
                     setOtpRequestInProgress(false);
                     startOtpRetryTimer();

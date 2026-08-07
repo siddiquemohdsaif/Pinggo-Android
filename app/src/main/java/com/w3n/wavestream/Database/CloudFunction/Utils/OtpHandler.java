@@ -21,10 +21,41 @@ public class OtpHandler {
     private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
     public static final int RETRY_CHANNEL_SMS = 11;
 
+    public static class OtpResult {
+        private final String reqId;
+        private final String provider;
+        private final String verificationToken;
+
+        public OtpResult(String reqId, String provider, String verificationToken) {
+            this.reqId = reqId;
+            this.provider = provider;
+            this.verificationToken = verificationToken;
+        }
+
+        public String getReqId() {
+            return reqId;
+        }
+
+        public String getProvider() {
+            return provider;
+        }
+
+        public String getVerificationToken() {
+            return verificationToken;
+        }
+    }
+
     public static void sendOtp(AppRestAPI appApi, String identifier, AppFunctionManager.Callback callback) {
+        sendOtp(appApi,identifier,null,callback);
+    }
+
+    public static void sendOtp(AppRestAPI appApi, String identifier, String provider, AppFunctionManager.Callback callback) {
         JSONObject jsonObject = new JSONObject();
         try {
             jsonObject.put("identifier", normalizeIdentifier(identifier));
+            if (provider != null && !provider.trim().isEmpty()) {
+                jsonObject.put("provider", provider.trim());
+            }
         } catch (JSONException e) {
             handleJsonError(e, callback);
             return;
@@ -34,9 +65,16 @@ public class OtpHandler {
     }
 
     public static void verifyOtp(AppRestAPI appApi, String reqId, String otp, AppFunctionManager.Callback callback) {
+        verifyOtp(appApi, reqId, null, otp, callback);
+    }
+
+    public static void verifyOtp(AppRestAPI appApi, String reqId, String provider, String otp, AppFunctionManager.Callback callback) {
         JSONObject jsonObject = new JSONObject();
         try {
             jsonObject.put("reqId", reqId);
+            if (provider != null && !provider.trim().isEmpty()) {
+                jsonObject.put("provider", provider.trim());
+            }
             jsonObject.put("otp", otp);
         } catch (JSONException e) {
             handleJsonError(e, callback);
@@ -47,9 +85,16 @@ public class OtpHandler {
     }
 
     public static void retryOtp(AppRestAPI appApi, String reqId, int retryChannel, AppFunctionManager.Callback callback) {
+        retryOtp(appApi, reqId, null, retryChannel, callback);
+    }
+
+    public static void retryOtp(AppRestAPI appApi, String reqId, String provider, int retryChannel, AppFunctionManager.Callback callback) {
         JSONObject jsonObject = new JSONObject();
         try {
             jsonObject.put("reqId", reqId);
+            if (provider != null && !provider.trim().isEmpty()) {
+                jsonObject.put("provider", provider.trim());
+            }
             jsonObject.put("retryChannel", retryChannel);
         } catch (JSONException e) {
             handleJsonError(e, callback);
@@ -98,8 +143,7 @@ public class OtpHandler {
             return;
         }
 
-        String message = getString(responseBody, "message", "");
-        callback.onSuccess(message);
+        callback.onSuccess(parseOtpResult(responseBody));
     }
 
     private static RequestBody createJsonBody(JSONObject jsonObject) {
@@ -163,6 +207,14 @@ public class OtpHandler {
         }
         String value = element.getAsString();
         return value == null || value.isEmpty() ? fallback : value;
+    }
+
+    private static OtpResult parseOtpResult(JsonObject object) {
+        return new OtpResult(
+                getString(object, "reqId", getString(object, "requestId", getString(object, "message", ""))),
+                getString(object, "provider", ""),
+                getString(object, "verificationToken", "")
+        );
     }
 
 }
