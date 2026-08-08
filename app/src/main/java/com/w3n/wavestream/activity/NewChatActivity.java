@@ -13,7 +13,6 @@ import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -25,6 +24,8 @@ import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -39,11 +40,21 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class NewChatActivity extends AppCompatActivity {
     private static final int CONTACTS_PERMISSION_REQUEST = 42;
+    private static final int DISCOVER_BATCH_SIZE = 50;
 
-    private LinearLayout listContainer;
+    private RecyclerView contactsRecyclerView;
+    private TextView statusTextView;
+    private ContactAdapter contactAdapter;
+    private final List<JsonObject> foundContacts = new ArrayList<>();
+    private final List<String> inviteContacts = new ArrayList<>();
+    private final Set<String> renderedPhoneNumbers = new LinkedHashSet<>();
+    private final ExecutorService discoveryExecutor = Executors.newSingleThreadExecutor();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -63,21 +74,36 @@ public class NewChatActivity extends AppCompatActivity {
         });
 
         root.addView(createToolbar());
-        ScrollView scrollView = new ScrollView(this);
-        listContainer = new LinearLayout(this);
-        listContainer.setOrientation(LinearLayout.VERTICAL);
-        listContainer.setPadding(dp(16), dp(8), dp(16), dp(24));
-        scrollView.addView(listContainer, new ScrollView.LayoutParams(
-                ScrollView.LayoutParams.MATCH_PARENT,
-                ScrollView.LayoutParams.WRAP_CONTENT
+
+        statusTextView = new TextView(this);
+        statusTextView.setTextColor(getColor(R.color.secondary_text));
+        statusTextView.setTextSize(16);
+        statusTextView.setGravity(Gravity.CENTER);
+        statusTextView.setPadding(dp(16), dp(24), dp(16), dp(16));
+        root.addView(statusTextView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
         ));
-        root.addView(scrollView, new LinearLayout.LayoutParams(
+
+        contactsRecyclerView = new RecyclerView(this);
+        contactsRecyclerView.setLayoutManager(new LinearLayoutManager(this));
+        contactsRecyclerView.setPadding(dp(16), dp(8), dp(16), dp(24));
+        contactsRecyclerView.setClipToPadding(false);
+        contactAdapter = new ContactAdapter();
+        contactsRecyclerView.setAdapter(contactAdapter);
+        root.addView(contactsRecyclerView, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
                 1
         ));
 
         loadContactsWithPermission();
+    }
+
+    @Override
+    protected void onDestroy() {
+        discoveryExecutor.shutdownNow();
+        super.onDestroy();
     }
 
     private View createToolbar() {
@@ -133,27 +159,96 @@ public class NewChatActivity extends AppCompatActivity {
 
     private void discoverContacts() {
         showStatus("Loading contacts...");
-        List<String> contacts = readPhoneContacts();
-        if (contacts.isEmpty()) {
-            showStatus("No contacts found.");
+        discoveryExecutor.execute(() -> {
+            List<String> contacts = readPhoneContacts();
+            runOnUiThread(() -> {
+                if (contacts.isEmpty()) {
+                    showStatus("No contacts found.");
+                    return;
+                }
+
+                foundContacts.clear();
+                inviteContacts.clear();
+                renderedPhoneNumbers.clear();
+                contactAdapter.clear();
+                showStatus("Discovering contacts...");
+            });
+
+            if (!contacts.isEmpty()) {
+                discoverNextBatch(contacts, 0);
+            }
+        });
+    }
+
+    private void discoverNextBatch(List<String> contacts, int start) {
+        if (isClosing()) {
+            return;
+        }
+        if (start >= contacts.size()) {
+            runOnUiThread(() -> {
+                if (isClosing()) {
+                    return;
+                }
+                if (foundContacts.isEmpty() && inviteContacts.isEmpty()) {
+                    showStatus("No contacts found.");
+                }
+            });
             return;
         }
 
+        int end = Math.min(start + DISCOVER_BATCH_SIZE, contacts.size());
+        List<String> batch = new ArrayList<>(contacts.subList(start, end));
+        discoverContactsBatch(batch)
+                .thenAccept(response -> {
+                    runOnUiThread(() -> {
+                        if (!isClosing()) {
+                            appendDiscoveryBatch(response);
+                        }
+                    });
+                    if (!discoveryExecutor.isShutdown()) {
+                        discoveryExecutor.execute(() -> discoverNextBatch(contacts, end));
+                    }
+                })
+                .exceptionally(throwable -> {
+                    runOnUiThread(() -> {
+                        if (isClosing()) {
+                            return;
+                        }
+                        Toast.makeText(
+                                this,
+                                throwable.getMessage() == null ? "Contact discovery failed." : throwable.getMessage(),
+                                Toast.LENGTH_SHORT
+                        ).show();
+                    });
+                    if (!discoveryExecutor.isShutdown()) {
+                        discoveryExecutor.execute(() -> discoverNextBatch(contacts, end));
+                    }
+                    return null;
+                });
+    }
+
+    private CompletableFuture<JsonObject> discoverContactsBatch(List<String> contacts) {
+        CompletableFuture<JsonObject> future = new CompletableFuture<>();
         AppFunctionManager.getInstance().discoverContacts(
                 getCurrentPhoneNumber(),
                 contacts,
                 new AppFunctionManager.Callback() {
                     @Override
                     public void onSuccess(Object object) {
-                        runOnUiThread(() -> renderDiscovery(object));
+                        if (object instanceof JsonObject) {
+                            future.complete((JsonObject) object);
+                        } else {
+                            future.completeExceptionally(new IllegalStateException("Unable to load contacts."));
+                        }
                     }
 
                     @Override
                     public void onError(String error) {
-                        runOnUiThread(() -> showStatus(error));
+                        future.completeExceptionally(new IllegalStateException(error));
                     }
                 }
         );
+        return future;
     }
 
     private List<String> readPhoneContacts() {
@@ -183,21 +278,11 @@ public class NewChatActivity extends AppCompatActivity {
         return new ArrayList<>(contacts);
     }
 
-    private void renderDiscovery(Object object) {
-        listContainer.removeAllViews();
-        if (!(object instanceof JsonObject)) {
-            showStatus("Unable to load contacts.");
-            return;
-        }
-
-        JsonArray contacts = ((JsonObject) object).getAsJsonArray("contacts");
+    private void appendDiscoveryBatch(JsonObject object) {
+        JsonArray contacts = object.getAsJsonArray("contacts");
         if (contacts == null || contacts.size() == 0) {
-            showStatus("No contacts found.");
             return;
         }
-
-        List<JsonObject> foundContacts = new ArrayList<>();
-        List<String> inviteContacts = new ArrayList<>();
 
         String ownPhoneNumber = normalizePhoneNumber(getCurrentPhoneNumber());
         for (JsonElement element : contacts) {
@@ -209,6 +294,9 @@ public class NewChatActivity extends AppCompatActivity {
             if (phoneNumber.isEmpty() || phoneNumber.equals(ownPhoneNumber)) {
                 continue;
             }
+            if (!renderedPhoneNumbers.add(phoneNumber)) {
+                continue;
+            }
             if (getBoolean(contact, "found")) {
                 foundContacts.add(contact);
             } else {
@@ -217,24 +305,35 @@ public class NewChatActivity extends AppCompatActivity {
         }
 
         if (foundContacts.isEmpty() && inviteContacts.isEmpty()) {
-            showStatus("No contacts found.");
             return;
         }
 
+        renderAccumulatedDiscovery();
+    }
+
+    private void renderAccumulatedDiscovery() {
+        statusTextView.setVisibility(View.GONE);
+        contactsRecyclerView.setVisibility(View.VISIBLE);
+        List<ContactListItem> items = new ArrayList<>();
         for (JsonObject contact : foundContacts) {
-            listContainer.addView(createFoundRow(contact));
+            items.add(ContactListItem.found(contact));
         }
 
         if (!inviteContacts.isEmpty()) {
-            listContainer.addView(createDivider("Invite"));
+            items.add(ContactListItem.divider("Invite"));
             for (String phoneNumber : inviteContacts) {
-                listContainer.addView(createInviteRow(phoneNumber));
+                items.add(ContactListItem.invite(phoneNumber));
             }
         }
+        contactAdapter.setItems(items);
     }
 
-    private View createDivider(String text) {
+    private TextView createDivider(String text) {
         TextView divider = new TextView(this);
+        divider.setLayoutParams(new RecyclerView.LayoutParams(
+                RecyclerView.LayoutParams.MATCH_PARENT,
+                RecyclerView.LayoutParams.WRAP_CONTENT
+        ));
         divider.setText(text);
         divider.setTextColor(getColor(R.color.secondary_text));
         divider.setTextSize(14);
@@ -287,6 +386,10 @@ public class NewChatActivity extends AppCompatActivity {
 
     private LinearLayout createBaseRow() {
         LinearLayout row = new LinearLayout(this);
+        row.setLayoutParams(new RecyclerView.LayoutParams(
+                RecyclerView.LayoutParams.MATCH_PARENT,
+                RecyclerView.LayoutParams.WRAP_CONTENT
+        ));
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(dp(4), dp(10), dp(4), dp(10));
@@ -359,17 +462,9 @@ public class NewChatActivity extends AppCompatActivity {
     }
 
     private void showStatus(String message) {
-        listContainer.removeAllViews();
-        TextView statusTextView = new TextView(this);
         statusTextView.setText(message);
-        statusTextView.setTextColor(getColor(R.color.secondary_text));
-        statusTextView.setTextSize(16);
-        statusTextView.setGravity(Gravity.CENTER);
-        statusTextView.setPadding(dp(16), dp(32), dp(16), dp(32));
-        listContainer.addView(statusTextView, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        ));
+        statusTextView.setVisibility(View.VISIBLE);
+        contactsRecyclerView.setVisibility(View.GONE);
     }
 
     private String getCurrentPhoneNumber() {
@@ -411,5 +506,149 @@ public class NewChatActivity extends AppCompatActivity {
 
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private boolean isClosing() {
+        return isFinishing() || isDestroyed();
+    }
+
+    private static final class ContactListItem {
+        private static final int TYPE_FOUND = 1;
+        private static final int TYPE_DIVIDER = 2;
+        private static final int TYPE_INVITE = 3;
+
+        private final int type;
+        private final JsonObject contact;
+        private final String text;
+
+        private ContactListItem(int type, JsonObject contact, String text) {
+            this.type = type;
+            this.contact = contact;
+            this.text = text;
+        }
+
+        private static ContactListItem found(JsonObject contact) {
+            return new ContactListItem(TYPE_FOUND, contact, null);
+        }
+
+        private static ContactListItem divider(String text) {
+            return new ContactListItem(TYPE_DIVIDER, null, text);
+        }
+
+        private static ContactListItem invite(String phoneNumber) {
+            return new ContactListItem(TYPE_INVITE, null, phoneNumber);
+        }
+    }
+
+    private final class ContactAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+        private final List<ContactListItem> items = new ArrayList<>();
+
+        @Override
+        public int getItemViewType(int position) {
+            return items.get(position).type;
+        }
+
+        @NonNull
+        @Override
+        public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            if (viewType == ContactListItem.TYPE_DIVIDER) {
+                return new DividerViewHolder(createDivider(""));
+            }
+            if (viewType == ContactListItem.TYPE_FOUND) {
+                return new ContactViewHolder(createBaseRow());
+            }
+            return new ContactViewHolder(createBaseRow());
+        }
+
+        @Override
+        public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
+            ContactListItem item = items.get(position);
+            if (holder instanceof DividerViewHolder) {
+                ((DividerViewHolder) holder).bind(item.text);
+                return;
+            }
+            ContactViewHolder contactHolder = (ContactViewHolder) holder;
+            if (item.type == ContactListItem.TYPE_FOUND) {
+                contactHolder.bindFound(item.contact);
+            } else {
+                contactHolder.bindInvite(item.text);
+            }
+        }
+
+        @Override
+        public int getItemCount() {
+            return items.size();
+        }
+
+        private void setItems(List<ContactListItem> newItems) {
+            items.clear();
+            items.addAll(newItems);
+            notifyDataSetChanged();
+        }
+
+        private void clear() {
+            items.clear();
+            notifyDataSetChanged();
+        }
+    }
+
+    private final class DividerViewHolder extends RecyclerView.ViewHolder {
+        private final TextView dividerTextView;
+
+        private DividerViewHolder(@NonNull TextView itemView) {
+            super(itemView);
+            dividerTextView = itemView;
+        }
+
+        private void bind(String text) {
+            dividerTextView.setText(text);
+        }
+    }
+
+    private final class ContactViewHolder extends RecyclerView.ViewHolder {
+        private final LinearLayout row;
+
+        private ContactViewHolder(@NonNull View itemView) {
+            super(itemView);
+            row = (LinearLayout) itemView;
+        }
+
+        private void bindFound(JsonObject contact) {
+            row.removeAllViews();
+            String phoneNumber = getString(contact, "phoneNumber");
+            String chatId = getString(contact, "chatId");
+            String profilePhotoUrl = getString(contact, "profilePhotoUrl");
+            row.setOnClickListener(v -> openChat(phoneNumber, chatId, profilePhotoUrl));
+            row.addView(createAvatar(phoneNumber));
+            row.addView(createTextBlock(phoneNumber, "Tap to chat"), new LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1
+            ));
+        }
+
+        private void bindInvite(String phoneNumber) {
+            row.removeAllViews();
+            row.setOnClickListener(null);
+            row.addView(createAvatar(phoneNumber));
+            row.addView(createTextBlock(phoneNumber, "Not on WaveStream"), new LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1
+            ));
+
+            TextView inviteButton = new TextView(NewChatActivity.this);
+            inviteButton.setText("Invite");
+            inviteButton.setTextColor(getColor(R.color.send_button));
+            inviteButton.setTextSize(15);
+            inviteButton.setGravity(Gravity.CENTER);
+            inviteButton.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+            inviteButton.setPadding(dp(12), dp(8), dp(12), dp(8));
+            inviteButton.setOnClickListener(v -> inviteContact(phoneNumber));
+            row.addView(inviteButton, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+            ));
+        }
     }
 }
