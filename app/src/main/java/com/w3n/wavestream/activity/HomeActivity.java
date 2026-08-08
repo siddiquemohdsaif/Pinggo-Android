@@ -64,7 +64,7 @@ public class HomeActivity extends AppCompatActivity {
             return false;
         });
 
-        newChatFab.setOnClickListener(v -> Toast.makeText(this, R.string.new_chat, Toast.LENGTH_SHORT).show());
+        newChatFab.setOnClickListener(v -> startActivity(new Intent(this, NewChatActivity.class)));
         makeCallFab.setOnClickListener(v -> Toast.makeText(this, R.string.make_call, Toast.LENGTH_SHORT).show());
         showChats();
     }

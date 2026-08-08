@@ -15,6 +15,8 @@ import com.w3n.wavestream.Database.CloudFunction.Utils.ProfileUpdateHandler;
 
 import android.graphics.Bitmap;
 
+import java.util.List;
+
 public class AppFunctionManager {
 
 
@@ -108,6 +110,10 @@ public class AppFunctionManager {
 
     public void getChat(String chatId, String phoneNumber, Callback callback) {
         ChatHandler.getChat(appApi, chatId, phoneNumber, callback);
+    }
+
+    public void discoverContacts(String phoneNumber, List<String> contacts, Callback callback) {
+        ChatHandler.discoverContacts(appApi, phoneNumber, contacts, callback);
     }
 
     public interface Callback{

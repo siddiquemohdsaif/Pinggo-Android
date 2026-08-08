@@ -77,6 +77,15 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         return instance;
     }
 
+    public static void resetInstance() {
+        synchronized (ChatRepository.class) {
+            if (instance != null) {
+                instance.disconnect();
+            }
+            instance = null;
+        }
+    }
+
     public void setEventListener(EventListener eventListener) {
         this.eventListener = eventListener;
     }

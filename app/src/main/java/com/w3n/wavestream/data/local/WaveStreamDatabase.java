@@ -41,4 +41,9 @@ public abstract class WaveStreamDatabase extends RoomDatabase {
         }
         return instance;
     }
+
+    public static void clearAllLocalData(Context context) {
+        WaveStreamDatabase database = getInstance(context);
+        database.clearAllTables();
+    }
 }

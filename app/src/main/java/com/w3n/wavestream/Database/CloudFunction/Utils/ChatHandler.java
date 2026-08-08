@@ -8,7 +8,10 @@ import com.w3n.wavestream.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.wavestream.Database.CloudFunction.RestApi.AppRestAPI;
 
 import org.json.JSONException;
+import org.json.JSONArray;
 import org.json.JSONObject;
+
+import java.util.List;
 
 import okhttp3.MediaType;
 import okhttp3.RequestBody;
@@ -43,6 +46,19 @@ public class ChatHandler {
         }
 
         enqueueChatCall(appApi.getChat(createJsonBody(jsonObject)), callback);
+    }
+
+    public static void discoverContacts(AppRestAPI appApi, String phoneNumber, List<String> contacts, AppFunctionManager.Callback callback) {
+        JSONObject jsonObject = new JSONObject();
+        try {
+            jsonObject.put("phoneNumber", phoneNumber);
+            jsonObject.put("contacts", new JSONArray(contacts));
+        } catch (JSONException e) {
+            handleJsonError(e, callback);
+            return;
+        }
+
+        enqueueChatCall(appApi.discoverContacts(createJsonBody(jsonObject)), callback);
     }
 
     private static void enqueueChatCall(Call<JsonObject> call, AppFunctionManager.Callback callback) {

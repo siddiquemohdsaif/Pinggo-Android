@@ -26,6 +26,7 @@ import com.w3n.wavestream.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.wavestream.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.wavestream.Database.CloudFunction.Utils.ProfilePhotoLocalStore;
 import com.w3n.wavestream.R;
+import com.w3n.wavestream.data.local.LogoutDataCleaner;
 import com.w3n.wavestream.modals.UserData;
 import com.w3n.wavestream.views.CropImageView;
 
@@ -111,11 +112,17 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     private void logOut() {
-        LoginStateManager.getInstance().logOut(this);
-        Intent intent = new Intent(this, LoginActivity.class);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-        startActivity(intent);
-        finish();
+        findViewById(R.id.logOutButton).setEnabled(false);
+        new Thread(() -> {
+            LogoutDataCleaner.clear(SettingsActivity.this);
+            LoginStateManager.getInstance().logOut(SettingsActivity.this);
+            runOnUiThread(() -> {
+                Intent intent = new Intent(this, LoginActivity.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                startActivity(intent);
+                finish();
+            });
+        }).start();
     }
 
     private void refreshUserData() {

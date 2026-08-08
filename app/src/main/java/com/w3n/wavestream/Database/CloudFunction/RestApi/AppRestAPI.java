@@ -73,4 +73,9 @@ public interface AppRestAPI {
             @Body RequestBody body
     );
 
+    @POST("chats/discover")
+    Call<JsonObject> discoverContacts(
+            @Body RequestBody body
+    );
+
 }
