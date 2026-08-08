@@ -19,9 +19,14 @@ import com.w3n.wavestream.R;
 import com.w3n.wavestream.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.wavestream.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.wavestream.Database.CloudFunction.Utils.LoginStateManager;
+import com.w3n.wavestream.data.local.ChatEntity;
+import com.w3n.wavestream.data.local.PresenceEntity;
+import com.w3n.wavestream.data.repository.ChatRepository;
 import com.w3n.wavestream.modals.Chat;
 
+import java.text.DateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -34,11 +39,13 @@ public class ChatsView extends ScrollView {
     private final OnChatClickListener onChatClickListener;
     private final LinearLayout listContainer;
     private final ExecutorService imageExecutor = Executors.newFixedThreadPool(3);
+    private final ChatRepository chatRepository;
     private boolean hasLoadedChats;
 
     public ChatsView(Context context, OnChatClickListener onChatClickListener) {
         super(context);
         this.onChatClickListener = onChatClickListener;
+        chatRepository = ChatRepository.getInstance(context);
         setFillViewport(true);
         listContainer = createChatList();
         addView(listContainer, new ScrollView.LayoutParams(
@@ -60,20 +67,13 @@ public class ChatsView extends ScrollView {
             return;
         }
 
-        AppFunctionManager.getInstance().getChatList(phoneNumber, new AppFunctionManager.Callback() {
-            @Override
-            public void onSuccess(Object object) {
-                post(() -> renderChats(parseChats(object)));
+        chatRepository.observeChats().observeForever(chatEntities -> post(() -> {
+            List<Chat> cachedChats = toChats(chatEntities);
+            if (!cachedChats.isEmpty()) {
+                renderChats(cachedChats);
             }
-
-            @Override
-            public void onError(String error) {
-                post(() -> {
-                    hasLoadedChats = false;
-                    showStatus(error);
-                });
-            }
-        });
+        }));
+        chatRepository.refreshChatList(phoneNumber);
     }
 
     private LinearLayout createChatList() {
@@ -105,27 +105,90 @@ public class ChatsView extends ScrollView {
 
         FrameLayout profileContainer = new FrameLayout(getContext());
         profileContainer.setTag(chat);
-        ContactAvatarView profileIcon = new ContactAvatarView(getContext(), getAvatarText(chat));
-        profileContainer.addView(profileIcon, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-        ));
-        loadProfilePhoto(chat.getProfilePhotoUrl(), profileContainer);
-        row.addView(profileContainer, new LinearLayout.LayoutParams(dp(52), dp(52)));
 
+        ContactAvatarView profileIcon =
+                new ContactAvatarView(getContext(), getAvatarText(chat));
+
+        profileContainer.addView(
+                profileIcon,
+                new FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                )
+        );
+
+        loadProfilePhoto(chat.getProfilePhotoUrl(), profileContainer);
+
+        row.addView(
+                profileContainer,
+                new LinearLayout.LayoutParams(dp(52), dp(52))
+        );
+
+        // Container for name + presence
+        LinearLayout textContainer = new LinearLayout(getContext());
+        textContainer.setOrientation(LinearLayout.VERTICAL);
+        textContainer.setGravity(Gravity.CENTER_VERTICAL);
+        textContainer.setPadding(dp(16), 0, 0, 0);
+
+        // Name
         TextView nameTextView = new TextView(getContext());
         nameTextView.setText(chat.getPhoneNumber());
         nameTextView.setTextColor(getContext().getColor(R.color.primary_text));
         nameTextView.setTextSize(18);
         nameTextView.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        nameTextView.setPadding(dp(16), 0, 0, 0);
-        row.addView(nameTextView, new LinearLayout.LayoutParams(
-                0,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                1
-        ));
+
+        textContainer.addView(
+                nameTextView,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+        );
+
+        // Presence / preview
+        TextView presenceTextView = new TextView(getContext());
+        renderPresence(
+                presenceTextView,
+                chat.isOnline(),
+                chat.getLastSeen()
+        );
+
+        textContainer.addView(
+                presenceTextView,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+        );
+
+        // Add vertical text container beside profile image
+        row.addView(
+                textContainer,
+                new LinearLayout.LayoutParams(
+                        0,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        1
+                )
+        );
 
         return row;
+    }
+    private void renderPresence(TextView presenceTextView,boolean isOnline,long lastSeen) {
+        if (isOnline) {
+            updatePresenceText(presenceTextView,"online");
+            return;
+        }
+        if (lastSeen > 0) {
+            updatePresenceText(presenceTextView,"last seen " + DateFormat.getTimeInstance(DateFormat.SHORT).format(new Date(lastSeen)));
+            return;
+        }
+    }
+
+    private void updatePresenceText(TextView presenceTextView,String text) {
+        if (presenceTextView != null) {
+            presenceTextView.setText(text);
+            presenceTextView.setVisibility(text == null || text.isEmpty() ? View.GONE : View.VISIBLE);
+        }
     }
 
     private void showStatus(String message) {
@@ -166,7 +229,32 @@ public class ChatsView extends ScrollView {
                     getString(profile, "chatId"),
                     phoneNumber,
                     getString(profile, "profilePhotoUrl"),
-                    ChatProfilePhotoStore.getLocalPath(getContext(), phoneNumber)
+                    ChatProfilePhotoStore.getLocalPath(getContext(), phoneNumber),
+                    getBoolean(profile,"isOnline"),
+                    getLong(profile,"lastSeen")
+            ));
+        }
+        return chats;
+    }
+
+    private List<Chat> toChats(List<ChatEntity> chatEntities) {
+        List<Chat> chats = new ArrayList<>();
+        if (chatEntities == null) {
+            return chats;
+        }
+
+        for (ChatEntity chatEntity : chatEntities) {
+            chats.add(new Chat(
+                    chatEntity.chatId,
+                    chatEntity.contactName == null || chatEntity.contactName.isEmpty()
+                            ? chatEntity.otherUserId
+                            : chatEntity.contactName,
+                    chatEntity.profilePhotoUrl,
+                    chatEntity.localProfilePhotoPath == null || chatEntity.localProfilePhotoPath.isEmpty()
+                            ? ChatProfilePhotoStore.getLocalPath(getContext(), chatEntity.otherUserId)
+                            : chatEntity.localProfilePhotoPath,
+                    chatEntity.isOnline,
+                    chatEntity.lastSeen
             ));
         }
         return chats;
@@ -186,6 +274,22 @@ public class ChatsView extends ScrollView {
             return "";
         }
         return element.getAsString();
+    }
+
+    private boolean getBoolean(JsonObject object, String key) {
+        JsonElement element = object.get(key);
+        if (element == null || element.isJsonNull()) {
+            return false;
+        }
+        return element.getAsBoolean();
+    }
+
+    private long getLong(JsonObject object, String key) {
+        JsonElement element = object.get(key);
+        if (element == null || element.isJsonNull()) {
+            return 0;
+        }
+        return element.getAsLong();
     }
 
     private String getCurrentPhoneNumber() {

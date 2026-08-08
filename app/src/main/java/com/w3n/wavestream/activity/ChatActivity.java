@@ -5,6 +5,10 @@ import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.RectF;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -26,8 +30,10 @@ import androidx.core.view.WindowInsetsCompat;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.w3n.wavestream.R;
-import com.w3n.wavestream.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.wavestream.Database.CloudFunction.Utils.LoginStateManager;
+import com.w3n.wavestream.data.local.MessageEntity;
+import com.w3n.wavestream.data.local.PresenceEntity;
+import com.w3n.wavestream.data.repository.ChatRepository;
 import com.w3n.wavestream.views.ContactAvatarView;
 import com.w3n.wavestream.views.animator.WaveAnimatorView;
 import com.w3n.wavestream.views.animator.dialog.CustomViewDialog;
@@ -36,8 +42,12 @@ import com.w3n.wavestream.views.animator.scroll.ScrollPositionAnimator;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.text.DateFormat;
+import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class ChatActivity extends AppCompatActivity {
     public static final String EXTRA_CHAT_NAME = "com.w3n.wavestream.EXTRA_CHAT_NAME";
@@ -57,8 +67,22 @@ public class ChatActivity extends AppCompatActivity {
     private final Map<String, String> messageTextById = new java.util.HashMap<>();
     private String editingMessageId;
     private TextView editingMessageView;
+    private TextView chatPresenceTextView;
     private String replyingMessageId;
     private String replyingMessageText;
+    private String receiverId;
+    private ChatRepository chatRepository;
+    private final Handler typingHandler = new Handler(Looper.getMainLooper());
+    private boolean typingStarted;
+    private boolean peerTyping;
+    private PresenceEntity latestPresence;
+    private final Set<String> pendingSeenMessageIds = new HashSet<>();
+    private final Runnable typingStopRunnable = () -> {
+        if (typingStarted && chatRepository != null && receiverId != null) {
+            chatRepository.sendTyping(chatId, receiverId, false);
+            typingStarted = false;
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -78,6 +102,29 @@ public class ChatActivity extends AppCompatActivity {
         }
         chatId = getIntent().getStringExtra(EXTRA_CHAT_ID);
         currentPhoneNumber = getCurrentPhoneNumber();
+        receiverId = getReceiverId();
+        chatRepository = ChatRepository.getInstance(this);
+        chatRepository.setEventListener(new ChatRepository.EventListener() {
+            @Override
+            public void onTyping(String eventChatId, String userId, boolean typing) {
+                if (chatId != null && chatId.equals(eventChatId)) {
+                    peerTyping = typing;
+                    if (typing) {
+                        updatePresenceText("typing...");
+                        showTypingIndicator();
+                    } else {
+                        hideTypingIndicator();
+                        renderPresence(latestPresence);
+                    }
+                }
+            }
+
+            @Override
+            public void onSocketError(String error) {
+                Toast.makeText(ChatActivity.this, error, Toast.LENGTH_SHORT).show();
+            }
+        });
+        chatRepository.connect();
 
         findViewById(R.id.backButton).setOnClickListener(v -> finish());
 
@@ -91,6 +138,8 @@ public class ChatActivity extends AppCompatActivity {
 
         TextView chatNameTextView = findViewById(R.id.chatNameTextView);
         chatNameTextView.setText(chatName);
+        chatPresenceTextView = findViewById(R.id.chatPresenceTextView);
+        chatPresenceTextView.setText("connecting...");
 
         messagesContainer = findViewById(R.id.messagesContainer);
         messageEditText = findViewById(R.id.messageEditText);
@@ -102,12 +151,73 @@ public class ChatActivity extends AppCompatActivity {
 
         findViewById(R.id.sendButton).setOnClickListener(v -> sendCurrentMessage());
         findViewById(R.id.chatMoreButton).setOnClickListener(v -> showCanvasInfoDialog());
+        messageEditText.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                handleTypingChanged(s);
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+            }
+        });
 
         showStatus("Loading messages...");
-        loadChat();
+        observeLocalMessages();
+        observePresence();
+        chatRepository.hydrateChat(chatId, LoginStateManager.getInstance().getUID(this));
+        chatRepository.syncAfterReconnect(LoginStateManager.getInstance().getUID(this));
+        chatRepository.syncPresence(java.util.Collections.singletonList(receiverId));
     }
 
-    private void loadChat() {
+    private void observePresence() {
+        if (chatRepository == null || receiverId == null || receiverId.isEmpty() || peerTyping) {
+            return;
+        }
+        chatRepository.observePresence(receiverId).observe(this, this::renderPresence);
+    }
+
+    private void renderPresence(PresenceEntity presence) {
+        latestPresence = presence;
+        if (peerTyping) {
+            return;
+        }
+        if (presence == null) {
+            updatePresenceText("");
+            return;
+        }
+        if (presence.isOnline) {
+            updatePresenceText("online");
+            return;
+        }
+        if (presence.lastSeen != null && presence.lastSeen > 0) {
+            updatePresenceText("last seen " + DateFormat.getTimeInstance(DateFormat.SHORT).format(new Date(presence.lastSeen)));
+            return;
+        }
+        updatePresenceText("");
+    }
+
+    private void updatePresenceText(String text) {
+        if (chatPresenceTextView != null) {
+            chatPresenceTextView.setText(text);
+            chatPresenceTextView.setVisibility(text == null || text.isEmpty() ? View.GONE : View.VISIBLE);
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        typingStopRunnable.run();
+        if (chatRepository != null) {
+            chatRepository.setEventListener(null);
+        }
+        super.onDestroy();
+    }
+
+    private void observeLocalMessages() {
         if (chatId == null || chatId.trim().isEmpty()) {
             showStatus("Chat id missing.");
             return;
@@ -118,17 +228,47 @@ public class ChatActivity extends AppCompatActivity {
             return;
         }
 
-        AppFunctionManager.getInstance().getChat(chatId, currentPhoneNumber, new AppFunctionManager.Callback() {
-            @Override
-            public void onSuccess(Object object) {
-                runOnUiThread(() -> renderMessages(parseMessages(object)));
-            }
+        chatRepository.observeMessages(chatId).observe(this, this::renderLocalMessages);
+    }
 
-            @Override
-            public void onError(String error) {
-                runOnUiThread(() -> showStatus(error));
+    private void renderLocalMessages(List<MessageEntity> messages) {
+        messagesContainer.removeAllViews();
+        messagesContainer.setTag(null);
+        messageTextById.clear();
+        if (messages == null || messages.isEmpty()) {
+            showStatus("No messages found.");
+            return;
+        }
+
+        List<String> unseenIncomingIds = new ArrayList<>();
+        for (MessageEntity message : messages) {
+            messageTextById.put(message.messageId, message.text);
+        }
+
+        for (MessageEntity message : messages) {
+            boolean outgoing = currentPhoneNumber.equals(normalizePhoneNumber(message.senderId));
+            addMessageBubble(
+                    message.messageId,
+                    message.text,
+                    message.repliedMessageId,
+                    outgoing,
+                    outgoing
+            );
+            if (!outgoing && message.readTime == null) {
+                if (!pendingSeenMessageIds.contains(message.messageId)) {
+                    unseenIncomingIds.add(message.messageId);
+                }
+            } else if (message.readTime != null) {
+                pendingSeenMessageIds.remove(message.messageId);
             }
-        });
+        }
+
+        if (!unseenIncomingIds.isEmpty()) {
+            pendingSeenMessageIds.addAll(unseenIncomingIds);
+            chatRepository.markSeen(chatId, unseenIncomingIds);
+        }
+
+        messagesContainer.post(() -> scrollPositionAnimator.scrollAnimateToPosition(100f));
     }
 
     private void renderMessages(List<JsonObject> messages) {
@@ -206,60 +346,39 @@ public class ChatActivity extends AppCompatActivity {
             return;
         }
 
-        String receiverId = getReceiverId();
         if (receiverId.isEmpty()) {
             Toast.makeText(this, "Receiver missing.", Toast.LENGTH_SHORT).show();
             return;
         }
 
-        findViewById(R.id.sendButton).setEnabled(false);
         hideTypingIndicator();
+        typingStopRunnable.run();
 
-        AppFunctionManager.Callback sendCallback = new AppFunctionManager.Callback() {
-            @Override
-            public void onSuccess(Object object) {
-                runOnUiThread(() -> {
-                    String repliedMessageId = replyingMessageId;
-                    String newMessageId = getResponseMessageId(object);
-                    messageTextById.put(newMessageId, message);
-                    addMessageBubble(newMessageId, message, repliedMessageId, true, true);
-                    messageEditText.setText("");
-                    clearReplyMode();
-                    hideTypingIndicator();
-                    findViewById(R.id.sendButton).setEnabled(true);
-                    messagesContainer.post(() -> scrollPositionAnimator.scrollAnimateToPosition(100f));
-                    pulseSendButton();
-                });
-            }
-
-            @Override
-            public void onError(String error) {
-                runOnUiThread(() -> {
-                    findViewById(R.id.sendButton).setEnabled(true);
-                    Toast.makeText(ChatActivity.this, error, Toast.LENGTH_SHORT).show();
-                });
-            }
-        };
-
-        if (replyingMessageId != null) {
-            AppFunctionManager.getInstance().replyMessage(
-                    chatId,
-                    currentPhoneNumber,
-                    receiverId,
-                    message,
-                    replyingMessageId,
-                    sendCallback
-            );
-            return;
-        }
-
-        AppFunctionManager.getInstance().addMessage(
+        chatRepository.sendMessage(
                 chatId,
-                currentPhoneNumber,
                 receiverId,
                 message,
-                sendCallback
+                replyingMessageId
         );
+        messageEditText.setText("");
+        clearReplyMode();
+        hideTypingIndicator();
+    }
+
+    private void handleTypingChanged(CharSequence text) {
+        if (chatRepository == null || chatId == null || receiverId == null || receiverId.isEmpty()) {
+            return;
+        }
+        typingHandler.removeCallbacks(typingStopRunnable);
+        if (text != null && text.length() > 0) {
+            if (!typingStarted) {
+                chatRepository.sendTyping(chatId, receiverId, true);
+                typingStarted = true;
+            }
+            typingHandler.postDelayed(typingStopRunnable, 2000);
+        } else {
+            typingStopRunnable.run();
+        }
     }
 
     private void sendEditedMessage(String message) {
@@ -267,33 +386,8 @@ public class ChatActivity extends AppCompatActivity {
             return;
         }
 
-        findViewById(R.id.sendButton).setEnabled(false);
-        AppFunctionManager.getInstance().editMessage(
-                chatId,
-                editingMessageId,
-                currentPhoneNumber,
-                message,
-                new AppFunctionManager.Callback() {
-                    @Override
-                    public void onSuccess(Object object) {
-                        runOnUiThread(() -> {
-                            if (editingMessageView != null) {
-                                editingMessageView.setText(message);
-                            }
-                            clearEditMode();
-                            findViewById(R.id.sendButton).setEnabled(true);
-                        });
-                    }
-
-                    @Override
-                    public void onError(String error) {
-                        runOnUiThread(() -> {
-                            findViewById(R.id.sendButton).setEnabled(true);
-                            Toast.makeText(ChatActivity.this, error, Toast.LENGTH_SHORT).show();
-                        });
-                    }
-                }
-        );
+        chatRepository.editMessage(chatId, editingMessageId, message);
+        clearEditMode();
     }
 
     private void addMessageBubble(String messageId, String message, String repliedMessageId, boolean outgoing, boolean ownMessage) {
@@ -405,25 +499,8 @@ public class ChatActivity extends AppCompatActivity {
             return;
         }
 
-        AppFunctionManager.getInstance().deleteMessage(
-                chatId,
-                messageId,
-                currentPhoneNumber,
-                new AppFunctionManager.Callback() {
-                    @Override
-                    public void onSuccess(Object object) {
-                        runOnUiThread(() -> {
-                            messageView.setText("This Message was deleted");
-                            clearEditModeIfNeeded(messageId);
-                        });
-                    }
-
-                    @Override
-                    public void onError(String error) {
-                        runOnUiThread(() -> Toast.makeText(ChatActivity.this, error, Toast.LENGTH_SHORT).show());
-                    }
-                }
-        );
+        chatRepository.deleteOwnMessage(chatId, messageId);
+        clearEditModeIfNeeded(messageId);
     }
 
     private void deleteOpponentMessage(String messageId, TextView messageView) {
@@ -432,21 +509,8 @@ public class ChatActivity extends AppCompatActivity {
             return;
         }
 
-        AppFunctionManager.getInstance().deleteOpponentMessage(
-                chatId,
-                messageId,
-                new AppFunctionManager.Callback() {
-                    @Override
-                    public void onSuccess(Object object) {
-                        runOnUiThread(() -> removeMessageBubble(messageView));
-                    }
-
-                    @Override
-                    public void onError(String error) {
-                        runOnUiThread(() -> Toast.makeText(ChatActivity.this, error, Toast.LENGTH_SHORT).show());
-                    }
-                }
-        );
+        chatRepository.deleteOpponentMessage(chatId, messageId);
+        removeMessageBubble(messageView);
     }
 
     private void removeMessageBubble(TextView messageView) {
@@ -551,7 +615,7 @@ public class ChatActivity extends AppCompatActivity {
         for (String phoneNumber : phoneNumbers) {
             String normalizedPhoneNumber = normalizePhoneNumber(phoneNumber);
             if (!normalizedPhoneNumber.equals(currentPhoneNumber)) {
-                return normalizedPhoneNumber;
+                return "<plus>" + normalizedPhoneNumber;
             }
         }
         return "";

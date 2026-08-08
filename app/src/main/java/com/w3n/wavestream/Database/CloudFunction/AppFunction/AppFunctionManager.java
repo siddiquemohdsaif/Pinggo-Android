@@ -15,8 +15,6 @@ import com.w3n.wavestream.Database.CloudFunction.Utils.ProfileUpdateHandler;
 
 import android.graphics.Bitmap;
 
-import java.util.List;
-
 public class AppFunctionManager {
 
 
@@ -110,42 +108,6 @@ public class AppFunctionManager {
 
     public void getChat(String chatId, String phoneNumber, Callback callback) {
         ChatHandler.getChat(appApi, chatId, phoneNumber, callback);
-    }
-
-    public void addMessage(String chatId, String senderId, String receiverId, String text, Callback callback) {
-        ChatHandler.addMessage(appApi, chatId, senderId, receiverId, text, null, callback);
-    }
-
-    public void addMessage(String chatId, String senderId, String receiverId, String text, String repliedMessageId, Callback callback) {
-        ChatHandler.addMessage(appApi, chatId, senderId, receiverId, text, repliedMessageId, callback);
-    }
-
-    public void editMessage(String chatId, String messageId, String senderId, String text, Callback callback) {
-        ChatHandler.editMessage(appApi, chatId, messageId, senderId, text, callback);
-    }
-
-    public void deleteMessage(String chatId, String messageId, String senderId, Callback callback) {
-        ChatHandler.deleteMessage(appApi, chatId, messageId, senderId, callback);
-    }
-
-    public void deleteOpponentMessage(String chatId, String messageId, Callback callback) {
-        ChatHandler.deleteOpponentMessage(appApi, chatId, messageId, callback);
-    }
-
-    public void replyMessage(String chatId, String messageId, String repliedMessageId, Callback callback) {
-        ChatHandler.replyMessage(appApi, chatId, messageId, repliedMessageId, callback);
-    }
-
-    public void replyMessage(String chatId, String senderId, String receiverId, String text, String repliedMessageId, Callback callback) {
-        ChatHandler.replyMessage(appApi, chatId, senderId, receiverId, text, repliedMessageId, callback);
-    }
-
-    public void deliveredMessage(String chatId, List<String> messageIds, Callback callback) {
-        ChatHandler.deliveredMessage(appApi, chatId, messageIds, callback);
-    }
-
-    public void seenMessage(String chatId, List<String> messageIds, Callback callback) {
-        ChatHandler.seenMessage(appApi, chatId, messageIds, callback);
     }
 
     public interface Callback{
