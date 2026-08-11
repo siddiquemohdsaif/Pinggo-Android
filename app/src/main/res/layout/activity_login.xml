@@ -7,46 +7,4 @@
     android:layout_height="match_parent"
     tools:context=".activity.LoginActivity">
 
-    <ImageView
-        android:id="@+id/backgroundImageView"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:contentDescription="@null"
-        android:scaleType="centerCrop"
-        android:src="@drawable/pinggo_login_background" />
-
-    <com.w3n.wavestream.views.login.LoginHeaderAnimatorView
-        android:id="@+id/loginHeaderAnimatorView"
-        android:layout_width="0dp"
-        android:layout_height="1px"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
-
-    <LinearLayout
-        android:id="@+id/loginContentLayout"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:gravity="center_horizontal"
-        android:orientation="vertical"
-        android:paddingStart="0px"
-        android:paddingTop="0px"
-        android:paddingEnd="0px"
-        android:paddingBottom="0px"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent">
-
-        <com.w3n.wavestream.views.login.LoginPhoneCardView
-            android:id="@+id/loginPhoneCardView"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="0px" />
-
-        <com.w3n.wavestream.views.animator.WaveAnimatorView
-            android:id="@+id/termsAnimatorView"
-            android:layout_width="match_parent"
-            android:layout_height="1px"
-            android:layout_marginTop="0px" />
-    </LinearLayout>
 </androidx.constraintlayout.widget.ConstraintLayout>

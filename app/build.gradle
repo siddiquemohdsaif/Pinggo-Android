@@ -34,6 +34,7 @@ android {
 }
 
 dependencies {
+    implementation files('libs/native-views-release.aar')
     implementation libs.activity.ktx
     implementation libs.appcompat
     implementation libs.constraintlayout
