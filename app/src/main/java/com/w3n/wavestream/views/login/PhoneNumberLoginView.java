@@ -56,7 +56,7 @@ import java.util.Locale;
 import io.michaelrocks.libphonenumber.android.PhoneNumberUtil;
 import io.michaelrocks.libphonenumber.android.Phonenumber;
 
-public class PingGoLoginView extends View {
+public class PhoneNumberLoginView extends View {
     private static final float REFERENCE_WIDTH = 1080f;
     private static final int ACCENT_COLOR = 0xFF019CC4;
     private static final int PRIMARY_TEXT_COLOR = 0xFF000E1A;
@@ -82,15 +82,12 @@ public class PingGoLoginView extends View {
     private ZLayer loginCardContent;
     private TextField countryField;
     private TextField phoneNumberField;
-    private TextField otpField;
     private Image countryFlagImage;
     private Button countryDropdownButton;
     private Text phoneErrorText;
-    private Text otpErrorText;
     private Text phoneCountryCodeText;
     private Text countryLabelText;
     private Text phoneLabelText;
-    private Text otpLabelText;
     private final CountryCodePicker countryCodePicker;
     private final PhoneNumberUtil phoneNumberUtil;
     private Card loginCard;
@@ -99,20 +96,15 @@ public class PingGoLoginView extends View {
     private String selectedCountryCode = "+91";
     private String selectedRegionCode = "IN";
     private String savedPhoneNumber = "";
-    private String savedOtp = "";
     private boolean settingCountryText;
-    private boolean otpVisible;
-    private boolean otpRequestInProgress;
-    private boolean otpVerifyInProgress;
     private float contentTranslationY;
-    private OnRequestOtpListener requestOtpListener;
-    private OnConfirmOtpListener confirmOtpListener;
+    private OnNextListener nextListener;
     private int statusBarInset;
     private int navigationBarInset;
     private int keyboardInset;
     private boolean keyboardVisible;
 
-    public PingGoLoginView(Context context) {
+    public PhoneNumberLoginView(Context context) {
         super(context);
         setBackgroundColor(Color.WHITE);
         setClickable(true);
@@ -170,24 +162,8 @@ public class PingGoLoginView extends View {
         }
     }
 
-    public String getOtp() {
-        return otpField == null ? "" : otpField.getText().trim();
-    }
-
-    public void setOnRequestOtpListener(OnRequestOtpListener listener) {
-        requestOtpListener = listener;
-    }
-
-    public void setOnConfirmOtpListener(OnConfirmOtpListener listener) {
-        confirmOtpListener = listener;
-    }
-
-    public void setOtpRequestInProgress(boolean inProgress) {
-        otpRequestInProgress = inProgress;
-    }
-
-    public void setOtpVerifyInProgress(boolean inProgress) {
-        otpVerifyInProgress = inProgress;
+    public void setOnNextListener(OnNextListener listener) {
+        nextListener = listener;
     }
 
     public void showPhoneError(String message) {
@@ -203,21 +179,6 @@ public class PingGoLoginView extends View {
 
     public void clearPhoneError() {
         if (phoneErrorText != null) phoneErrorText.setVisible(false);
-    }
-
-    public void showOtpError(String message) {
-        if (otpErrorText != null) otpErrorText.setText(message).setVisible(true);
-        if (otpField != null) otpField.requestFocus();
-        invalidate();
-    }
-
-    public void showOtpFields() {
-        savedPhoneNumber = getPhoneNumber();
-        otpVisible = true;
-        buildScreen();
-        post(() -> {
-            if (otpField != null) otpField.requestFocus();
-        });
     }
 
     public boolean handleCountryOutsideTap(float rawX, float rawY) {
@@ -239,7 +200,6 @@ public class PingGoLoginView extends View {
 
     private void buildScreen() {
         if (phoneNumberField != null) savedPhoneNumber = phoneNumberField.getText();
-        if (otpField != null) savedOtp = otpField.getText();
         backgroundLayer.clear();
         foregroundLayer.clear();
         loginCardLayer.clear();
@@ -247,7 +207,6 @@ public class PingGoLoginView extends View {
         loginCardContent = null;
         countryField = null;
         phoneNumberField = null;
-        otpField = null;
         backgroundLayer.add(new Image.Builder(getContext(), "login_background", backgroundBitmap,
                 position(0f, 0f), new Size(getWidth(), getHeight())).setScaleType(Image.ScaleType.CENTER_CROP));
         addHeader();
@@ -295,9 +254,8 @@ public class PingGoLoginView extends View {
         Position cardPosition = new Position(this, figmaConfig,
                 Position.HorizontalMarginFrom.LEFT, Position.VerticalMarginFrom.BOTTOM,
                 0f, 206.620f + designUnits(navigationBarInset));
-        float cardHeight = otpVisible ? 1286.620f : 1076.197f;
         loginCard = loginCardLayer.add(new Card.Builder(getContext(), "phone_number_card",
-                cardPosition, new Size(940.563f, cardHeight))
+                cardPosition, new Size(940.563f, 1076.197f))
                 .setBackgroundColor(Color.WHITE)
                 .setCornerRadius(63.380f)
                 .horizontalCenter(true)
@@ -313,7 +271,6 @@ public class PingGoLoginView extends View {
                 MUTED_TEXT_COLOR, FontVariation.REGULAR, 2);
         addCountryField(loginCard);
         addPhoneField(loginCard);
-        if (otpVisible) addOtpField(loginCard);
         addSecurityMessage(loginCard);
         addNextButton(loginCard);
     }
@@ -413,40 +370,6 @@ public class PingGoLoginView extends View {
         phoneErrorText = addErrorText(card, "phone_error", 68.451f, 673.099f);
     }
 
-    private void addOtpField(Card card) {
-        otpField = new TextField.Builder(getContext(), "otp_field",
-                cardPosition(card, 63.380f, 714.930f), new Size(813.803f, 147.042f))
-                .setHint(getString(R.string.enter_otp))
-                .setText(savedOtp)
-                .setMaxLength(6)
-                .setInputType(InputType.TYPE_CLASS_NUMBER)
-                .setImeOptions(EditorInfo.IME_ACTION_DONE)
-                .setFont(NativeFonts.INTER)
-                .setFontVariations(FontVariation.REGULAR)
-                .setTextSize(36.761f)
-                .setTextColor(PRIMARY_TEXT_COLOR)
-                .setHintColor(0xFF757575)
-                .setCursorColor(ACCENT_COLOR)
-                .setCursorWidth(5.070f)
-                .setBackgroundColor(Color.WHITE, Color.WHITE)
-                .setStrokeColor(INPUT_STROKE_COLOR, ACCENT_COLOR)
-                .setStrokeWidth(4.437f)
-                .setCornerRadius(25.352f)
-                .setPadding(38.028f, 22.817f)
-                .setOnTextChangedListener((id, text) -> {
-                    if (otpErrorText != null) otpErrorText.setVisible(false);
-                })
-                .setOnFocusChangedListener((id, focused) -> {
-                    updateFocusedFieldAppearance();
-                    post(this::updateKeyboardTranslation);
-                })
-                .build(this);
-        loginCardContent.add(otpField);
-        otpLabelText = addFieldLabel(card, "otp_label", getString(R.string.enter_otp),
-                98.873f, 697.183f, 177.465f, MUTED_TEXT_COLOR);
-        otpErrorText = addErrorText(card, "otp_error", 68.451f, 863.239f);
-    }
-
     private Text addErrorText(Card card, String id, float left, float top) {
         Text errorText = new Text.Builder(getContext(), id, "",
                 cardPosition(card, left, top), new Size(798.592f, 32.958f))
@@ -479,12 +402,11 @@ public class PingGoLoginView extends View {
     }
 
     private void addSecurityMessage(Card card) {
-        float topOffset = otpVisible ? 210.423f : 0f;
         addImage(card, "security_lock", lockBitmap,
-                141.972f, 723.803f + topOffset, 31.690f, 36.761f);
+                141.972f, 723.803f, 31.690f, 36.761f);
         loginCardContent.add(new Text.Builder(getContext(), "security_message",
                 getString(R.string.phone_safe_message),
-                cardPosition(card, 191.408f, 712.394f + topOffset),
+                cardPosition(card, 191.408f, 712.394f),
                 new Size(646.479f, 60.845f))
                 .setFont(NativeFonts.INTER).setFontVariations(FontVariation.REGULAR)
                 .setTextSize(27.887f).setTextColor(MUTED_TEXT_COLOR)
@@ -493,10 +415,9 @@ public class PingGoLoginView extends View {
     }
 
     private void addNextButton(Card card) {
-        float topOffset = otpVisible ? 210.423f : 0f;
         loginCardContent.add(new Button.Builder(getContext(), "next_button", buttonBitmap,
-                otpVisible ? getString(R.string.confirm) : getString(R.string.next),
-                cardPosition(card, 63.380f, 823.944f + topOffset),
+                getString(R.string.next),
+                cardPosition(card, 63.380f, 823.944f),
                 new Size(813.803f, 139.437f))
                 .setImageScaleType(Image.ScaleType.FIT_XY)
                 .setCornerRadius(27.887f)
@@ -510,7 +431,7 @@ public class PingGoLoginView extends View {
                 .setRippleOrigin(Button.RippleOrigin.TOUCH)
                 .setOnClickListener(id -> handlePrimaryAction()));
         addImage(card, "next_arrow", arrowBitmap,
-                706.056f, 869.577f + topOffset, 48.169f, 48.169f);
+                706.056f, 869.577f, 48.169f, 48.169f);
     }
 
     private void addImage(Card card, String id, Bitmap bitmap, float left, float top,
@@ -521,18 +442,6 @@ public class PingGoLoginView extends View {
     }
 
     private void handlePrimaryAction() {
-        if (otpVisible) {
-            String otp = getOtp();
-            if (otp.length() != 6) {
-                showOtpError(getString(R.string.invalid_otp));
-                return;
-            }
-            if (!otpVerifyInProgress && confirmOtpListener != null) {
-                confirmOtpListener.onConfirmOtp(otp);
-            }
-            return;
-        }
-
         if (getPhoneNumber().isEmpty()) {
             showPhoneError(getString(R.string.phone_required));
             return;
@@ -542,9 +451,7 @@ public class PingGoLoginView extends View {
             return;
         }
         clearPhoneError();
-        if (!otpRequestInProgress && requestOtpListener != null) {
-            requestOtpListener.onRequestOtp(getFullPhoneNumber());
-        }
+        if (nextListener != null) nextListener.onNext(getFullPhoneNumber());
     }
 
     private void openUnfilteredCountryPopup() {
@@ -806,15 +713,11 @@ public class PingGoLoginView extends View {
         boolean countryActive = countryField != null && countryField.isFocused()
                 || countryPopupWindow != null && countryPopupWindow.isShowing();
         boolean phoneActive = !countryActive && phoneNumberField != null && phoneNumberField.isFocused();
-        boolean otpActive = !countryActive && otpField != null && otpField.isFocused();
         if (countryLabelText != null) {
             countryLabelText.setTextColor(countryActive ? ACCENT_COLOR : MUTED_TEXT_COLOR);
         }
         if (phoneLabelText != null) {
             phoneLabelText.setTextColor(phoneActive ? ACCENT_COLOR : MUTED_TEXT_COLOR);
-        }
-        if (otpLabelText != null) {
-            otpLabelText.setTextColor(otpActive ? ACCENT_COLOR : MUTED_TEXT_COLOR);
         }
         invalidate();
     }
@@ -890,11 +793,7 @@ public class PingGoLoginView extends View {
         return layerGroup.onKeyDown(keyCode, event) || super.onKeyDown(keyCode, event);
     }
 
-    public interface OnRequestOtpListener {
-        void onRequestOtp(String fullPhoneNumber);
-    }
-
-    public interface OnConfirmOtpListener {
-        void onConfirmOtp(String otp);
+    public interface OnNextListener {
+        void onNext(String fullPhoneNumber);
     }
 }
