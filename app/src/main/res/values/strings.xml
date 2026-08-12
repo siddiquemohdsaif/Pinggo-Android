@@ -47,7 +47,7 @@
     <string name="pinggo_brand">PingGo</string>
     <string name="pinggo_tagline">HD Video Calls. Crystal Clear.</string>
     <string name="pinggo_security">Fast. Secure. Private.</string>
-    <string name="enter_phone_number">Enter your phone number</string>
+    <string name="enter_phone_number">Enter Your Phone Number</string>
     <string name="verification_code_hint">We\'ll send you a verification code\nto confirm your number.</string>
     <string name="country">Country</string>
     <string name="phone_safe_message">Your number is safe and secure with PingGo.</string>

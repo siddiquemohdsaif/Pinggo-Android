@@ -130,7 +130,7 @@ public class OtpLoginView extends View {
         for (int index = 0; index < digitTexts.length; index++) digitTexts[index] = null;
 
         backgroundLayer.add(new Image.Builder(getContext(), "login_background", backgroundBitmap,
-                position(0f, 0f), new Size(getWidth(), getHeight()))
+                position(0f, 0f), new Size(designUnits(getWidth()),designUnits(getHeight())))
                 .setScaleType(Image.ScaleType.CENTER_CROP));
         addBackButton();
         addIllustration();
