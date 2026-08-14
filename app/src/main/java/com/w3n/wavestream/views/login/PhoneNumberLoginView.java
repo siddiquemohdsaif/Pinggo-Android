@@ -262,16 +262,16 @@ public class PhoneNumberLoginView extends View {
     private void addHeader() {
         float topOffset = designUnits(statusBarInset);
         foregroundLayer.add(new Image.Builder(getContext(), "pinggo_logo", logoBitmap,
-                position(413.239f, 291.549f + topOffset), new Size(253.521f, 253.521f))
+                position(413.239f, 241.549f + topOffset), new Size(253.521f, 253.521f))
                 .setScaleType(Image.ScaleType.FIT_XY));
         addCenteredText("brand_name", getString(R.string.pinggo_brand),
-                540f + topOffset, 532.394f, 133.099f, 114.085f,
+                490f + topOffset, 532.394f, 133.099f, 114.085f,
                 ACCENT_COLOR, FontVariation.BOLD, 1);
         addCenteredText("primary_tagline", getString(R.string.pinggo_tagline),
-                704.789f + topOffset, 545.070f, 45.634f, 35.493f,
+                654.789f + topOffset, 545.070f, 45.634f, 35.493f,
                 0xFF323232, FontVariation.REGULAR, 1);
         addCenteredText("secondary_tagline", getString(R.string.pinggo_security),
-                768.169f + topOffset, 456.338f, 45.634f, 35.493f,
+                718.169f + topOffset, 456.338f, 45.634f, 35.493f,
                 ACCENT_COLOR, FontVariation.REGULAR, 1);
     }
 
@@ -338,7 +338,7 @@ public class PhoneNumberLoginView extends View {
                 .setStrokeColor(INPUT_STROKE_COLOR, ACCENT_COLOR)
                 .setStrokeWidth(2.535f)
                 .setCornerRadius(25.352f)
-                .setPadding(134.366f, 22.817f)
+                .setPadding(144.366f, 22.817f)
                 .setOnTextChangedListener((id, text) -> {
                     if (!settingCountryText && countryField != null && countryField.isFocused()) {
                         scheduleCountryFilter(text);
@@ -360,17 +360,17 @@ public class PhoneNumberLoginView extends View {
                 .build(this);
         loginCardContent.add(countryField);
         countryFlagImage = new Image.Builder(getContext(), "country_flag", selectedFlagBitmap,
-                cardPosition(card, 103.944f, 366.338f), new Size(55.775f, 36.761f))
+                cardPosition(card, 113.944f, 366.338f), new Size(55.775f, 36.761f))
                 .setScaleType(Image.ScaleType.FIT_XY).build(this);
         loginCardContent.add(countryFlagImage);
         countryDropdownImage = new Image.Builder(getContext(), "country_dropdown_image",
-                dropdownDownBitmap, cardPosition(card, 733.922f, 374.085f),
+                dropdownDownBitmap, cardPosition(card, 783.922f, 374.085f),
                 new Size(33f, 20f))
                 .setScaleType(Image.ScaleType.FIT_XY)
                 .build(this);
         loginCardContent.add(countryDropdownImage);
         countryDropdownButton = new Button.Builder(getContext(), "country_dropdown",
-                transparentBitmap, cardPosition(card, 699.718f, 332.113f),
+                transparentBitmap, cardPosition(card, 749.718f, 332.113f),
                 new Size(101.408f, 103.944f))
                 .setImageScaleType(Image.ScaleType.FIT_XY)
                 .setRippleEnabled(true)
@@ -379,7 +379,7 @@ public class PhoneNumberLoginView extends View {
                 .build(this);
         loginCardContent.add(countryDropdownButton);
         countryLabelText = addFieldLabel(card, "country_label", getString(R.string.country),
-                104.873f, 292.620f, 130f, MUTED_TEXT_COLOR);
+                104.873f, 292.620f, 135f, MUTED_TEXT_COLOR);
     }
 
     private void addPhoneField(Card card) {
@@ -411,17 +411,17 @@ public class PhoneNumberLoginView extends View {
                 .build(this);
         loginCardContent.add(phoneNumberField);
         phoneCountryCodeText = new Text.Builder(getContext(), "phone_country_code", selectedCountryCode,
-                cardPosition(card, 102.676f, 553.944f), new Size(98.873f, 86.197f))
+                cardPosition(card, 72.676f, 553.944f), new Size(128.873f, 86.197f))
                 .setFont(NativeFonts.INTER).setFontVariations(FontVariation.MEDIUM)
                 .setTextSize(36.761f).setTextColor(PRIMARY_TEXT_COLOR)
-                .setAlignment(Text.Alignment.START).setVerticalAlignment(Text.VerticalAlignment.CENTER)
+                .setAlignment(Text.Alignment.CENTER).setVerticalAlignment(Text.VerticalAlignment.CENTER)
                 .setWrapEnabled(false)
                 .build(this);
         loginCardContent.add(phoneCountryCodeText);
         addImage(card, "phone_divider", dividerBitmap,
                 215.493f, 567.887f, 2.535f, 55.775f);
         phoneLabelText = addFieldLabel(card, "phone_number_label", getString(R.string.phone_number),
-                104.873f, 503.042f, 218.169f, MUTED_TEXT_COLOR);
+                104.873f, 503.042f, 223.169f, MUTED_TEXT_COLOR);
         phoneErrorText = addErrorText(card, "phone_error", 68.451f, 673.099f);
     }
 

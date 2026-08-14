@@ -15,4 +15,5 @@
     <color name="pinggo_input_stroke">#E0E5EC</color>
     <color name="pinggo_card_shadow_ambient">#06000000</color>
     <color name="pinggo_card_shadow_spot">#12000000</color>
+    <color name="login_system_bar_background">#EBF1F7</color>
 </resources>
