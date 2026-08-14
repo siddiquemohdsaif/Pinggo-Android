@@ -7,7 +7,6 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
-import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.drawable.ColorDrawable;
@@ -22,7 +21,6 @@ import android.view.KeyEvent;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
-import android.view.ViewConfiguration;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
@@ -44,7 +42,6 @@ import com.ogfa.nativeviews.component.Position;
 import com.ogfa.nativeviews.component.Size;
 import com.ogfa.nativeviews.font.NativeFonts;
 import com.ogfa.nativeviews.image.Image;
-import com.ogfa.nativeviews.list.ComponentList;
 import com.ogfa.nativeviews.text.FontVariation;
 import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.textfield.TextField;
@@ -53,10 +50,14 @@ import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.hbb20.CCPCountry;
 import com.hbb20.CountryCodePicker;
 import com.w3n.wavestream.R;
+import com.w3n.wavestream.utils.login.CountryAdapter;
+import com.w3n.wavestream.utils.login.CountryCardLayout;
+import com.w3n.wavestream.utils.login.CountryDetector;
+import com.w3n.wavestream.utils.login.CountryListView;
+import com.w3n.wavestream.utils.login.CountrySearchItem;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 import io.michaelrocks.libphonenumber.android.PhoneNumberUtil;
 import io.michaelrocks.libphonenumber.android.Phonenumber;
@@ -71,20 +72,12 @@ public class PhoneNumberLoginView extends View {
     private static final float COUNTRY_CARD_HEIGHT = 787f;
     private static final float COUNTRY_EMPTY_HEIGHT = 150f;
     private static final float COUNTRY_ROW_HEIGHT_DP = 58f;
-    private static final float COUNTRY_ROW_PADDING_DP = 16f;
-    private static final float COUNTRY_FLAG_WIDTH_DP = 38f;
-    private static final float COUNTRY_FLAG_HEIGHT_DP = 26f;
-    private static final float COUNTRY_NAME_TEXT_SP = 14f;
-    private static final float COUNTRY_CODE_TEXT_SP = 12f;
     private static final int COUNTRY_DISPLAY_NAME_LIMIT = 25;
     private static final float COUNTRY_CARD_BOTTOM_RADIUS = 50f;
-    private static final float COUNTRY_DIVIDER_WIDTH = 670f;
-    private static final float COUNTRY_DIVIDER_WEIGHT = 2f;
     private static final int COUNTRY_DIVIDER_COLOR = 0xFFE5E8EC;
     private static final float COUNTRY_SHADOW_OFFSET_Y = 4f;
     private static final float COUNTRY_SHADOW_BLUR = 28f;
     private static final float COUNTRY_SHADOW_SPREAD = 4f;
-    private static final int COUNTRY_SHADOW_COLOR = 0x0D000000;
 
     private final FigmaConfig figmaConfig = new FigmaConfig(REFERENCE_WIDTH);
     private final ZLayerGroup layerGroup = new ZLayerGroup(this);
@@ -150,11 +143,11 @@ public class PhoneNumberLoginView extends View {
         lockBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.ic_pinggo_lock);
         arrowBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.ic_pinggo_arrow);
         buttonBitmap = createButtonBackground(arrowBitmap);
-        selectedFlagBitmap = createIndiaFlag();
         dropdownDownBitmap = drawableToBitmap(R.drawable.country_dropdown_down);
         dropdownUpBitmap = drawableToBitmap(R.drawable.country_dropdown_up);
         countryCodePicker = new CountryCodePicker(context);
-        countryCodePicker.setDefaultCountryUsingNameCode("IN");
+        countryCodePicker.setDefaultCountryUsingNameCode(
+                CountryDetector.detectCountryIso(context));
         countryCodePicker.resetToDefaultCountry();
         phoneNumberUtil = PhoneNumberUtil.createInstance(context);
         buildCountrySearchIndex();
@@ -544,8 +537,21 @@ public class PhoneNumberLoginView extends View {
                 COUNTRY_SHADOW_SPREAD * scale);
         countryPopupCardLayout.setPadding(shadowLeft, shadowTop, shadowRight, shadowBottom);
 
-        countryAdapter = new CountryAdapter();
-        countryListView = new CountryListView(getContext(), countryAdapter);
+        countryAdapter = new CountryAdapter(getContext(), countrySearchIndex,
+                selectedFlagBitmap, countryDividerBitmap, scale,
+                this::countryFlagBitmap, this::resizeCountryPopup);
+        countryListView = new CountryListView(getContext(), countryAdapter,
+                this::selectCountry, new CountryListView.KeyboardDelegate() {
+                    @Override
+                    public boolean isKeyboardVisible() {
+                        return keyboardVisible;
+                    }
+
+                    @Override
+                    public void hideKeyboard() {
+                        PhoneNumberLoginView.this.hideKeyboard();
+                    }
+                });
         countryPopupCardLayout.addView(countryListView);
 
         countryEmptyText = new TextView(getContext());
@@ -739,10 +745,6 @@ public class PhoneNumberLoginView extends View {
         return viewTop + Math.round(fieldBounds.bottom + contentTranslationY - shadowTop);
     }
 
-    private static String lower(String value) {
-        return value == null ? "" : value.toLowerCase(Locale.US);
-    }
-
     private void hideKeyboard() {
         InputMethodManager inputMethodManager = (InputMethodManager)
                 getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
@@ -757,10 +759,6 @@ public class PhoneNumberLoginView extends View {
 
     private float dpValue(float value) {
         return value * getResources().getDisplayMetrics().density;
-    }
-
-    private float spValue(float value) {
-        return value * getResources().getDisplayMetrics().scaledDensity;
     }
 
     private void addCenteredText(String id, CharSequence value, float top, float width,
@@ -861,18 +859,6 @@ public class PhoneNumberLoginView extends View {
         return bitmap;
     }
 
-    private static Bitmap createIndiaFlag() {
-        Bitmap bitmap = Bitmap.createBitmap(48, 32, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(bitmap);
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        paint.setColor(0xFFFF9933); canvas.drawRect(0f, 0f, 48f, 10.67f, paint);
-        paint.setColor(Color.WHITE); canvas.drawRect(0f, 10.67f, 48f, 21.34f, paint);
-        paint.setColor(0xFF138808); canvas.drawRect(0f, 21.34f, 48f, 32f, paint);
-        paint.setColor(0xFF000080); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1.5f);
-        canvas.drawCircle(24f, 16f, 4.2f, paint);
-        return bitmap;
-    }
-
     private static Bitmap createButtonBackground(Bitmap arrow) {
         Bitmap bitmap = Bitmap.createBitmap(642, 110, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
@@ -913,243 +899,6 @@ public class PhoneNumberLoginView extends View {
         return getContext().getString(stringId);
     }
 
-    private final class CountryAdapter extends ComponentList.Adapter<CCPCountry> {
-        private final List<CCPCountry> visibleCountries = new ArrayList<>();
-        private final Paint codeMeasurePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-
-        CountryAdapter() {
-            codeMeasurePaint.setTextSize(spValue(COUNTRY_CODE_TEXT_SP));
-        }
-
-        void submitQuery(String query) {
-            String normalizedQuery = query == null ? ""
-                    : query.trim().toLowerCase(Locale.US);
-            visibleCountries.clear();
-            for (CountrySearchItem item : countrySearchIndex) {
-                if (normalizedQuery.isEmpty() || item.searchableText.contains(normalizedQuery)) {
-                    visibleCountries.add(item.country);
-                }
-            }
-            notifyDataSetChanged();
-            resizeCountryPopup(visibleCountries.size());
-        }
-
-        @Override
-        public CCPCountry getItem(int position) {
-            return visibleCountries.get(position);
-        }
-
-        @Override
-        public long getItemId(int position) {
-            return visibleCountries.get(position).getNameCode().hashCode();
-        }
-
-        @Override
-        public int getItemCount() {
-            return visibleCountries.size();
-        }
-
-        @Override
-        public void onCreateItem(ComponentList.Item item, int viewType) {
-            ComponentList.ItemScope scope = item.getScope();
-            RectF bounds = scope.getBounds();
-            float rowWidth = bounds.width();
-            float rowHeight = bounds.height();
-            float padding = dpValue(COUNTRY_ROW_PADDING_DP);
-            float flagWidth = dpValue(COUNTRY_FLAG_WIDTH_DP);
-            float flagHeight = dpValue(COUNTRY_FLAG_HEIGHT_DP);
-            float flagTop = (rowHeight - flagHeight) / 2f;
-            float codeWidth = dpValue(92f);
-            float dividerWidth = Math.min(rowWidth,
-                    COUNTRY_DIVIDER_WIDTH * figmaConfig.getScale(getWidth()));
-            float dividerWeight = COUNTRY_DIVIDER_WEIGHT * figmaConfig.getScale(getWidth());
-            float dividerLeft = (rowWidth - dividerWidth) / 2f;
-
-            ZLayer content = item.addLayer("content");
-            content.add(new Image.Builder(getContext(), scope.id("flag"),
-                    selectedFlagBitmap,
-                    new RectF(padding, flagTop, padding + flagWidth, flagTop + flagHeight))
-                    .setScaleType(Image.ScaleType.FIT_XY));
-            content.add(new Text.Builder(getContext(), scope.id("name"), "",
-                    new RectF(padding + flagWidth + dpValue(COUNTRY_ROW_PADDING_DP), 0f,
-                            rowWidth - padding - codeWidth, rowHeight))
-                    .setFont(NativeFonts.INTER)
-                    .setFontVariations(FontVariation.REGULAR)
-                    .setTextSizePx(spValue(COUNTRY_NAME_TEXT_SP))
-                    .setTextColor(PRIMARY_TEXT_COLOR)
-                    .setVerticalAlignment(Text.VerticalAlignment.CENTER)
-                    .setWrapEnabled(false));
-            content.add(new Text.Builder(getContext(), scope.id("code"), "",
-                    new RectF(rowWidth - padding - codeWidth, 0f,
-                            rowWidth - padding, rowHeight))
-                    .useDefaultFont()
-                    .setTextSizePx(spValue(COUNTRY_CODE_TEXT_SP))
-                    .setTextColor(MUTED_TEXT_COLOR)
-                    .setAlignment(Text.Alignment.END)
-                    .setVerticalAlignment(Text.VerticalAlignment.CENTER)
-                    .setWrapEnabled(false));
-            content.add(new Image.Builder(getContext(), scope.id("divider"),
-                    countryDividerBitmap,
-                    new RectF(dividerLeft, rowHeight - dividerWeight,
-                            dividerLeft + dividerWidth, rowHeight))
-                    .setScaleType(Image.ScaleType.FIT_XY));
-        }
-
-        @Override
-        public void onBindItem(ComponentList.Item item, CCPCountry country, int position) {
-            RectF rowBounds = item.getScope().getBounds();
-            float padding = dpValue(COUNTRY_ROW_PADDING_DP);
-            float nameLeft = padding + dpValue(COUNTRY_FLAG_WIDTH_DP)
-                    + dpValue(COUNTRY_ROW_PADDING_DP);
-            String callingCode = "+" + country.getPhoneCode();
-            float codeWidth = (float) Math.ceil(codeMeasurePaint.measureText(callingCode));
-            float codeLeft = rowBounds.width() - padding - codeWidth;
-
-            item.find("flag", Image.class).setBitmap(countryFlagBitmap(country.getFlagID()));
-            item.find("name", Text.class)
-                    .setRegion(new RectF(nameLeft, 0f, codeLeft, rowBounds.height()))
-                    .setText(country.getName());
-            item.find("code", Text.class)
-                    .setRegion(new RectF(codeLeft, 0f,
-                            rowBounds.width() - padding, rowBounds.height()))
-                    .setText(callingCode);
-            item.find("divider", Image.class).setVisible(position < visibleCountries.size() - 1);
-        }
-    }
-
-    private static final class CountrySearchItem {
-        final CCPCountry country;
-        final String searchableText;
-
-        CountrySearchItem(CCPCountry country) {
-            this.country = country;
-            String phoneCode = country.getPhoneCode() == null ? "" : country.getPhoneCode();
-            searchableText = lower(country.getName()) + '\n'
-                    + lower(country.getEnglishName()) + '\n'
-                    + lower(country.getNameCode()) + '\n'
-                    + phoneCode + '\n'
-                    + '+' + phoneCode;
-        }
-    }
-
-    private final class CountryListView extends View {
-        private final ZLayerGroup nativeListLayers = new ZLayerGroup(this);
-        private final ZLayer nativeListLayer = nativeListLayers.addLayer("countries");
-        private final CountryAdapter adapter;
-        private final int touchSlop;
-        private float gestureDownY;
-        private boolean keyboardDismissedForGesture;
-
-        CountryListView(Context context, CountryAdapter adapter) {
-            super(context);
-            this.adapter = adapter;
-            touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
-            setClickable(true);
-        }
-
-        @Override
-        protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
-            super.onSizeChanged(width, height, oldWidth, oldHeight);
-            if (width <= 0 || height <= 0) return;
-            nativeListLayer.clear();
-            nativeListLayer.add(new ComponentList.Builder<CCPCountry>(getContext(),
-                    "country_native_list", new RectF(0f, 0f, width, height))
-                    .setOrientation(ComponentList.Orientation.VERTICAL)
-                    // Explicit RectF list bounds use runtime-pixel dimensions (scale = 1).
-                    .setItemSize(dpValue(COUNTRY_ROW_HEIGHT_DP))
-                    .setItemSpacing(0f)
-                    .setAdapter(adapter)
-                    .setOverscrollEnabled(false)
-                    .setClipToBounds(true)
-                    .setOnItemClickListener((list, country, position) -> selectCountry(country)));
-        }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
-            super.onDraw(canvas);
-            nativeListLayers.draw(canvas);
-        }
-
-        @Override
-        public boolean onTouchEvent(MotionEvent event) {
-            switch (event.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                    gestureDownY = event.getY();
-                    keyboardDismissedForGesture = false;
-                    break;
-                case MotionEvent.ACTION_MOVE:
-                    if (!keyboardDismissedForGesture && keyboardVisible
-                            && Math.abs(event.getY() - gestureDownY) > touchSlop) {
-                        keyboardDismissedForGesture = true;
-                        hideKeyboard();
-                    }
-                    break;
-                case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
-                    keyboardDismissedForGesture = false;
-                    break;
-                default:
-                    break;
-            }
-            return nativeListLayers.onTouchEvent(event) || super.onTouchEvent(event);
-        }
-    }
-
-    private static final class CountryCardLayout extends FrameLayout {
-        private final Paint shadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint cardPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Path cardPath = new Path();
-        private final float bottomRadius;
-        private final float shadowSpread;
-
-        CountryCardLayout(Context context, float bottomRadius, float shadowOffsetY,
-                          float shadowBlur, float shadowSpread) {
-            super(context);
-            this.bottomRadius = bottomRadius;
-            this.shadowSpread = shadowSpread;
-            shadowPaint.setColor(COUNTRY_SHADOW_COLOR);
-            shadowPaint.setStyle(Paint.Style.FILL);
-            shadowPaint.setShadowLayer(shadowBlur, 0f, shadowOffsetY, COUNTRY_SHADOW_COLOR);
-            cardPaint.setColor(Color.WHITE);
-            cardPaint.setStyle(Paint.Style.FILL);
-            setWillNotDraw(false);
-            setClipChildren(false);
-            setClipToPadding(false);
-            setLayerType(View.LAYER_TYPE_SOFTWARE, null);
-        }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
-            super.onDraw(canvas);
-            RectF cardBounds = cardBounds();
-            RectF shadowBounds = new RectF(cardBounds);
-            shadowBounds.inset(-shadowSpread, -shadowSpread);
-            Path shadowPath = bottomRoundedPath(shadowBounds, bottomRadius + shadowSpread);
-            canvas.drawPath(shadowPath, shadowPaint);
-            cardPath.set(bottomRoundedPath(cardBounds, bottomRadius));
-            canvas.drawPath(cardPath, cardPaint);
-        }
-
-        @Override
-        protected void dispatchDraw(Canvas canvas) {
-            int save = canvas.save();
-            canvas.clipPath(cardPath);
-            super.dispatchDraw(canvas);
-            canvas.restoreToCount(save);
-        }
-
-        private RectF cardBounds() {
-            return new RectF(getPaddingLeft(), getPaddingTop(),
-                    getWidth() - getPaddingRight(), getHeight() - getPaddingBottom());
-        }
-
-        private static Path bottomRoundedPath(RectF bounds, float radius) {
-            Path path = new Path();
-            float[] radii = {0f, 0f, 0f, 0f, radius, radius, radius, radius};
-            path.addRoundRect(bounds, radii, Path.Direction.CW);
-            return path;
-        }
-    }
 
     @Override
     protected void onDraw(@NonNull Canvas canvas) {
