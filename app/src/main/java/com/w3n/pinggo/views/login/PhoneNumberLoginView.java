@@ -183,6 +183,10 @@ public class PhoneNumberLoginView extends View {
         return selectedCountryCode + getPhoneNumber().replaceAll("\\s+", "");
     }
 
+    public String getSelectedRegionCode() {
+        return selectedRegionCode;
+    }
+
     public boolean isValidPhoneNumber() {
         try {
             Phonenumber.PhoneNumber parsedNumber = phoneNumberUtil.parse(

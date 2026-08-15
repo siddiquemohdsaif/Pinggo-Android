@@ -15,11 +15,13 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.fragment.app.Fragment;
 
+import com.w3n.pinggo.AppContextProvider;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.OtpHandler;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.activity.HomeActivity;
 import com.w3n.pinggo.activity.SignUpActivity;
+import com.w3n.pinggo.utils.login.LoginFlowResolver;
 import com.w3n.pinggo.views.common.BlockingProgressView;
 import com.w3n.pinggo.views.login.FlashCallLoginView;
 
@@ -27,6 +29,7 @@ import com.w3n.pinggo.views.login.FlashCallLoginView;
 public class FlashCallFragment extends Fragment {
     private static final String ARG_PHONE_NUMBER = "phone_number";
     private static final String ARG_EMAIL = "email";
+    private static final String ARG_COUNTRY_CODE = "country_code";
     private FlashCallLoginView loginView;
     private BlockingProgressView blockingProgressView;
     private boolean requestInProgress;
@@ -40,11 +43,13 @@ public class FlashCallFragment extends Fragment {
             };
 
     public static FlashCallFragment newInstance(@NonNull String phoneNumber,
-                                                @NonNull String email) {
+                                                @NonNull String email,
+                                                @NonNull String countryCode) {
         FlashCallFragment fragment = new FlashCallFragment();
         Bundle arguments = new Bundle();
         arguments.putString(ARG_PHONE_NUMBER, phoneNumber);
         arguments.putString(ARG_EMAIL, email);
+        arguments.putString(ARG_COUNTRY_CODE, countryCode);
         fragment.setArguments(arguments);
         return fragment;
     }
@@ -57,9 +62,22 @@ public class FlashCallFragment extends Fragment {
         String phoneNumber = requireArguments().getString(ARG_PHONE_NUMBER, "");
         loginView = new FlashCallLoginView(requireContext(), phoneNumber);
         loginView.setOnBackListener(() -> getParentFragmentManager().popBackStack());
-        loginView.setOnSmsAvailableListener(this::requestSmsOtp);
+        loginView.setOnSmsAvailableListener(this::openNextLoginMethod);
         loginView.setOnFlashCallCompleteListener(this::loginUser);
         return loginView;
+    }
+
+    private void openNextLoginMethod() {
+        String countryCode = requireArguments().getString(ARG_COUNTRY_CODE, "");
+        LoginFlowResolver.LoginMethod nextMethod = LoginFlowResolver.resolveNext(
+                AppContextProvider.getParsedAppConfig(), countryCode,
+                LoginFlowResolver.LoginMethod.FLASH);
+        if (nextMethod == LoginFlowResolver.LoginMethod.SMS) {
+            requestSmsOtp();
+            return;
+        }
+        Toast.makeText(requireContext(), R.string.no_login_option_available,
+                Toast.LENGTH_LONG).show();
     }
 
     private void requestSmsOtp() {
@@ -134,11 +152,12 @@ public class FlashCallFragment extends Fragment {
     private void openSmsOtp(OtpHandler.OtpResult result) {
         String phoneNumber = requireArguments().getString(ARG_PHONE_NUMBER, "");
         String email = requireArguments().getString(ARG_EMAIL, "");
+        String countryCode = requireArguments().getString(ARG_COUNTRY_CODE, "");
         getParentFragmentManager()
                 .beginTransaction()
                 .setReorderingAllowed(true)
                 .replace(com.w3n.pinggo.R.id.login_fragment_container,
-                        OtpFragment.newSmsInstance(phoneNumber, email,
+                        OtpFragment.newSmsInstance(phoneNumber, email, countryCode,
                                 result.getReqId(), result.getProvider()))
                 .addToBackStack(OtpFragment.class.getSimpleName() + "_Sms")
                 .commit();

@@ -106,4 +106,8 @@
     <string name="field_required">This field is required</string>
     <string name="profile_updated">Profile updated</string>
     <string name="phone_cannot_be_changed">%1$s\n\nPhone number cannot be changed.</string>
+    <string name="unable_to_load_app_config">Unable to load App Config</string>
+    <string name="no_login_option_available">No login option is available for this country.</string>
+    <string name="sms_request_failed">Unable to request SMS verification.</string>
+    <string name="user_check_failed">Unable to check account.</string>
 </resources>

@@ -13,6 +13,11 @@ import retrofit2.http.POST;
 @Keep
 public interface AppRestAPI {
 
+    @POST("checkUserExists")
+    Call<JsonObject> checkUserExists(
+            @Body RequestBody body
+    );
+
     @POST("login")
     Call<JsonObject> login(
             @Body RequestBody body

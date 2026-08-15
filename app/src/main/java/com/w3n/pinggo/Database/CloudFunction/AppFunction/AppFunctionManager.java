@@ -53,6 +53,10 @@ public class AppFunctionManager {
     }
 
 
+    public void checkUserExists(String phoneNumber,  Callback callback){
+        LoginHandler.checkUserExists( appApi, phoneNumber,callback);
+    }
+
     public void userLogin(String phoneNumber,  Callback callback){
         LoginHandler.login( appApi, phoneNumber,callback);
     }

@@ -5,6 +5,7 @@ import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -14,11 +15,13 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.fragment.app.Fragment;
 
+import com.w3n.pinggo.AppContextProvider;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.OtpHandler;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.activity.HomeActivity;
 import com.w3n.pinggo.activity.SignUpActivity;
+import com.w3n.pinggo.utils.login.LoginFlowResolver;
 import com.w3n.pinggo.views.common.BlockingProgressView;
 import com.w3n.pinggo.views.login.OtpLoginView;
 
@@ -27,6 +30,7 @@ public class OtpFragment extends Fragment {
     private static final String VALID_OTP = "123456";
     private static final String ARG_PHONE_NUMBER = "phone_number";
     private static final String ARG_EMAIL = "email";
+    private static final String ARG_COUNTRY_CODE = "country_code";
     private static final String ARG_CHANNEL = "channel";
     private static final String ARG_SMS_REQ_ID = "sms_req_id";
     private static final String ARG_SMS_PROVIDER = "sms_provider";
@@ -47,30 +51,35 @@ public class OtpFragment extends Fragment {
             };
 
     public static OtpFragment newInstance(@NonNull String fullPhoneNumber,
-                                          @NonNull String email) {
-        return newEmailInstance(fullPhoneNumber, email);
+                                          @NonNull String email,
+                                          @NonNull String countryCode) {
+        return newEmailInstance(fullPhoneNumber, email, countryCode);
     }
 
     public static OtpFragment newEmailInstance(@NonNull String fullPhoneNumber,
-                                               @NonNull String email) {
-        return create(fullPhoneNumber, email, CHANNEL_EMAIL);
+                                               @NonNull String email,
+                                               @NonNull String countryCode) {
+        return create(fullPhoneNumber, email, countryCode, CHANNEL_EMAIL);
     }
 
     public static OtpFragment newWhatsappInstance(@NonNull String fullPhoneNumber,
-                                                  @NonNull String email) {
-        return create(fullPhoneNumber, email, CHANNEL_WHATSAPP);
-    }
-
-    public static OtpFragment newSmsInstance(@NonNull String fullPhoneNumber,
-                                             @NonNull String email) {
-        return create(fullPhoneNumber, email, CHANNEL_SMS);
+                                                  @NonNull String email,
+                                                  @NonNull String countryCode) {
+        return create(fullPhoneNumber, email, countryCode, CHANNEL_WHATSAPP);
     }
 
     public static OtpFragment newSmsInstance(@NonNull String fullPhoneNumber,
                                              @NonNull String email,
+                                             @NonNull String countryCode) {
+        return create(fullPhoneNumber, email, countryCode, CHANNEL_SMS);
+    }
+
+    public static OtpFragment newSmsInstance(@NonNull String fullPhoneNumber,
+                                             @NonNull String email,
+                                             @NonNull String countryCode,
                                              @NonNull String reqId,
                                              @NonNull String provider) {
-        OtpFragment fragment = create(fullPhoneNumber, email, CHANNEL_SMS);
+        OtpFragment fragment = create(fullPhoneNumber, email, countryCode, CHANNEL_SMS);
         Bundle arguments = fragment.getArguments();
         if (arguments != null) {
             arguments.putString(ARG_SMS_REQ_ID, reqId);
@@ -81,11 +90,13 @@ public class OtpFragment extends Fragment {
 
     private static OtpFragment create(@NonNull String fullPhoneNumber,
                                       @NonNull String email,
+                                      @NonNull String countryCode,
                                       @NonNull String channel) {
         OtpFragment fragment = new OtpFragment();
         Bundle arguments = new Bundle();
         arguments.putString(ARG_PHONE_NUMBER, fullPhoneNumber);
         arguments.putString(ARG_EMAIL, email);
+        arguments.putString(ARG_COUNTRY_CODE, countryCode);
         arguments.putString(ARG_CHANNEL, channel);
         fragment.setArguments(arguments);
         return fragment;
@@ -212,15 +223,77 @@ public class OtpFragment extends Fragment {
             return;
         }
 
+        openNextLoginMethod();
+    }
+
+    private void openNextLoginMethod() {
         String phoneNumber = requireArguments().getString(ARG_PHONE_NUMBER, "");
         String email = requireArguments().getString(ARG_EMAIL, "");
-        getParentFragmentManager()
-                .beginTransaction()
-                .setReorderingAllowed(true)
-                .replace(R.id.login_fragment_container,
-                        WhatsappLoginFragment.newInstance(phoneNumber, email))
-                .addToBackStack(WhatsappLoginFragment.class.getSimpleName())
-                .commit();
+        String countryCode = requireArguments().getString(ARG_COUNTRY_CODE, "");
+        LoginFlowResolver.LoginMethod nextMethod = LoginFlowResolver.resolveNext(
+                AppContextProvider.getParsedAppConfig(), countryCode,
+                LoginFlowResolver.LoginMethod.EMAIL);
+        switch (nextMethod) {
+            case WHATSAPP:
+                getParentFragmentManager()
+                        .beginTransaction()
+                        .setReorderingAllowed(true)
+                        .replace(R.id.login_fragment_container,
+                                WhatsappLoginFragment.newInstance(
+                                        phoneNumber, email, countryCode))
+                        .addToBackStack(WhatsappLoginFragment.class.getSimpleName())
+                        .commit();
+                break;
+            case FLASH:
+                getParentFragmentManager()
+                        .beginTransaction()
+                        .setReorderingAllowed(true)
+                        .replace(R.id.login_fragment_container,
+                                FlashCallFragment.newInstance(
+                                        phoneNumber, email, countryCode))
+                        .addToBackStack(FlashCallFragment.class.getSimpleName())
+                        .commit();
+                break;
+            case SMS:
+                requestNextSmsOtp(phoneNumber, email, countryCode);
+                break;
+            default:
+                Toast.makeText(requireContext(), R.string.no_login_option_available,
+                        Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void requestNextSmsOtp(String phoneNumber, String email, String countryCode) {
+        setRequestInProgress(true);
+        AppFunctionManager.getInstance().smsSend(phoneNumber,
+                new AppFunctionManager.Callback() {
+                    @Override
+                    public void onSuccess(Object object) {
+                        setRequestInProgress(false);
+                        if (!isAdded()) return;
+                        if (object instanceof OtpHandler.OtpResult) {
+                            OtpHandler.OtpResult result = (OtpHandler.OtpResult) object;
+                            getParentFragmentManager()
+                                    .beginTransaction()
+                                    .setReorderingAllowed(true)
+                                    .replace(R.id.login_fragment_container,
+                                            OtpFragment.newSmsInstance(phoneNumber, email,
+                                                    countryCode, result.getReqId(),
+                                                    result.getProvider()))
+                                    .addToBackStack(OtpFragment.class.getSimpleName() + "_Sms")
+                                    .commit();
+                            return;
+                        }
+                        Toast.makeText(requireContext(), R.string.sms_request_failed,
+                                Toast.LENGTH_LONG).show();
+                    }
+
+                    @Override
+                    public void onError(String error) {
+                        setRequestInProgress(false);
+                        if (isAdded() && loginView != null) loginView.showOtpError(error);
+                    }
+                });
     }
 
     private void loginUser() {

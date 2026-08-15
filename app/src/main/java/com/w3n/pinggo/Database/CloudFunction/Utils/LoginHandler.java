@@ -25,6 +25,77 @@ import retrofit2.Response;
 public class LoginHandler {
     private static final String TAG = "LoginHandler";
 
+    public static void checkUserExists(AppRestAPI appApi, String phoneNumber, AppFunctionManager.Callback callback){
+
+        JSONObject jsonObject = new JSONObject();
+        String body;
+        try {
+            jsonObject.put("phoneNumber",phoneNumber);
+            body = jsonObject.toString();
+        } catch (JSONException e) {
+            e.printStackTrace();
+            callback.onError("json error:"+e);
+            return;
+        }
+
+
+        Call<JsonObject> login = appApi.checkUserExists(RequestBody.create(body , MediaType.parse("application/json; charset=utf-8")));
+        login.enqueue(new Callback<JsonObject>() {
+            @Override
+            public void onResponse(@NonNull Call<JsonObject> call, @NonNull Response<JsonObject> response) {
+                handleCheckUserExistsResponse(response, callback);
+            }
+
+            @Override
+            public void onFailure(Call<JsonObject> call, Throwable t) {
+                if (callback != null) {
+                    callback.onError(getFailureMessage(t));
+                }
+            }
+        });
+    }
+
+    private static void handleCheckUserExistsResponse(
+            Response<JsonObject> response,
+            AppFunctionManager.Callback callback) {
+        if (callback == null) return;
+        if (!response.isSuccessful()) {
+            callback.onError(getErrorMessage(response));
+            return;
+        }
+
+        JsonObject responseBody = response.body();
+        if (responseBody == null) {
+            callback.onError("Empty server response.");
+            return;
+        }
+        if (!getBoolean(responseBody, "success")) {
+            callback.onError(getString(responseBody, "message", "Request failed."));
+            return;
+        }
+
+        boolean exists = getBoolean(responseBody, "exists");
+        String email = getString(responseBody, "email", null);
+        callback.onSuccess(new CheckUserExistsResult(exists, email));
+    }
+
+    public static final class CheckUserExistsResult {
+        private final boolean exists;
+        private final String email;
+
+        public CheckUserExistsResult(boolean exists, String email) {
+            this.exists = exists;
+            this.email = email == null ? "" : email.trim();
+        }
+
+        public boolean exists() {
+            return exists;
+        }
+
+        public String getEmail() {
+            return email;
+        }
+    }
 
     public static void login(AppRestAPI appApi, String phoneNumber, AppFunctionManager.Callback callback){
 

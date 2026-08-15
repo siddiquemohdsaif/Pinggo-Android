@@ -10,9 +10,16 @@ import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 
+import com.google.gson.Gson;
+import com.w3n.pinggo.modals.AppConfiguration;
+
+import org.json.JSONObject;
+
 
 public class AppContextProvider extends Application {
     private static Context appContext;
+    private static volatile JSONObject appConfig;
+    private static volatile AppConfiguration parsedAppConfig;
     public static boolean isDevelopment = false;
 
     @Override
@@ -48,6 +55,27 @@ public class AppContextProvider extends Application {
 
     public static Context getAppContext() {
         return appContext;
+    }
+
+    public static JSONObject getAppConfig() {
+        return appConfig;
+    }
+
+    public static AppConfiguration getParsedAppConfig() {
+        return parsedAppConfig;
+    }
+
+    public static boolean setAppConfig(JSONObject appConfig) {
+        try {
+            AppConfiguration parsedConfig = new Gson().fromJson(
+                    appConfig.toString(), AppConfiguration.class);
+            if (parsedConfig == null || parsedConfig.getLoginOption() == null) return false;
+            AppContextProvider.appConfig = appConfig;
+            parsedAppConfig = parsedConfig;
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private void addDevOverlay(Activity activity) {
