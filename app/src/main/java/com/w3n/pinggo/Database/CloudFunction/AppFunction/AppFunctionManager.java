@@ -9,6 +9,7 @@ import com.w3n.pinggo.Database.CloudFunction.RestApi.APIAuth;
 import com.w3n.pinggo.Database.CloudFunction.RestApi.AppRestAPI;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.EmailOtpHandler;
+import com.w3n.pinggo.Database.CloudFunction.Utils.GoogleAuthHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.OtpHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ProfilePhotoHandler;
@@ -94,6 +95,10 @@ public class AppFunctionManager {
 
     public void emailResend(String email, Callback callback) {
         EmailOtpHandler.resend(appApi, email, callback);
+    }
+
+    public void verifyGoogleIdToken(String idToken, Callback callback) {
+        GoogleAuthHandler.verify(appApi, idToken, callback);
     }
 
     public void updateUserName(String name, Callback callback) {

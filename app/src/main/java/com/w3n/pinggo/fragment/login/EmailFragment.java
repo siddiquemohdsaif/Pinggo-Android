@@ -1,18 +1,13 @@
 package com.w3n.pinggo.fragment.login;
 
-import android.accounts.AccountManager;
-import android.app.Activity;
-import android.content.ActivityNotFoundException;
-import android.content.Intent;
 import android.os.Bundle;
+import android.os.CancellationSignal;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.activity.result.ActivityResultLauncher;
-import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.activity.OnBackPressedCallback;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -20,18 +15,19 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.fragment.app.Fragment;
 
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
+import com.w3n.pinggo.Database.CloudFunction.Utils.GoogleAuthHandler;
 import com.w3n.pinggo.R;
+import com.w3n.pinggo.utils.login.GoogleSignInManager;
 import com.w3n.pinggo.views.common.BlockingProgressView;
 import com.w3n.pinggo.views.login.EmailLoginView;
-import com.google.android.gms.common.AccountPicker;
-
-import java.util.Collections;
 
 /** Collects the email after the phone-number step has been validated. */
 public class EmailFragment extends Fragment {
     private static final String ARG_PHONE_NUMBER = "phone_number";
     private EmailLoginView loginView;
     private BlockingProgressView blockingProgressView;
+    private GoogleSignInManager googleSignInManager;
+    private CancellationSignal googleSignInCancellation;
     private boolean requestInProgress;
     private final OnBackPressedCallback blockBackWhileLoading =
             new OnBackPressedCallback(false) {
@@ -40,25 +36,6 @@ public class EmailFragment extends Fragment {
                     // The OTP request cannot be cancelled by leaving this screen.
                 }
             };
-    private final ActivityResultLauncher<Intent> googleAccountPickerLauncher =
-            registerForActivityResult(new ActivityResultContracts.StartActivityForResult(),
-                    result -> {
-                        if (result.getResultCode() != Activity.RESULT_OK
-                                || result.getData() == null || loginView == null) {
-                            return;
-                        }
-                        Intent data = result.getData();
-                        String accountType = data.getStringExtra(AccountManager.KEY_ACCOUNT_TYPE);
-                        String email = data.getStringExtra(AccountManager.KEY_ACCOUNT_NAME);
-                        if (!"com.google".equals(accountType)
-                                || email == null || email.trim().isEmpty()) {
-                            return;
-                        }
-                        String selectedEmail = email.trim();
-                        loginView.setEmail(selectedEmail);
-                        sendEmailOtp(loginView.getFullPhoneNumber(), selectedEmail);
-                    });
-
     public static EmailFragment newInstance(@NonNull String fullPhoneNumber) {
         EmailFragment fragment = new EmailFragment();
         Bundle arguments = new Bundle();
@@ -76,25 +53,66 @@ public class EmailFragment extends Fragment {
         loginView = new EmailLoginView(requireContext(), phoneNumber);
         loginView.setOnBackListener(() -> getParentFragmentManager().popBackStack());
         loginView.setOnNextListener(this::sendEmailOtp);
-        loginView.setOnGoogleListener(this::openGoogleAccountPicker);
+        loginView.setOnGoogleListener(this::signInWithGoogle);
         return loginView;
     }
 
-    private void openGoogleAccountPicker() {
-        AccountPicker.AccountChooserOptions options =
-                new AccountPicker.AccountChooserOptions.Builder()
-                        .setAllowableAccountsTypes(Collections.singletonList("com.google"))
-                        .setAlwaysShowAccountPicker(true)
-                        .build();
-        try {
-            googleAccountPickerLauncher.launch(
-                    AccountPicker.newChooseAccountIntent(options));
-        } catch (ActivityNotFoundException ignored) {
-            if (loginView != null) {
-                loginView.showEmailError(
-                        getString(R.string.google_account_picker_unavailable));
-            }
-        }
+    private void signInWithGoogle() {
+        if (requestInProgress) return;
+        setRequestInProgress(true);
+        googleSignInManager = new GoogleSignInManager(requireContext());
+        googleSignInCancellation = googleSignInManager.signIn(
+                requireActivity(),
+                getString(R.string.google_web_client_id),
+                new GoogleSignInManager.Callback() {
+                    @Override
+                    public void onIdToken(@NonNull String idToken) {
+                        verifyGoogleIdToken(idToken);
+                    }
+
+                    @Override
+                    public void onCancelled() {
+                        setRequestInProgress(false);
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        setRequestInProgress(false);
+                        showGoogleError(message);
+                    }
+                });
+    }
+
+    private void verifyGoogleIdToken(@NonNull String idToken) {
+        AppFunctionManager.getInstance().verifyGoogleIdToken(
+                idToken, new AppFunctionManager.Callback() {
+                    @Override
+                    public void onSuccess(Object object) {
+                        setRequestInProgress(false);
+                        if (!(object instanceof GoogleAuthHandler.VerifiedGoogleAccount)
+                                || !isAdded() || loginView == null) {
+                            showGoogleError(getString(R.string.google_sign_in_failed));
+                            return;
+                        }
+                        GoogleAuthHandler.VerifiedGoogleAccount account =
+                                (GoogleAuthHandler.VerifiedGoogleAccount) object;
+                        loginView.setEmail(account.getEmail());
+                        openWhatsappFragment(loginView.getFullPhoneNumber(), account.getEmail());
+                    }
+
+                    @Override
+                    public void onError(String error) {
+                        setRequestInProgress(false);
+                        showGoogleError(error);
+                    }
+                });
+    }
+
+    private void showGoogleError(String message) {
+        if (!isAdded() || loginView == null) return;
+        String safeMessage = message == null || message.trim().isEmpty()
+                ? getString(R.string.google_sign_in_failed) : message;
+        loginView.showEmailError(safeMessage);
     }
 
     @Override
@@ -157,8 +175,21 @@ public class EmailFragment extends Fragment {
                 .commit();
     }
 
+    private void openWhatsappFragment(String fullPhoneNumber, String email) {
+        getParentFragmentManager()
+                .beginTransaction()
+                .setReorderingAllowed(true)
+                .replace(R.id.login_fragment_container,
+                        WhatsappLoginFragment.newInstance(fullPhoneNumber, email))
+                .addToBackStack(WhatsappLoginFragment.class.getSimpleName())
+                .commit();
+    }
+
     @Override
     public void onDestroyView() {
+        if (googleSignInCancellation != null) googleSignInCancellation.cancel();
+        googleSignInCancellation = null;
+        googleSignInManager = null;
         View view = getView();
         if (view != null) ViewCompat.setOnApplyWindowInsetsListener(view, null);
         if (loginView != null) {

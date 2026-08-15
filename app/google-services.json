@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "205285699883",
+    "project_id": "pinggo-c2c49",
+    "storage_bucket": "pinggo-c2c49.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:205285699883:android:2fde091a820c038628956e",
+        "android_client_info": {
+          "package_name": "com.w3n.pinggo"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "205285699883-6mjp7nd1iidpdu3l6ll7ra661m7ff6ib.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.w3n.pinggo",
+            "certificate_hash": "ca6bedd7a6fe3101a8b17b1fa8540c6300ae6421"
+          }
+        },
+        {
+          "client_id": "205285699883-jcl15ch1r4416am2ulv80304hadate58.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD8WgCzi2-zJf4iQFG70ZlpWGNUv4Zseq8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "205285699883-jcl15ch1r4416am2ulv80304hadate58.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

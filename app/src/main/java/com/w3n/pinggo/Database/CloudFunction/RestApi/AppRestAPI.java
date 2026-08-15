@@ -53,6 +53,11 @@ public interface AppRestAPI {
             @Body RequestBody body
     );
 
+    @POST("auth/google")
+    Call<JsonObject> verifyGoogleIdToken(
+            @Body RequestBody body
+    );
+
     @POST("profile/updateName")
     Call<JsonObject> updateName(
             @Body RequestBody body
