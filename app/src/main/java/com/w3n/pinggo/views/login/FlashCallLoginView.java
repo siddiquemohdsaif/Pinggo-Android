@@ -34,6 +34,8 @@ import java.util.Locale;
 /** Native-view implementation of the automatic flash-call verification screen. */
 public class FlashCallLoginView extends View {
     private static final float REFERENCE_WIDTH = 1080f;
+    private static final int FLASH_CALL_TIMEOUT_SECONDS = 90;
+    private static final int SMS_UNLOCK_DELAY_SECONDS = 60;
     private static final int ACCENT_COLOR = 0xFF019CC4;
     private static final int PRIMARY_TEXT_COLOR = 0xFF000E1A;
     private static final int MUTED_TEXT_COLOR = 0xFF656565;
@@ -48,14 +50,18 @@ public class FlashCallLoginView extends View {
     private final Bitmap backBitmap;
     private final Bitmap spinnerBitmap = createSpinnerBitmap();
     private final Bitmap clockBitmap = createClockBitmap();
+    private final Bitmap smsBitmap = createSmsBitmap();
+    private final Bitmap transparentBitmap = colorBitmap(Color.TRANSPARENT);
     private final String phoneNumber;
 
     private ZLayer cardContent;
     private Text smsCountdownText;
     private android.os.CountDownTimer countDownTimer;
-    private int remainingSeconds = 60;
+    private int remainingSeconds = FLASH_CALL_TIMEOUT_SECONDS;
+    private boolean smsAvailable;
     private OnBackListener backListener;
     private OnSmsAvailableListener smsAvailableListener;
+    private OnFlashCallCompleteListener flashCallCompleteListener;
     private int statusBarInset;
     private int navigationBarInset;
 
@@ -93,6 +99,10 @@ public class FlashCallLoginView extends View {
 
     public void setOnSmsAvailableListener(OnSmsAvailableListener listener) {
         smsAvailableListener = listener;
+    }
+
+    public void setOnFlashCallCompleteListener(OnFlashCallCompleteListener listener) {
+        flashCallCompleteListener = listener;
     }
 
     private void buildScreen() {
@@ -158,10 +168,24 @@ public class FlashCallLoginView extends View {
                 300f, 411f, 570f, 80f, 34f,
                 ACCENT_COLOR, FontVariation.REGULAR);
 
-        addImage(card, "clock", clockBitmap, 205f, 764f, 42f, 42f);
+        float iconLeft = smsAvailable ? 337f : 205f;
+        float textLeft = smsAvailable ? 397f : 260f;
+        float textWidth = smsAvailable ? 220f : 620f;
+        addImage(card, "sms_status_icon", smsAvailable ? smsBitmap : clockBitmap,
+                iconLeft, 764f, 42f, 42f);
         smsCountdownText = addCardTextAt(card, "sms_countdown", "",
-                260f, 744f, 620f, 80f, 31f,
-                0xFFA7ADB8, FontVariation.REGULAR);
+                textLeft, 744f, textWidth, 80f, 31f,
+                smsAvailable ? ACCENT_COLOR : 0xFFA7ADB8, FontVariation.REGULAR);
+        cardContent.add(new Button.Builder(getContext(), "sms_action", transparentBitmap,
+                cardPosition(card, smsAvailable ? 310f : 185f, 730f),
+                new Size(smsAvailable ? 320f : 680f, 105f))
+                .setRippleEnabled(smsAvailable)
+                .setRippleColor(0x16019CC4)
+                .setOnClickListener(id -> {
+                    if (smsAvailable && smsAvailableListener != null) {
+                        smsAvailableListener.onSmsAvailable();
+                    }
+                }));
     }
 
     private void addLegalNotice() {
@@ -183,31 +207,45 @@ public class FlashCallLoginView extends View {
 
     private void startCountdown() {
         if (countDownTimer != null) countDownTimer.cancel();
-        remainingSeconds = 60;
+        remainingSeconds = FLASH_CALL_TIMEOUT_SECONDS;
+        smsAvailable = false;
         updateCountdownText();
-        countDownTimer = new android.os.CountDownTimer(60_000L, 1_000L) {
+        countDownTimer = new android.os.CountDownTimer(
+                FLASH_CALL_TIMEOUT_SECONDS * 1_000L, 1_000L) {
             @Override
             public void onTick(long millisUntilFinished) {
                 remainingSeconds = (int) Math.ceil(millisUntilFinished / 1000.0);
+                boolean shouldEnableSms = remainingSeconds
+                        <= FLASH_CALL_TIMEOUT_SECONDS - SMS_UNLOCK_DELAY_SECONDS;
+                if (shouldEnableSms != smsAvailable) {
+                    smsAvailable = shouldEnableSms;
+                    buildScreen();
+                    return;
+                }
                 updateCountdownText();
             }
 
             @Override
             public void onFinish() {
                 remainingSeconds = 0;
+                smsAvailable = true;
                 updateCountdownText();
-                if (smsAvailableListener != null) smsAvailableListener.onSmsAvailable();
+                if (flashCallCompleteListener != null) {
+                    flashCallCompleteListener.onFlashCallComplete();
+                }
             }
         }.start();
     }
 
     private void updateCountdownText() {
         if (smsCountdownText == null) return;
-        smsCountdownText.setText(remainingSeconds > 0
-                ? getString(R.string.sms_available_countdown,
+        int smsWaitSeconds = Math.max(0,
+                remainingSeconds - (FLASH_CALL_TIMEOUT_SECONDS - SMS_UNLOCK_DELAY_SECONDS));
+        smsCountdownText.setText(smsAvailable
+                ? getString(R.string.send_sms)
+                : getString(R.string.sms_available_countdown,
                         String.format(Locale.US, "%d:%02d",
-                                remainingSeconds / 60, remainingSeconds % 60))
-                : getString(R.string.sms_available_now));
+                                smsWaitSeconds / 60, smsWaitSeconds % 60)));
         invalidate();
     }
 
@@ -305,6 +343,31 @@ public class FlashCallLoginView extends View {
         return bitmap;
     }
 
+    private static Bitmap createSmsBitmap() {
+        Bitmap bitmap = Bitmap.createBitmap(52, 52, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        paint.setColor(ACCENT_COLOR);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(3.5f);
+        android.graphics.RectF body = new android.graphics.RectF(6f, 9f, 46f, 39f);
+        canvas.drawRoundRect(body, 6f, 6f, paint);
+        android.graphics.Path tail = new android.graphics.Path();
+        tail.moveTo(16f, 39f);
+        tail.lineTo(12f, 47f);
+        tail.lineTo(27f, 39f);
+        canvas.drawPath(tail, paint);
+        canvas.drawLine(14f, 19f, 38f, 19f, paint);
+        canvas.drawLine(14f, 28f, 33f, 28f, paint);
+        return bitmap;
+    }
+
+    private static Bitmap colorBitmap(int color) {
+        Bitmap bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
+        bitmap.eraseColor(color);
+        return bitmap;
+    }
+
     private static String formatPhoneNumber(String phoneNumber) {
         if (phoneNumber == null) return "";
         String normalized = phoneNumber.trim().replaceAll("\\s+", "");
@@ -363,5 +426,9 @@ public class FlashCallLoginView extends View {
 
     public interface OnSmsAvailableListener {
         void onSmsAvailable();
+    }
+
+    public interface OnFlashCallCompleteListener {
+        void onFlashCallComplete();
     }
 }

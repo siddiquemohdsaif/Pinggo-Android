@@ -39,6 +39,7 @@ public class WhatsappLoginFragment extends Fragment {
         loginView = new WhatsappLoginView(requireContext(), phoneNumber);
         loginView.setOnBackListener(() -> getParentFragmentManager().popBackStack());
         loginView.setOnSendCodeListener(ignored -> openWhatsappOtp());
+        loginView.setOnTryAnotherMethodListener(this::openFlashCall);
         return loginView;
     }
 
@@ -51,6 +52,18 @@ public class WhatsappLoginFragment extends Fragment {
                 .replace(com.w3n.pinggo.R.id.login_fragment_container,
                         OtpFragment.newWhatsappInstance(phoneNumber, email))
                 .addToBackStack(OtpFragment.class.getSimpleName() + "_WhatsApp")
+                .commit();
+    }
+
+    private void openFlashCall() {
+        String phoneNumber = requireArguments().getString(ARG_PHONE_NUMBER, "");
+        String email = requireArguments().getString(ARG_EMAIL, "");
+        getParentFragmentManager()
+                .beginTransaction()
+                .setReorderingAllowed(true)
+                .replace(com.w3n.pinggo.R.id.login_fragment_container,
+                        FlashCallFragment.newInstance(phoneNumber, email))
+                .addToBackStack(FlashCallFragment.class.getSimpleName())
                 .commit();
     }
 

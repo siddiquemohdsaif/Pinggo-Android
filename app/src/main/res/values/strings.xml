@@ -36,6 +36,7 @@
     <string name="waiting_for_call">Waiting for automatic call ...</string>
     <string name="sms_available_countdown">You can request an SMS in %1$s</string>
     <string name="sms_available_now">You can request an SMS now</string>
+    <string name="send_sms">Send SMS</string>
     <string name="dob">Date of birth</string>
     <string name="description">Description</string>
     <string name="default_description">Hey There !</string>
