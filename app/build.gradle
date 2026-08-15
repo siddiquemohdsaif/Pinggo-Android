@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace 'com.w3n.wavestream'
+    namespace 'com.w3n.pinggo'
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -11,7 +11,7 @@ android {
     }
 
     defaultConfig {
-        applicationId "com.w3n.wavestream"
+        applicationId "com.w3n.pinggo"
         minSdk 24
         targetSdk 36
         versionCode 1

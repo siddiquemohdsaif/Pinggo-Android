@@ -1,9 +1,9 @@
-Wave Stream Roadmap
+PingGo Roadmap
 ===================
 
 Goal
 ----
-Connect and run the full Wave Stream app with real backend/database data instead of predefined local demo data.
+Connect and run the full PingGo app with real backend/database data instead of predefined local demo data.
 
 Milestone 1: Stabilize Current App Flow
 ---------------------------------------

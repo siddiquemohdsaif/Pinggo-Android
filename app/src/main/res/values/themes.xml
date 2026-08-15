@@ -1,26 +1,26 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme. -->
-    <style name="Base.Theme.WaveStream" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Base.Theme.PingGo" parent="Theme.Material3.DayNight.NoActionBar">
         <!-- Customize your light theme here. -->
         <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
     </style>
 
-    <style name="Theme.WaveStream" parent="Base.Theme.WaveStream" />
+    <style name="Theme.PingGo" parent="Base.Theme.PingGo" />
 
     <style name="ShapeAppearanceOverlay" />
 
-    <style name="ShapeAppearanceOverlay.WaveStream" />
+    <style name="ShapeAppearanceOverlay.PingGo" />
 
-    <style name="ShapeAppearanceOverlay.WaveStream.Circle">
+    <style name="ShapeAppearanceOverlay.PingGo.Circle">
         <item name="cornerFamily">rounded</item>
         <item name="cornerSize">50%</item>
     </style>
 
     <style name="Widget" />
 
-    <style name="Widget.WaveStream" />
+    <style name="Widget.PingGo" />
 
-    <style name="Widget.WaveStream.SettingsRow">
+    <style name="Widget.PingGo.SettingsRow">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">72dp</item>
         <item name="android:background">?attr/selectableItemBackground</item>
@@ -32,7 +32,7 @@
         <item name="android:paddingEnd">4dp</item>
     </style>
 
-    <style name="Widget.WaveStream.SettingsLabel">
+    <style name="Widget.PingGo.SettingsLabel">
         <item name="android:layout_width">0dp</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_weight">1</item>
@@ -41,7 +41,7 @@
         <item name="android:textStyle">bold</item>
     </style>
 
-    <style name="Widget.WaveStream.SettingsValue">
+    <style name="Widget.PingGo.SettingsValue">
         <item name="android:layout_width">0dp</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_weight">1.5</item>

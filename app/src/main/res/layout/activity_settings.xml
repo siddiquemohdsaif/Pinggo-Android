@@ -59,7 +59,7 @@
             android:padding="32dp"
             android:scaleType="centerCrop"
             android:src="@android:drawable/ic_menu_camera"
-            app:shapeAppearanceOverlay="@style/ShapeAppearanceOverlay.WaveStream.Circle" />
+            app:shapeAppearanceOverlay="@style/ShapeAppearanceOverlay.PingGo.Circle" />
 
         <Button
             android:id="@+id/editProfilePhotoButton"
@@ -71,43 +71,43 @@
 
         <LinearLayout
             android:id="@+id/nameRow"
-            style="@style/Widget.WaveStream.SettingsRow">
+            style="@style/Widget.PingGo.SettingsRow">
 
             <TextView
-                style="@style/Widget.WaveStream.SettingsLabel"
+                style="@style/Widget.PingGo.SettingsLabel"
                 android:text="@string/name" />
 
             <TextView
                 android:id="@+id/nameValueTextView"
-                style="@style/Widget.WaveStream.SettingsValue"
+                style="@style/Widget.PingGo.SettingsValue"
                 tools:text="Test User" />
         </LinearLayout>
 
         <LinearLayout
             android:id="@+id/descriptionRow"
-            style="@style/Widget.WaveStream.SettingsRow">
+            style="@style/Widget.PingGo.SettingsRow">
 
             <TextView
-                style="@style/Widget.WaveStream.SettingsLabel"
+                style="@style/Widget.PingGo.SettingsLabel"
                 android:text="@string/description" />
 
             <TextView
                 android:id="@+id/descriptionValueTextView"
-                style="@style/Widget.WaveStream.SettingsValue"
+                style="@style/Widget.PingGo.SettingsValue"
                 tools:text="Hey There !" />
         </LinearLayout>
 
         <LinearLayout
             android:id="@+id/phoneRow"
-            style="@style/Widget.WaveStream.SettingsRow">
+            style="@style/Widget.PingGo.SettingsRow">
 
             <TextView
-                style="@style/Widget.WaveStream.SettingsLabel"
+                style="@style/Widget.PingGo.SettingsLabel"
                 android:text="@string/phone_number" />
 
             <TextView
                 android:id="@+id/phoneValueTextView"
-                style="@style/Widget.WaveStream.SettingsValue"
+                style="@style/Widget.PingGo.SettingsValue"
                 tools:text="&lt;plus&gt;1234567890" />
         </LinearLayout>
 
@@ -139,7 +139,7 @@
             android:textSize="24sp"
             android:textStyle="bold" />
 
-        <com.w3n.wavestream.views.CropImageView
+        <com.w3n.pinggo.views.CropImageView
             android:id="@+id/cropImageView"
             android:layout_width="match_parent"
             android:layout_height="0dp"

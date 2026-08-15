@@ -37,7 +37,7 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/signUpTitleTextView"
-        app:shapeAppearanceOverlay="@style/ShapeAppearanceOverlay.WaveStream.Circle" />
+        app:shapeAppearanceOverlay="@style/ShapeAppearanceOverlay.PingGo.Circle" />
 
     <Button
         android:id="@+id/selectProfilePhotoButton"
@@ -118,7 +118,7 @@
             android:textSize="24sp"
             android:textStyle="bold" />
 
-        <com.w3n.wavestream.views.CropImageView
+        <com.w3n.pinggo.views.CropImageView
             android:id="@+id/cropImageView"
             android:layout_width="match_parent"
             android:layout_height="0dp"

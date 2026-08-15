@@ -198,7 +198,7 @@
         </LinearLayout>
     </LinearLayout>
 
-    <com.w3n.wavestream.views.animator.WaveAnimatorView
+    <com.w3n.pinggo.views.animator.WaveAnimatorView
         android:id="@+id/waveAnimatorView"
         android:layout_width="0dp"
         android:layout_height="0dp"
