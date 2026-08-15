@@ -49,6 +49,7 @@ public class OtpLoginView extends View {
     private final Bitmap digitBoxBitmap;
     private final Bitmap keyBitmap;
     private final Bitmap backspaceKeyBitmap;
+    private final Bitmap transparentBitmap;
     private final Channel channel;
     private final String identifier;
     private final StringBuilder otp = new StringBuilder(6);
@@ -69,6 +70,7 @@ public class OtpLoginView extends View {
     };
     private OnBackListener backListener;
     private OnOtpCompleteListener otpCompleteListener;
+    private OnResendListener resendListener;
     private int statusBarInset;
 
     public OtpLoginView(Context context, @NonNull Channel channel,
@@ -81,7 +83,7 @@ public class OtpLoginView extends View {
         setClickable(true);
         setFocusable(true);
         backgroundBitmap = BitmapFactory.decodeResource(
-                getResources(), R.drawable.pinggo_login_background);
+                getResources(), R.drawable.pinggo_login_background_2);
         int illustrationResource = R.drawable.pinggo_email_illustration;
         if (channel == Channel.WHATSAPP) {
             illustrationResource = R.drawable.pinggo_whatsapp_illustration;
@@ -95,6 +97,7 @@ public class OtpLoginView extends View {
         keyBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.otp_key);
         backspaceKeyBitmap = BitmapFactory.decodeResource(
                 getResources(), R.drawable.otp_backspace_key);
+        transparentBitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
     }
 
     @Override
@@ -120,6 +123,10 @@ public class OtpLoginView extends View {
 
     public void setOnOtpCompleteListener(OnOtpCompleteListener listener) {
         otpCompleteListener = listener;
+    }
+
+    public void setOnResendListener(OnResendListener listener) {
+        resendListener = listener;
     }
 
     private void buildScreen() {
@@ -206,6 +213,16 @@ public class OtpLoginView extends View {
     }
 
     private void addResendMessage() {
+        contentLayer.add(new Button.Builder(getContext(), "resend_button", transparentBitmap,
+                position(565f, 1145f), new Size(145f, 80f))
+                .setImageScaleType(Image.ScaleType.FIT_XY)
+                .setRippleEnabled(true)
+                .setRippleColor(0x22019CC4)
+                .setOnClickListener(id -> {
+                    if (remainingSeconds == 0 && resendListener != null) {
+                        resendListener.onResend();
+                    }
+                }));
         addText("resend_prefix", getString(R.string.didnt_receive_code),
                 255f, 1155f, 320f, 60f, 32f, MUTED_TEXT_COLOR);
         addText("resend_action", getString(R.string.resend),
@@ -238,6 +255,13 @@ public class OtpLoginView extends View {
     public void clearOtpError() {
         if (otpErrorText != null) otpErrorText.setVisible(false);
         invalidate();
+    }
+
+    public void resetAfterResend() {
+        otp.setLength(0);
+        clearOtpError();
+        updateOtpDisplay();
+        startCountdown();
     }
 
     private void addKeypad() {
@@ -447,5 +471,9 @@ public class OtpLoginView extends View {
 
     public interface OnOtpCompleteListener {
         void onOtpComplete(String otp);
+    }
+
+    public interface OnResendListener {
+        void onResend();
     }
 }

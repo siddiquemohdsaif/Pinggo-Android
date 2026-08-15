@@ -23,18 +23,33 @@ public interface AppRestAPI {
             @Body RequestBody body
     );
 
-    @POST("otp/send")
-    Call<JsonObject> sendOtp(
+    @POST("otp/smsSend")
+    Call<JsonObject> smsSend(
             @Body RequestBody body
     );
 
-    @POST("otp/verify")
-    Call<JsonObject> verifyOtp(
+    @POST("otp/smsVerify")
+    Call<JsonObject> smsVerify(
             @Body RequestBody body
     );
 
-    @POST("otp/retry")
-    Call<JsonObject> retryOtp(
+    @POST("otp/smsResend")
+    Call<JsonObject> smsResend(
+            @Body RequestBody body
+    );
+
+    @POST("otp/emailSend")
+    Call<JsonObject> emailSend(
+            @Body RequestBody body
+    );
+
+    @POST("otp/emailVerify")
+    Call<JsonObject> emailVerify(
+            @Body RequestBody body
+    );
+
+    @POST("otp/emailResend")
+    Call<JsonObject> emailResend(
             @Body RequestBody body
     );
 

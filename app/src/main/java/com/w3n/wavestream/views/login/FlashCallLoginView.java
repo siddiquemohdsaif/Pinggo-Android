@@ -66,7 +66,7 @@ public class FlashCallLoginView extends View {
         setClickable(true);
         setFocusable(true);
         backgroundBitmap = BitmapFactory.decodeResource(
-                getResources(), R.drawable.pinggo_login_background);
+                getResources(), R.drawable.pinggo_login_background_2);
         illustrationBitmap = BitmapFactory.decodeResource(
                 getResources(), R.drawable.pinggo_flash_call_illustration);
         backBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.ic_email_back);

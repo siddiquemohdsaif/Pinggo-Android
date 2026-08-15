@@ -69,7 +69,7 @@ public class WhatsappLoginView extends View {
         setClickable(true);
         setFocusable(true);
         backgroundBitmap = BitmapFactory.decodeResource(
-                getResources(), R.drawable.pinggo_login_background);
+                getResources(), R.drawable.pinggo_login_background_2);
         illustrationBitmap = BitmapFactory.decodeResource(
                 getResources(), R.drawable.pinggo_whatsapp_illustration);
         whatsappLogoBitmap = BitmapFactory.decodeResource(

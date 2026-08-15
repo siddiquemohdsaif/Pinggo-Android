@@ -1,5 +1,7 @@
 package com.w3n.wavestream.views.login;
 
+import static android.widget.Toast.LENGTH_SHORT;
+
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -19,6 +21,8 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 
@@ -36,6 +40,7 @@ import com.ogfa.nativeviews.textfield.TextField;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.wavestream.R;
+import com.w3n.wavestream.activity.LoginActivity;
 
 /** Native-view implementation of the email step in the login flow. */
 public class EmailLoginView extends View {
@@ -56,8 +61,8 @@ public class EmailLoginView extends View {
     private final Bitmap arrowBitmap;
     private final Bitmap whiteBitmap = colorBitmap(Color.WHITE);
     private final Bitmap dividerBitmap = colorBitmap(0xFFE3E7EC);
-    private final Bitmap buttonBitmap = createButtonBackground();
-    private final Bitmap googleButtonBitmap = createGoogleButtonBackground();
+    private final Bitmap buttonBitmap;
+    private final Bitmap googleButtonBitmap;
     private final Bitmap googleLogoBitmap;
     private final String fullPhoneNumber;
 
@@ -68,6 +73,7 @@ public class EmailLoginView extends View {
     private String savedEmail = "";
     private OnNextListener nextListener;
     private OnBackListener backListener;
+    private OnGoogleListener googleListener;
     private int statusBarInset;
     private int navigationBarInset;
     private int keyboardInset;
@@ -81,12 +87,14 @@ public class EmailLoginView extends View {
         setFocusable(true);
         setFocusableInTouchMode(true);
         backgroundBitmap = BitmapFactory.decodeResource(
-                getResources(), R.drawable.pinggo_login_background);
+                getResources(), R.drawable.pinggo_login_background_2);
         illustrationBitmap = BitmapFactory.decodeResource(
                 getResources(), R.drawable.pinggo_email_illustration);
         backBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.ic_email_back);
         arrowBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.ic_pinggo_arrow);
+        buttonBitmap = createButtonBackground(arrowBitmap);
         googleLogoBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.google_logo);
+        googleButtonBitmap = createGoogleButtonBackground(googleLogoBitmap);
     }
 
     @Override
@@ -123,6 +131,20 @@ public class EmailLoginView extends View {
 
     public void setOnBackListener(OnBackListener listener) {
         backListener = listener;
+    }
+
+    public void setOnGoogleListener(OnGoogleListener listener) {
+        googleListener = listener;
+    }
+
+    public void setEmail(String email) {
+        savedEmail = email == null ? "" : email.trim();
+        if (emailField != null) {
+            emailField.setText(savedEmail);
+            emailField.setSelection(savedEmail.length());
+        }
+        clearEmailError();
+        invalidate();
     }
 
     private void buildScreen() {
@@ -227,6 +249,14 @@ public class EmailLoginView extends View {
                 .setCornerRadius(25.352f)
                 .setPadding(38.028f, 22.817f)
                 .setOnTextChangedListener((id, text) -> clearEmailError())
+                .setOnEditorActionListener((id, actionId) -> {
+                    if (actionId != EditorInfo.IME_ACTION_NEXT
+                            && actionId != EditorInfo.IME_ACTION_DONE) {
+                        return false;
+                    }
+                    dismissKeyboard();
+                    return true;
+                })
                 .setOnFocusChangedListener((id, focused) -> {
                     updateFocusedFieldAppearance();
                     post(this::updateKeyboardTranslation);
@@ -248,6 +278,17 @@ public class EmailLoginView extends View {
         loginCardContent.add(emailErrorText);
     }
 
+    public void dismissKeyboard() {
+        if (emailField != null) emailField.clearFocus();
+        InputMethodManager inputMethodManager = (InputMethodManager)
+                getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (inputMethodManager != null) {
+            inputMethodManager.hideSoftInputFromWindow(getWindowToken(), 0);
+        }
+        updateKeyboardTranslation();
+        invalidate();
+    }
+
     private void addSendCodeButton(Card card) {
         loginCardContent.add(new Button.Builder(getContext(), "next_button", buttonBitmap,
                 getString(R.string.send_code), cardPosition(card, 63.380f, 575f),
@@ -263,8 +304,6 @@ public class EmailLoginView extends View {
                 .setRippleDuration(320L)
                 .setRippleOrigin(Button.RippleOrigin.TOUCH)
                 .setOnClickListener(id -> handleNext()));
-        addImage(card, "next_arrow", arrowBitmap,
-                706.056f, 620.633f, 48.169f, 48.169f);
     }
 
     private void addDivider(Card card) {
@@ -286,9 +325,12 @@ public class EmailLoginView extends View {
                 .setTextSize(36f)
                 .setTextColor(0xFF001B48)
                 .setRippleEnabled(true)
-                .setRippleColor(0x16019CC4));
-        addImage(card, "google_logo", googleLogoBitmap,
-                174f, 881f, 64f, 64f);
+                .setRippleColor(0x16019CC4)
+                .setOnClickListener(id -> {
+                    if (googleListener != null) googleListener.onGoogleClick();
+                }));
+//        addImage(card, "google_logo", googleLogoBitmap,
+//                174f, 881f, 64f, 64f);
     }
 
     private void handleNext() {
@@ -305,7 +347,7 @@ public class EmailLoginView extends View {
         if (nextListener != null) nextListener.onNext(fullPhoneNumber, email);
     }
 
-    private void showEmailError(String message) {
+    public void showEmailError(String message) {
         if (emailErrorText != null) emailErrorText.setText(message).setVisible(true);
         if (emailField != null) {
             emailField.requestFocus();
@@ -431,7 +473,7 @@ public class EmailLoginView extends View {
         return bitmap;
     }
 
-    private static Bitmap createButtonBackground() {
+    private static Bitmap createButtonBackground(Bitmap arrow) {
         Bitmap bitmap = Bitmap.createBitmap(642, 110, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -439,10 +481,15 @@ public class EmailLoginView extends View {
                 0xFF05A7D5, 0xFF019BC5, Shader.TileMode.CLAMP));
         canvas.drawRoundRect(0f, 0f, bitmap.getWidth(), bitmap.getHeight(),
                 22f, 22f, paint);
+        if (arrow != null && !arrow.isRecycled()) {
+            paint.setShader(null);
+            paint.setFilterBitmap(true);
+            canvas.drawBitmap(arrow, null, new RectF(557f, 36f, 595f, 74f), paint);
+        }
         return bitmap;
     }
 
-    private static Bitmap createGoogleButtonBackground() {
+    private static Bitmap createGoogleButtonBackground(Bitmap googleLogoBitmap) {
         Bitmap bitmap = Bitmap.createBitmap(642, 110, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -454,6 +501,11 @@ public class EmailLoginView extends View {
         paint.setColor(0xFFE0E5EC);
         canvas.drawRoundRect(2f, 2f, bitmap.getWidth() - 2f, bitmap.getHeight() - 2f,
                 20f, 20f, paint);
+        if (googleLogoBitmap != null && !googleLogoBitmap.isRecycled()) {
+            paint.setShader(null);
+            paint.setFilterBitmap(true);
+            canvas.drawBitmap(googleLogoBitmap, null, new RectF(90f, 30f, 140f, 80f), paint);
+        }
         return bitmap;
     }
 
@@ -498,5 +550,9 @@ public class EmailLoginView extends View {
 
     public interface OnBackListener {
         void onBack();
+    }
+
+    public interface OnGoogleListener {
+        void onGoogleClick();
     }
 }

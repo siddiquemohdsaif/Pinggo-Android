@@ -8,6 +8,7 @@ import com.w3n.wavestream.Database.CloudFunction.RestApi.API;
 import com.w3n.wavestream.Database.CloudFunction.RestApi.APIAuth;
 import com.w3n.wavestream.Database.CloudFunction.RestApi.AppRestAPI;
 import com.w3n.wavestream.Database.CloudFunction.Utils.ChatHandler;
+import com.w3n.wavestream.Database.CloudFunction.Utils.EmailOtpHandler;
 import com.w3n.wavestream.Database.CloudFunction.Utils.LoginHandler;
 import com.w3n.wavestream.Database.CloudFunction.Utils.OtpHandler;
 import com.w3n.wavestream.Database.CloudFunction.Utils.ProfilePhotoHandler;
@@ -59,29 +60,40 @@ public class AppFunctionManager {
         LoginHandler.signUp(appApi, name, phoneNumber, description, callback);
     }
 
-    public void sendOtp(String identifier, Callback callback) {
-        OtpHandler.sendOtp(appApi, identifier, callback);
+    public void smsSend(String identifier, Callback callback) {
+        OtpHandler.sendSms(appApi, identifier, callback);
     }
 
-    public void sendOtp(String identifier, String provider, Callback callback) {
-        OtpHandler.sendOtp(appApi, identifier,provider, callback);
+    public void smsSend(String identifier, String provider, Callback callback) {
+        OtpHandler.sendSms(appApi, identifier, provider, callback);
     }
 
-
-    public void verifyOtp(String reqId, String otp, Callback callback) {
-        OtpHandler.verifyOtp(appApi, reqId, otp, callback);
+    public void smsVerify(String reqId, String otp, Callback callback) {
+        OtpHandler.verifySms(appApi, reqId, otp, callback);
     }
 
-    public void verifyOtp(String reqId, String provider, String otp, Callback callback) {
-        OtpHandler.verifyOtp(appApi, reqId, provider, otp, callback);
+    public void smsVerify(String reqId, String provider, String otp, Callback callback) {
+        OtpHandler.verifySms(appApi, reqId, provider, otp, callback);
     }
 
-    public void retryOtp(String reqId, Callback callback) {
-        OtpHandler.retryOtp(appApi, reqId, OtpHandler.RETRY_CHANNEL_SMS, callback);
+    public void smsResend(String reqId, Callback callback) {
+        OtpHandler.resendSms(appApi, reqId, OtpHandler.RETRY_CHANNEL_SMS, callback);
     }
 
-    public void retryOtp(String reqId, String provider, Callback callback) {
-        OtpHandler.retryOtp(appApi, reqId, provider, OtpHandler.RETRY_CHANNEL_SMS, callback);
+    public void smsResend(String reqId, String provider, Callback callback) {
+        OtpHandler.resendSms(appApi, reqId, provider, OtpHandler.RETRY_CHANNEL_SMS, callback);
+    }
+
+    public void emailSend(String email, Callback callback) {
+        EmailOtpHandler.send(appApi, email, callback);
+    }
+
+    public void emailVerify(String email, String code, Callback callback) {
+        EmailOtpHandler.verify(appApi, email, code, callback);
+    }
+
+    public void emailResend(String email, Callback callback) {
+        EmailOtpHandler.resend(appApi, email, callback);
     }
 
     public void updateUserName(String name, Callback callback) {

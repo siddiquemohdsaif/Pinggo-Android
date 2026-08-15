@@ -45,11 +45,11 @@ public class OtpHandler {
         }
     }
 
-    public static void sendOtp(AppRestAPI appApi, String identifier, AppFunctionManager.Callback callback) {
-        sendOtp(appApi,identifier,null,callback);
+    public static void sendSms(AppRestAPI appApi, String identifier, AppFunctionManager.Callback callback) {
+        sendSms(appApi, identifier, null, callback);
     }
 
-    public static void sendOtp(AppRestAPI appApi, String identifier, String provider, AppFunctionManager.Callback callback) {
+    public static void sendSms(AppRestAPI appApi, String identifier, String provider, AppFunctionManager.Callback callback) {
         JSONObject jsonObject = new JSONObject();
         try {
             jsonObject.put("identifier", normalizeIdentifier(identifier));
@@ -61,14 +61,14 @@ public class OtpHandler {
             return;
         }
 
-        enqueueOtpCall("sendOtp", appApi.sendOtp(createJsonBody(jsonObject)), callback);
+        enqueueOtpCall(appApi.smsSend(createJsonBody(jsonObject)), callback);
     }
 
-    public static void verifyOtp(AppRestAPI appApi, String reqId, String otp, AppFunctionManager.Callback callback) {
-        verifyOtp(appApi, reqId, null, otp, callback);
+    public static void verifySms(AppRestAPI appApi, String reqId, String otp, AppFunctionManager.Callback callback) {
+        verifySms(appApi, reqId, null, otp, callback);
     }
 
-    public static void verifyOtp(AppRestAPI appApi, String reqId, String provider, String otp, AppFunctionManager.Callback callback) {
+    public static void verifySms(AppRestAPI appApi, String reqId, String provider, String otp, AppFunctionManager.Callback callback) {
         JSONObject jsonObject = new JSONObject();
         try {
             jsonObject.put("reqId", reqId);
@@ -81,14 +81,14 @@ public class OtpHandler {
             return;
         }
 
-        enqueueOtpCall("verifyOtp", appApi.verifyOtp(createJsonBody(jsonObject)), callback);
+        enqueueOtpCall(appApi.smsVerify(createJsonBody(jsonObject)), callback);
     }
 
-    public static void retryOtp(AppRestAPI appApi, String reqId, int retryChannel, AppFunctionManager.Callback callback) {
-        retryOtp(appApi, reqId, null, retryChannel, callback);
+    public static void resendSms(AppRestAPI appApi, String reqId, int retryChannel, AppFunctionManager.Callback callback) {
+        resendSms(appApi, reqId, null, retryChannel, callback);
     }
 
-    public static void retryOtp(AppRestAPI appApi, String reqId, String provider, int retryChannel, AppFunctionManager.Callback callback) {
+    public static void resendSms(AppRestAPI appApi, String reqId, String provider, int retryChannel, AppFunctionManager.Callback callback) {
         JSONObject jsonObject = new JSONObject();
         try {
             jsonObject.put("reqId", reqId);
@@ -101,10 +101,10 @@ public class OtpHandler {
             return;
         }
 
-        enqueueOtpCall("retryOtp", appApi.retryOtp(createJsonBody(jsonObject)), callback);
+        enqueueOtpCall(appApi.smsResend(createJsonBody(jsonObject)), callback);
     }
 
-    private static void enqueueOtpCall(String action, Call<JsonObject> call, AppFunctionManager.Callback callback) {
+    private static void enqueueOtpCall(Call<JsonObject> call, AppFunctionManager.Callback callback) {
         call.enqueue(new Callback<JsonObject>() {
             @Override
             public void onResponse(@NonNull Call<JsonObject> call, @NonNull Response<JsonObject> response) {
