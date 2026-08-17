@@ -50,6 +50,7 @@ import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.hbb20.CCPCountry;
 import com.hbb20.CountryCodePicker;
 import com.w3n.pinggo.R;
+import com.w3n.pinggo.views.common.NativeTextFieldImeController;
 import com.w3n.pinggo.utils.login.CountryAdapter;
 import com.w3n.pinggo.utils.login.CountryCardLayout;
 import com.w3n.pinggo.utils.login.CountryDetector;
@@ -180,7 +181,8 @@ public class PhoneNumberLoginView extends View {
     }
 
     public String getFullPhoneNumber() {
-        return selectedCountryCode + getPhoneNumber().replaceAll("\\s+", "");
+        return selectedCountryCode.replace("+", "")
+                + getPhoneNumber().replaceAll("\\s+", "");
     }
 
     public String getSelectedRegionCode() {
@@ -190,7 +192,7 @@ public class PhoneNumberLoginView extends View {
     public boolean isValidPhoneNumber() {
         try {
             Phonenumber.PhoneNumber parsedNumber = phoneNumberUtil.parse(
-                    getFullPhoneNumber(), selectedRegionCode);
+                    "+" + getFullPhoneNumber(), selectedRegionCode);
             return phoneNumberUtil.isValidNumberForRegion(parsedNumber, selectedRegionCode);
         } catch (Exception ignored) {
             return false;
@@ -912,6 +914,8 @@ public class PhoneNumberLoginView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        NativeTextFieldImeController.dismissOnOutsideDown(
+                this, layerGroup, loginCardLayer, event);
         return layerGroup.onTouchEvent(event) || super.onTouchEvent(event);
     }
 

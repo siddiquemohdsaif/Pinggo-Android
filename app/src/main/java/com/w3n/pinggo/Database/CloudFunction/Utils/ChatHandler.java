@@ -26,7 +26,7 @@ public class ChatHandler {
     public static void getChatList(AppRestAPI appApi, String phoneNumber, AppFunctionManager.Callback callback) {
         JSONObject jsonObject = new JSONObject();
         try {
-            jsonObject.put("phoneNumber", phoneNumber);
+            jsonObject.put("phoneNumber", normalizePhoneNumber(phoneNumber));
         } catch (JSONException e) {
             handleJsonError(e, callback);
             return;
@@ -39,7 +39,7 @@ public class ChatHandler {
         JSONObject jsonObject = new JSONObject();
         try {
             jsonObject.put("chatId", chatId);
-            jsonObject.put("phoneNumber", phoneNumber);
+            jsonObject.put("phoneNumber", normalizePhoneNumber(phoneNumber));
         } catch (JSONException e) {
             handleJsonError(e, callback);
             return;
@@ -51,8 +51,12 @@ public class ChatHandler {
     public static void discoverContacts(AppRestAPI appApi, String phoneNumber, List<String> contacts, AppFunctionManager.Callback callback) {
         JSONObject jsonObject = new JSONObject();
         try {
-            jsonObject.put("phoneNumber", phoneNumber);
-            jsonObject.put("contacts", new JSONArray(contacts));
+            jsonObject.put("phoneNumber", normalizePhoneNumber(phoneNumber));
+            JSONArray normalizedContacts = new JSONArray();
+            for (String contact : contacts) {
+                normalizedContacts.put(normalizePhoneNumber(contact));
+            }
+            jsonObject.put("contacts", normalizedContacts);
         } catch (JSONException e) {
             handleJsonError(e, callback);
             return;
@@ -151,5 +155,10 @@ public class ChatHandler {
         }
         String value = element.getAsString();
         return value == null || value.isEmpty() ? fallback : value;
+    }
+
+    private static String normalizePhoneNumber(String phoneNumber) {
+        if (phoneNumber == null) return "";
+        return phoneNumber.trim().replaceFirst("^<plus>", "").replaceFirst("^\\+", "");
     }
 }

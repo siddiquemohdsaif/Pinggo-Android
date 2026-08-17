@@ -30,7 +30,7 @@ public class LoginHandler {
         JSONObject jsonObject = new JSONObject();
         String body;
         try {
-            jsonObject.put("phoneNumber",phoneNumber);
+            jsonObject.put("phoneNumber", normalizePhoneNumber(phoneNumber));
             body = jsonObject.toString();
         } catch (JSONException e) {
             e.printStackTrace();
@@ -102,7 +102,7 @@ public class LoginHandler {
         JSONObject jsonObject = new JSONObject();
         String body;
         try {
-            jsonObject.put("phoneNumber",phoneNumber);
+            jsonObject.put("phoneNumber", normalizePhoneNumber(phoneNumber));
             body = jsonObject.toString();
         } catch (JSONException e) {
             e.printStackTrace();
@@ -134,7 +134,7 @@ public class LoginHandler {
         String body;
         try {
             jsonObject.put("name",name);
-            jsonObject.put("phoneNumber",phoneNumber);
+            jsonObject.put("phoneNumber", normalizePhoneNumber(phoneNumber));
             if (email != null && !email.trim().isEmpty()) {
                 jsonObject.put("email", email.trim());
             }
@@ -259,5 +259,10 @@ public class LoginHandler {
         }
         String value = element.getAsString();
         return value == null || value.isEmpty() ? fallback : value;
+    }
+
+    private static String normalizePhoneNumber(String phoneNumber) {
+        if (phoneNumber == null) return "";
+        return phoneNumber.trim().replaceFirst("^<plus>", "").replaceFirst("^\\+", "");
     }
 }

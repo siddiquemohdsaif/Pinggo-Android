@@ -298,9 +298,9 @@ public class ChatsView extends ScrollView {
             return "";
         }
         if (uid.startsWith("<plus>")) {
-            return "+" + uid.substring("<plus>".length());
+            return uid.substring("<plus>".length());
         }
-        return uid;
+        return uid.startsWith("+") ? uid.substring(1) : uid;
     }
 
     private String getAvatarText(Chat chat) {

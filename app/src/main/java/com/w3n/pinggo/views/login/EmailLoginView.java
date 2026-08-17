@@ -41,6 +41,7 @@ import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.activity.LoginActivity;
+import com.w3n.pinggo.views.common.NativeTextFieldImeController;
 
 /** Native-view implementation of the email step in the login flow. */
 public class EmailLoginView extends View {
@@ -525,6 +526,8 @@ public class EmailLoginView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        NativeTextFieldImeController.dismissOnOutsideDown(
+                this, layerGroup, loginCardLayer, event);
         return layerGroup.onTouchEvent(event) || super.onTouchEvent(event);
     }
 

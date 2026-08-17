@@ -16,6 +16,7 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 
 import com.w3n.pinggo.R;
+import com.w3n.pinggo.views.common.ExitAppController;
 
 /** Hosts the fragment-based profile setup flow shown after verification. */
 public class SignUpActivity extends AppCompatActivity {
@@ -29,6 +30,7 @@ public class SignUpActivity extends AppCompatActivity {
         configureSystemBars();
         setContentView(R.layout.activity_sign_up);
         installStatusBarScrim();
+        ExitAppController.install(this, getSupportFragmentManager());
     }
 
     private void configureSystemBars() {

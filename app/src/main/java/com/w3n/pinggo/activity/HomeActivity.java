@@ -21,6 +21,7 @@ import com.w3n.pinggo.modals.CallLog;
 import com.w3n.pinggo.modals.Chat;
 import com.w3n.pinggo.views.CallsView;
 import com.w3n.pinggo.views.ChatsView;
+import com.w3n.pinggo.views.common.ExitAppController;
 
 public class HomeActivity extends AppCompatActivity {
     private TextView topTitleTextView;
@@ -36,6 +37,7 @@ public class HomeActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_home);
+        ExitAppController.install(this, null);
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
             Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);

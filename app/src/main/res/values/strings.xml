@@ -1,5 +1,9 @@
 <resources>
     <string name="app_name">PingGo</string>
+    <string name="exit_app_title">Exit PingGo?</string>
+    <string name="exit_app_message">Are you sure you want to close the app?</string>
+    <string name="exit_app_action">Exit</string>
+    <string name="cancel">Cancel</string>
     <string name="app_logo">PingGo logo</string>
     <string name="login_title">Login</string>
     <string name="sign_up">Sign up</string>

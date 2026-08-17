@@ -707,13 +707,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         }
         String normalized = value.trim();
         if (normalized.startsWith("<plus>")) {
-            return normalized;
+            return normalized.substring("<plus>".length());
         }
         if (normalized.startsWith("+")) {
-            return "<plus>" + normalized.substring(1);
-        }
-        if (normalized.matches("^[0-9]{7,15}$")) {
-            return "<plus>" + normalized;
+            return normalized.substring(1);
         }
         return normalized;
     }
@@ -724,11 +721,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         }
         String normalized = value.trim();
         if (normalized.startsWith("<plus>")) {
-            return "+" + normalized.substring("<plus>".length());
+            return normalized.substring("<plus>".length());
         }
         if (normalized.startsWith("+")) {
-            return normalized;
+            return normalized.substring(1);
         }
-        return "+" + normalized;
+        return normalized;
     }
 }

@@ -473,9 +473,9 @@ public class NewChatActivity extends AppCompatActivity {
             return "";
         }
         if (uid.startsWith("<plus>")) {
-            return "+" + uid.substring("<plus>".length());
+            return uid.substring("<plus>".length());
         }
-        return uid.startsWith("+") ? uid : "+" + uid;
+        return uid.startsWith("+") ? uid.substring(1) : uid;
     }
 
     private String buildChatId(String currentPhoneNumber, String otherPhoneNumber) {

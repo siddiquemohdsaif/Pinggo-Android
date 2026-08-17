@@ -18,6 +18,7 @@ import androidx.fragment.app.Fragment;
 
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.fragment.login.PhoneNumberFragment;
+import com.w3n.pinggo.views.common.ExitAppController;
 
 /** Hosts the fragments that make up the login flow. */
 public class LoginActivity extends AppCompatActivity {
@@ -27,6 +28,7 @@ public class LoginActivity extends AppCompatActivity {
         configureSystemBars();
         setContentView(R.layout.activity_login);
         installStatusBarScrim();
+        ExitAppController.install(this, getSupportFragmentManager());
     }
 
     private void configureSystemBars() {

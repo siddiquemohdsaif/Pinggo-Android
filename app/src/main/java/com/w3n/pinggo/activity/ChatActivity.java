@@ -615,7 +615,7 @@ public class ChatActivity extends AppCompatActivity {
         for (String phoneNumber : phoneNumbers) {
             String normalizedPhoneNumber = normalizePhoneNumber(phoneNumber);
             if (!normalizedPhoneNumber.equals(currentPhoneNumber)) {
-                return "<plus>" + normalizedPhoneNumber;
+                return normalizedPhoneNumber;
             }
         }
         return "";
