@@ -61,8 +61,9 @@ public class AppFunctionManager {
         LoginHandler.login( appApi, phoneNumber,callback);
     }
 
-    public void userSignUp(String name, String phoneNumber, String description, Callback callback){
-        LoginHandler.signUp(appApi, name, phoneNumber, description, callback);
+    public void userSignUp(String name, String phoneNumber, String email,
+                           String description, Callback callback){
+        LoginHandler.signUp(appApi, name, phoneNumber, email, description, callback);
     }
 
     public void smsSend(String identifier, Callback callback) {

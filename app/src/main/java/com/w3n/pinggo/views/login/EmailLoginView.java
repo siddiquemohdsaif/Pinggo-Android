@@ -170,7 +170,7 @@ public class EmailLoginView extends View {
     private void addTopContent() {
         float topOffset = designUnits(statusBarInset);
         foregroundLayer.add(new Button.Builder(getContext(), "back_button", backBitmap,
-                position(87f, 85f + topOffset), new Size(64f, 64f))
+                position(87f, 95f + topOffset), new Size(64f, 64f))
                 .setImageScaleType(Image.ScaleType.FIT_CENTER)
                 .setRippleEnabled(true)
                 .setRippleColor(0x22000000)
@@ -219,7 +219,7 @@ public class EmailLoginView extends View {
                 PRIMARY_TEXT_COLOR, FontVariation.BOLD, 1);
         addCardText(card, "card_description", getString(R.string.email_description),
                 162f, 760f, 112f, 31.690f,
-                MUTED_TEXT_COLOR, FontVariation.REGULAR, 2);
+                MUTED_TEXT_COLOR, FontVariation.MEDIUM, 2);
         addEmailField(card);
         addSendCodeButton(card);
         addDivider(card);

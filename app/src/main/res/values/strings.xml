@@ -3,7 +3,12 @@
     <string name="app_logo">PingGo logo</string>
     <string name="login_title">Login</string>
     <string name="sign_up">Sign up</string>
+    <string name="set_up_profile">Set up your profile</string>
+    <string name="profile_setup_description">Add your name and an optional\nprofile photo.</string>
     <string name="name">Name</string>
+    <string name="name_hint">Enter your name</string>
+    <string name="profile_name_visibility">This will be visible to your contacts on PingGo.</string>
+    <string name="profile_change_later">You can change this anytime from settings.</string>
     <string name="email">Email</string>
     <string name="enter_your_email">Enter Your Email Id</string>
     <string name="email_phone_context">Continuing with %1$s</string>

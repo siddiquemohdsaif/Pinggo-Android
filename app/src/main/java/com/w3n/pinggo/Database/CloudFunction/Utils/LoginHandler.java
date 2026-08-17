@@ -127,13 +127,17 @@ public class LoginHandler {
         });
     }
 
-    public static void signUp(AppRestAPI appApi, String name, String phoneNumber, String description, AppFunctionManager.Callback callback){
+    public static void signUp(AppRestAPI appApi, String name, String phoneNumber, String email,
+                              String description, AppFunctionManager.Callback callback){
 
         JSONObject jsonObject = new JSONObject();
         String body;
         try {
             jsonObject.put("name",name);
             jsonObject.put("phoneNumber",phoneNumber);
+            if (email != null && !email.trim().isEmpty()) {
+                jsonObject.put("email", email.trim());
+            }
             jsonObject.put("description",description);
             body = jsonObject.toString();
         } catch (JSONException e) {

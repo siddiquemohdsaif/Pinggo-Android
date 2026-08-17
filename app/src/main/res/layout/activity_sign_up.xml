@@ -1,154 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
-    android:id="@+id/main"
+    android:id="@+id/sign_up_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/screen_background"
-    android:padding="24dp"
-    tools:context=".SignUpActivity">
+    tools:context=".activity.SignUpActivity">
 
-    <TextView
-        android:id="@+id/signUpTitleTextView"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:text="@string/sign_up"
-        android:textColor="@color/primary_text"
-        android:textSize="28sp"
-        android:textStyle="bold"
-        app:layout_constraintBottom_toTopOf="@id/profilePhotoImageView"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintVertical_chainStyle="packed" />
+    <androidx.fragment.app.FragmentContainerView
+        android:id="@+id/sign_up_fragment_container"
+        android:name="com.w3n.pinggo.fragment.signup.ProfileSetupFragment"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
 
-    <com.google.android.material.imageview.ShapeableImageView
-        android:id="@+id/profilePhotoImageView"
-        android:layout_width="104dp"
-        android:layout_height="104dp"
-        android:layout_marginTop="24dp"
-        android:background="@drawable/bg_input"
-        android:contentDescription="@string/profile_photo"
-        android:padding="28dp"
-        android:scaleType="centerCrop"
-        android:src="@android:drawable/ic_menu_camera"
-        app:layout_constraintBottom_toTopOf="@id/selectProfilePhotoButton"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/signUpTitleTextView"
-        app:shapeAppearanceOverlay="@style/ShapeAppearanceOverlay.PingGo.Circle" />
-
-    <Button
-        android:id="@+id/selectProfilePhotoButton"
-        android:layout_width="0dp"
-        android:layout_height="48dp"
-        android:layout_marginTop="12dp"
-        android:text="@string/select_profile_photo"
-        app:layout_constraintBottom_toTopOf="@id/nameEditText"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/profilePhotoImageView" />
-
-    <EditText
-        android:id="@+id/nameEditText"
-        android:layout_width="0dp"
-        android:layout_height="56dp"
-        android:layout_marginTop="16dp"
-        android:autofillHints="name"
-        android:background="@drawable/bg_input"
-        android:hint="@string/name"
-        android:inputType="textPersonName|textCapWords"
-        android:maxLines="1"
-        android:paddingHorizontal="16dp"
-        android:textColor="@color/primary_text"
-        android:textColorHint="@color/secondary_text"
-        app:layout_constraintBottom_toTopOf="@id/descriptionEditText"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/selectProfilePhotoButton" />
-
-    <EditText
-        android:id="@+id/descriptionEditText"
-        android:layout_width="0dp"
-        android:layout_height="56dp"
-        android:layout_marginTop="16dp"
-        android:autofillHints="none"
-        android:background="@drawable/bg_input"
-        android:hint="@string/description"
-        android:inputType="textCapSentences"
-        android:maxLines="1"
-        android:paddingHorizontal="16dp"
-        android:text="@string/default_description"
-        android:textColor="@color/primary_text"
-        android:textColorHint="@color/secondary_text"
-        app:layout_constraintBottom_toTopOf="@id/signUpConfirmButton"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/nameEditText" />
-
-    <Button
-        android:id="@+id/signUpConfirmButton"
-        android:layout_width="0dp"
-        android:layout_height="56dp"
-        android:layout_marginTop="16dp"
-        android:text="@string/confirm"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/descriptionEditText" />
-
-    <LinearLayout
-        android:id="@+id/cropContainer"
-        android:layout_width="0dp"
+    <View
+        android:id="@+id/sign_up_status_bar_scrim"
+        android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:background="@color/screen_background"
-        android:orientation="vertical"
-        android:visibility="gone"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent">
+        android:layout_gravity="top"
+        android:background="@color/login_system_bar_background"
+        android:clickable="false"
+        android:importantForAccessibility="no" />
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/select_crop_region"
-            android:textColor="@color/primary_text"
-            android:textSize="24sp"
-            android:textStyle="bold" />
+    <com.w3n.pinggo.views.common.BlockingProgressView
+        android:id="@+id/blocking_progress"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:importantForAccessibility="no" />
 
-        <com.w3n.pinggo.views.CropImageView
-            android:id="@+id/cropImageView"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_marginTop="16dp"
-            android:layout_weight="1"
-            android:background="@color/black" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="56dp"
-            android:layout_marginTop="16dp"
-            android:gravity="center"
-            android:orientation="horizontal">
-
-            <Button
-                android:id="@+id/retryCropButton"
-                android:layout_width="0dp"
-                android:layout_height="56dp"
-                android:layout_marginEnd="8dp"
-                android:layout_weight="1"
-                android:text="@string/retry" />
-
-            <Button
-                android:id="@+id/okCropButton"
-                android:layout_width="0dp"
-                android:layout_height="56dp"
-                android:layout_marginStart="8dp"
-                android:layout_weight="1"
-                android:text="@android:string/ok" />
-        </LinearLayout>
-    </LinearLayout>
-
-</androidx.constraintlayout.widget.ConstraintLayout>
+</FrameLayout>

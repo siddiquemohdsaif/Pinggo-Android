@@ -6,9 +6,11 @@ import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Typeface;
 import android.text.Spannable;
 import android.text.SpannableString;
 import android.text.style.ForegroundColorSpan;
+import android.text.style.StyleSpan;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
@@ -23,6 +25,7 @@ import com.ogfa.nativeviews.component.Position;
 import com.ogfa.nativeviews.component.Size;
 import com.ogfa.nativeviews.font.NativeFonts;
 import com.ogfa.nativeviews.image.Image;
+import com.ogfa.nativeviews.progress.Progress;
 import com.ogfa.nativeviews.text.FontVariation;
 import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.zlayer.ZLayer;
@@ -48,7 +51,6 @@ public class FlashCallLoginView extends View {
     private final Bitmap backgroundBitmap;
     private final Bitmap illustrationBitmap;
     private final Bitmap backBitmap;
-    private final Bitmap spinnerBitmap = createSpinnerBitmap();
     private final Bitmap clockBitmap = createClockBitmap();
     private final Bitmap smsBitmap = createSmsBitmap();
     private final Bitmap transparentBitmap = colorBitmap(Color.TRANSPARENT);
@@ -125,7 +127,7 @@ public class FlashCallLoginView extends View {
 
     private void addBackButton() {
         foregroundLayer.add(new Button.Builder(getContext(), "back_button", backBitmap,
-                position(87f, 85f + designUnits(statusBarInset)), new Size(64f, 64f))
+                position(87f, 95f + designUnits(statusBarInset)), new Size(64f, 64f))
                 .setImageScaleType(Image.ScaleType.FIT_CENTER)
                 .setRippleEnabled(true)
                 .setRippleColor(0x22000000)
@@ -158,12 +160,21 @@ public class FlashCallLoginView extends View {
         addCardText(card, "title", getString(R.string.phone_verification),
                 70f, 820f, 80f, 50f, PRIMARY_TEXT_COLOR, FontVariation.BOLD, 1);
         addCardText(card, "calling_message",
-                getString(R.string.calling_your_phone, phoneNumber),
-                165f, 820f, 70f, 33f, MUTED_TEXT_COLOR, FontVariation.REGULAR, 1);
+                createCallingMessage(),
+                165f, 820f, 70f, 33f, MUTED_TEXT_COLOR, FontVariation.MEDIUM, 1);
         addCardText(card, "instructions", getString(R.string.flash_call_instructions),
-                265f, 760f, 110f, 33f, MUTED_TEXT_COLOR, FontVariation.REGULAR, 2);
+                265f, 760f, 110f, 33f, MUTED_TEXT_COLOR, FontVariation.MEDIUM, 2);
 
-        addImage(card, "waiting_spinner", spinnerBitmap, 225f, 426f, 52f, 52f);
+        cardContent.add(new Progress.Builder(getContext(), "waiting_spinner",
+                cardPosition(card, 225f, 426f), new Size(52f, 52f))
+                .setStyle(Progress.Style.CIRCULAR)
+                .setMode(Progress.Mode.INDETERMINATE)
+                .setTrackColor(0x33019CC4)
+                .setProgressColor(ACCENT_COLOR)
+                .setThickness(6f)
+                .setIndeterminateSweepAngle(110f)
+                .setIndeterminateDuration(900L)
+                .setStrokeCap(Progress.StrokeCap.ROUND));
         addCardTextAt(card, "waiting_message", getString(R.string.waiting_for_call),
                 300f, 411f, 570f, 80f, 34f,
                 ACCENT_COLOR, FontVariation.REGULAR);
@@ -249,7 +260,18 @@ public class FlashCallLoginView extends View {
         invalidate();
     }
 
-    private void addCardText(Card card, String id, String value, float top, float width,
+    private SpannableString createCallingMessage() {
+        SpannableString message = new SpannableString(
+                getString(R.string.calling_your_phone, phoneNumber));
+        int phoneStart = message.toString().indexOf(phoneNumber);
+        if (phoneStart >= 0) {
+            message.setSpan(new StyleSpan(Typeface.BOLD), phoneStart,
+                    phoneStart + phoneNumber.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        return message;
+    }
+
+    private void addCardText(Card card, String id, CharSequence value, float top, float width,
                              float height, float textSize, int color,
                              FontVariation variation, int maxLines) {
         cardContent.add(new Text.Builder(getContext(), id, value,
@@ -314,20 +336,6 @@ public class FlashCallLoginView extends View {
             text.setSpan(new ForegroundColorSpan(ACCENT_COLOR), start,
                     start + phrase.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
-    }
-
-    private static Bitmap createSpinnerBitmap() {
-        Bitmap bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(bitmap);
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        for (int index = 0; index < 12; index++) {
-            double angle = Math.toRadians(index * 30d);
-            paint.setColor(Color.argb(55 + index * 16, 1, 156, 196));
-            float x = 32f + (float) Math.cos(angle) * 23f;
-            float y = 32f + (float) Math.sin(angle) * 23f;
-            canvas.drawCircle(x, y, 3.5f, paint);
-        }
-        return bitmap;
     }
 
     private static Bitmap createClockBitmap() {

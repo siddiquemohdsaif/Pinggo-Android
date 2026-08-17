@@ -52,7 +52,6 @@ public class WhatsappLoginView extends View {
     private final Bitmap actionButtonBitmap = createActionButtonBackground();
     private final Bitmap methodBackgroundBitmap = createOutlinedBackground();
     private final Bitmap recommendedBackgroundBitmap = createRecommendedBackground();
-    private final Bitmap transparentBitmap = colorBitmap(Color.TRANSPARENT);
     private final String fullPhoneNumber;
 
     private ZLayer cardContent;
@@ -123,7 +122,7 @@ public class WhatsappLoginView extends View {
 
     private void addBackButton() {
         foregroundLayer.add(new Button.Builder(getContext(), "back_button", backBitmap,
-                position(87f, 85f + designUnits(statusBarInset)), new Size(64f, 64f))
+                position(87f, 95f + designUnits(statusBarInset)), new Size(64f, 64f))
                 .setImageScaleType(Image.ScaleType.FIT_CENTER)
                 .setRippleEnabled(true)
                 .setRippleColor(0x22000000)
@@ -206,24 +205,32 @@ public class WhatsappLoginView extends View {
     }
 
     private void addAlternativeMethod(Card card) {
-        addCardTextAt(card, "alternative_prefix", getString(R.string.cant_use_whatsapp),
-                145f, 756f, 420f, 70f, 31f,
-                MUTED_TEXT_COLOR, FontVariation.REGULAR, Text.Alignment.START);
-        cardContent.add(new Button.Builder(getContext(), "try_another_method",
-                transparentBitmap, getString(R.string.try_another_method),
-                cardPosition(card, 470f, 756f),
-                new Size(330f, 70f))
+        cardContent.add(new Text.Builder(getContext(), "alternative_method",
+                createAlternativeMethodText(), cardPosition(card, 0f, 756f),
+                new Size(700f, 70f))
                 .setFont(NativeFonts.INTER)
                 .setFontVariations(FontVariation.REGULAR)
                 .setTextSize(31f)
-                .setTextColor(ACCENT_COLOR)
-                .setRippleEnabled(true)
-                .setRippleColor(0x16019CC4)
+                .setTextColor(MUTED_TEXT_COLOR)
+                .setAlignment(Text.Alignment.CENTER)
+                .setVerticalAlignment(Text.VerticalAlignment.CENTER)
+                .setWrapEnabled(false)
+                .horizontalCenter(true)
                 .setOnClickListener(id -> {
                     if (tryAnotherMethodListener != null) {
                         tryAnotherMethodListener.onTryAnotherMethod();
                     }
                 }));
+    }
+
+    private SpannableString createAlternativeMethodText() {
+        String prefix = getString(R.string.cant_use_whatsapp);
+        String action = getString(R.string.try_another_method);
+        SpannableString text = new SpannableString(prefix + " " + action);
+        int actionStart = prefix.length() + 1;
+        text.setSpan(new ForegroundColorSpan(ACCENT_COLOR), actionStart, text.length(),
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        return text;
     }
 
     private void addLegalNotice() {

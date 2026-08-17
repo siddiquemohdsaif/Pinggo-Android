@@ -109,6 +109,7 @@ public class FlashCallFragment extends Fragment {
         if (requestInProgress || smsFlowSelected) return;
         setRequestInProgress(true);
         String phoneNumber = requireArguments().getString(ARG_PHONE_NUMBER, "");
+        String email = requireArguments().getString(ARG_EMAIL, "");
         AppFunctionManager.getInstance().userLogin(phoneNumber,
                 new AppFunctionManager.Callback() {
                     @Override
@@ -130,6 +131,9 @@ public class FlashCallFragment extends Fragment {
                             Intent signUpIntent = new Intent(
                                     requireContext(), SignUpActivity.class);
                             signUpIntent.putExtra(SignUpActivity.EXTRA_PHONE_NUMBER, phoneNumber);
+                            if (!email.trim().isEmpty()) {
+                                signUpIntent.putExtra(SignUpActivity.EXTRA_EMAIL, email.trim());
+                            }
                             startActivity(signUpIntent);
                             requireActivity().finish();
                             return;

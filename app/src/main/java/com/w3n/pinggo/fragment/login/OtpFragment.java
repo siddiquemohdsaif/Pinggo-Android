@@ -183,9 +183,9 @@ public class OtpFragment extends Fragment {
         if (isSmsChannel()) {
             if (smsReqId.isEmpty()) {
                 setRequestInProgress(false);
-                if (loginView != null) {
-                    loginView.showOtpError(getString(R.string.otp_request_first));
-                }
+                String phoneNumber = requireArguments()
+                        .getString(ARG_PHONE_NUMBER, "");
+                manager.smsSend(phoneNumber, resendCallback(true));
                 return;
             }
             manager.smsResend(smsReqId, smsProvider, resendCallback(true));
@@ -300,6 +300,7 @@ public class OtpFragment extends Fragment {
         if (requestInProgress) return;
         setRequestInProgress(true);
         String phoneNumber = requireArguments().getString(ARG_PHONE_NUMBER, "");
+        String email = requireArguments().getString(ARG_EMAIL, "");
         AppFunctionManager.getInstance().userLogin(phoneNumber,
                 new AppFunctionManager.Callback() {
                     @Override
@@ -321,6 +322,9 @@ public class OtpFragment extends Fragment {
                             Intent signUpIntent = new Intent(
                                     requireContext(), SignUpActivity.class);
                             signUpIntent.putExtra(SignUpActivity.EXTRA_PHONE_NUMBER, phoneNumber);
+                            if (!email.trim().isEmpty()) {
+                                signUpIntent.putExtra(SignUpActivity.EXTRA_EMAIL, email.trim());
+                            }
                             startActivity(signUpIntent);
                             requireActivity().finish();
                             return;

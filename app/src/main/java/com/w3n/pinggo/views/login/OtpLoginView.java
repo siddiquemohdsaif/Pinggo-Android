@@ -6,6 +6,9 @@ import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.os.CountDownTimer;
+import android.text.Spannable;
+import android.text.SpannableString;
+import android.text.style.ForegroundColorSpan;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
@@ -49,7 +52,6 @@ public class OtpLoginView extends View {
     private final Bitmap digitBoxBitmap;
     private final Bitmap keyBitmap;
     private final Bitmap backspaceKeyBitmap;
-    private final Bitmap transparentBitmap;
     private final Channel channel;
     private final String identifier;
     private final StringBuilder otp = new StringBuilder(6);
@@ -97,7 +99,6 @@ public class OtpLoginView extends View {
         keyBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.otp_key);
         backspaceKeyBitmap = BitmapFactory.decodeResource(
                 getResources(), R.drawable.otp_backspace_key);
-        transparentBitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
     }
 
     @Override
@@ -153,7 +154,7 @@ public class OtpLoginView extends View {
 
     private void addBackButton() {
         contentLayer.add(new Button.Builder(getContext(), "back_button", backBitmap,
-                position(87f, 85f + designUnits(statusBarInset)), new Size(64f, 64f))
+                position(87f, 95f + designUnits(statusBarInset)), new Size(64f, 64f))
                 .setImageScaleType(Image.ScaleType.FIT_CENTER)
                 .setRippleEnabled(true)
                 .setRippleColor(0x22000000)
@@ -185,7 +186,7 @@ public class OtpLoginView extends View {
                 755f, isPhoneChannel ? 900f : 760f, 60f, 38f,
                 MUTED_TEXT_COLOR, FontVariation.REGULAR, 1);
         addCenteredText("identifier", identifier,
-                807f, 900f, 65f, 38f, PRIMARY_TEXT_COLOR, FontVariation.BOLD, 1);
+                807f, 900f, 65f, 38f, PRIMARY_TEXT_COLOR, FontVariation.MEDIUM, 1);
     }
 
     private void addOtpBoxes() {
@@ -213,22 +214,23 @@ public class OtpLoginView extends View {
     }
 
     private void addResendMessage() {
-        contentLayer.add(new Button.Builder(getContext(), "resend_button", transparentBitmap,
-                position(565f, 1145f), new Size(145f, 80f))
-                .setImageScaleType(Image.ScaleType.FIT_XY)
-                .setRippleEnabled(true)
-                .setRippleColor(0x22019CC4)
+        countdownText = new Text.Builder(getContext(), "resend_message", createResendMessage(),
+                position(0f, 1155f), new Size(650f, 60f))
+                .setFont(NativeFonts.INTER)
+                .setFontVariations(FontVariation.REGULAR)
+                .setTextSize(32f)
+                .setTextColor(MUTED_TEXT_COLOR)
+                .setAlignment(Text.Alignment.CENTER)
+                .setVerticalAlignment(Text.VerticalAlignment.CENTER)
+                .setWrapEnabled(false)
+                .horizontalCenter(true)
                 .setOnClickListener(id -> {
                     if (remainingSeconds == 0 && resendListener != null) {
                         resendListener.onResend();
                     }
-                }));
-        addText("resend_prefix", getString(R.string.didnt_receive_code),
-                255f, 1155f, 320f, 60f, 32f, MUTED_TEXT_COLOR);
-        addText("resend_action", getString(R.string.resend),
-                574f, 1155f, 125f, 60f, 32f, ACCENT_COLOR);
-        countdownText = addText("resend_countdown", "",
-                700f, 1155f, 190f, 60f, 32f, MUTED_TEXT_COLOR);
+                })
+                .build(this);
+        contentLayer.add(countdownText);
     }
 
     private void addOtpError() {
@@ -358,26 +360,21 @@ public class OtpLoginView extends View {
 
     private void updateCountdownText() {
         if (countdownText == null) return;
-        countdownText.setText(remainingSeconds > 0
-                ? String.format(Locale.US, "in 00:%02d", remainingSeconds)
-                : "");
+        countdownText.setText(createResendMessage());
         invalidate();
     }
 
-    private Text addText(String id, String value, float left, float top, float width,
-                         float height, float textSize, int color) {
-        Text text = new Text.Builder(getContext(), id, value,
-                position(left, top), new Size(width, height))
-                .setFont(NativeFonts.INTER)
-                .setFontVariations(FontVariation.REGULAR)
-                .setTextSize(textSize)
-                .setTextColor(color)
-                .setAlignment(Text.Alignment.START)
-                .setVerticalAlignment(Text.VerticalAlignment.CENTER)
-                .setWrapEnabled(false)
-                .build(this);
-        contentLayer.add(text);
-        return text;
+    private SpannableString createResendMessage() {
+        String prefix = getString(R.string.didnt_receive_code);
+        String action = getString(R.string.resend);
+        String timer = remainingSeconds > 0
+                ? String.format(Locale.US, " in 00:%02d", remainingSeconds)
+                : "";
+        SpannableString message = new SpannableString(prefix + " " + action + timer);
+        int actionStart = prefix.length() + 1;
+        message.setSpan(new ForegroundColorSpan(ACCENT_COLOR), actionStart,
+                actionStart + action.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        return message;
     }
 
     private void addCenteredText(String id, String value, float top, float width,
