@@ -65,6 +65,50 @@ public class ChatHandler {
         enqueueChatCall(appApi.discoverContacts(createJsonBody(jsonObject)), callback);
     }
 
+    public static void syncMessages(AppRestAPI appApi, String phoneNumber, long lastSyncTime,
+                                    AppFunctionManager.Callback callback) {
+        JSONObject jsonObject = new JSONObject();
+        try {
+            jsonObject.put("phoneNumber", normalizePhoneNumber(phoneNumber));
+            jsonObject.put("lastSyncTime", lastSyncTime);
+        } catch (JSONException e) {
+            handleJsonError(e, callback);
+            return;
+        }
+
+        enqueueChatCall(appApi.syncChatMessages(createJsonBody(jsonObject)), callback);
+    }
+
+    public static void syncPresence(AppRestAPI appApi, List<String> userIds,
+                                    AppFunctionManager.Callback callback) {
+        JSONObject jsonObject = new JSONObject();
+        try {
+            JSONArray normalizedIds = new JSONArray();
+            for (String userId : userIds) {
+                normalizedIds.put(normalizePhoneNumber(userId));
+            }
+            jsonObject.put("userIds", normalizedIds);
+        } catch (JSONException e) {
+            handleJsonError(e, callback);
+            return;
+        }
+
+        enqueueChatCall(appApi.syncPresence(createJsonBody(jsonObject)), callback);
+    }
+
+    public static void updateFcmToken(AppRestAPI appApi, String token,
+                                      AppFunctionManager.Callback callback) {
+        JSONObject jsonObject = new JSONObject();
+        try {
+            jsonObject.put("fcmToken", token == null ? "" : token.trim());
+        } catch (JSONException e) {
+            handleJsonError(e, callback);
+            return;
+        }
+
+        enqueueChatCall(appApi.updateFcmToken(createJsonBody(jsonObject)), callback);
+    }
+
     private static void enqueueChatCall(Call<JsonObject> call, AppFunctionManager.Callback callback) {
         call.enqueue(new Callback<JsonObject>() {
             @Override

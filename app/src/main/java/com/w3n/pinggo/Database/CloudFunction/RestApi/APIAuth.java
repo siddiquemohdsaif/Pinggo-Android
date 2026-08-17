@@ -13,6 +13,13 @@ import retrofit2.converter.gson.GsonConverterFactory;
 public class APIAuth {
     private static final String BASE_URL = "https://function.cloudsw3.com/pinggo-app-api/";
     private static final String DEV_URL = "https://function.cloudsw3.com/pinggo-app-api_dev/";
+    private static final String DEV_SERVER_HOST = "function.cloudsw3.com";
+    private static final String RELEASE_SERVER_HOST = "function.cloudsw3.com";
+    private static final int WEBSOCKET_PORT = 4100;
+
+    public static final String WS_URL = AppContextProvider.isDevelopment
+            ? "ws://" + DEV_SERVER_HOST + ":" + WEBSOCKET_PORT + "/ws"
+            : "ws://" + RELEASE_SERVER_HOST + ":" + WEBSOCKET_PORT + "/ws";
 
     private Retrofit retrofit;
 

@@ -10,7 +10,10 @@ import androidx.lifecycle.LiveData;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
+import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
+import com.w3n.pinggo.Database.CloudFunction.WebSocket.ChatWebSocketClient;
 import com.w3n.pinggo.data.local.MessageDao;
 import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.local.MessageStatus;
@@ -19,10 +22,6 @@ import com.w3n.pinggo.data.local.ChatEntity;
 import com.w3n.pinggo.data.local.PresenceDao;
 import com.w3n.pinggo.data.local.PresenceEntity;
 import com.w3n.pinggo.data.local.PingGoDatabase;
-import com.w3n.pinggo.data.remote.AuthenticatedApiFactory;
-import com.w3n.pinggo.data.remote.ChatApiService;
-import com.w3n.pinggo.data.remote.ChatWebSocketClient;
-import com.w3n.pinggo.data.remote.JsonParserUtil;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -30,10 +29,6 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-
-import retrofit2.Call;
-import retrofit2.Callback;
-import retrofit2.Response;
 
 public class ChatRepository implements ChatWebSocketClient.Listener {
     public interface EventListener {
@@ -48,7 +43,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     private final MessageDao messageDao;
     private final ChatDao chatDao;
     private final PresenceDao presenceDao;
-    private final ChatApiService chatApi;
+    private final AppFunctionManager appFunctionManager;
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ChatWebSocketClient socketClient;
@@ -61,7 +56,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         messageDao = database.messageDao();
         chatDao = database.chatDao();
         presenceDao = database.presenceDao();
-        chatApi = AuthenticatedApiFactory.createChatApi(appContext);
+        appFunctionManager = AppFunctionManager.getInstance();
         socketClient = new ChatWebSocketClient(this);
     }
 
@@ -285,16 +280,16 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     public void syncAfterReconnect(String phoneNumber) {
         ioExecutor.execute(() -> {
             Long lastSync = messageDao.getLastSyncTime();
-            JsonObject body = new JsonObject();
-            body.addProperty("phoneNumber", toServerPhoneNumber(phoneNumber));
-            body.addProperty("lastSyncTime", lastSync == null ? 0L : lastSync);
-            chatApi.syncMessages(body).enqueue(new Callback<JsonObject>() {
+            appFunctionManager.syncChatMessages(
+                    phoneNumber,
+                    lastSync == null ? 0L : lastSync,
+                    new AppFunctionManager.Callback() {
                 @Override
-                public void onResponse(Call<JsonObject> call, Response<JsonObject> response) {
-                    if (!response.isSuccessful() || response.body() == null) {
+                public void onSuccess(Object object) {
+                    if (!(object instanceof JsonObject)) {
                         return;
                     }
-                    JsonArray messages = response.body().getAsJsonArray("messages");
+                    JsonArray messages = ((JsonObject) object).getAsJsonArray("messages");
                     if (messages == null) {
                         return;
                     }
@@ -311,23 +306,21 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 }
 
                 @Override
-                public void onFailure(Call<JsonObject> call, Throwable t) {
-                    notifySocketError(t);
+                public void onError(String error) {
+                    notifySocketError(error);
                 }
             });
         });
     }
 
     public void refreshChatList(String phoneNumber) {
-        JsonObject body = new JsonObject();
-        body.addProperty("phoneNumber", toServerPhoneNumber(phoneNumber));
-        chatApi.getChatList(body).enqueue(new Callback<JsonObject>() {
+        appFunctionManager.getChatList(phoneNumber, new AppFunctionManager.Callback() {
             @Override
-            public void onResponse(Call<JsonObject> call, Response<JsonObject> response) {
-                if (!response.isSuccessful() || response.body() == null) {
+            public void onSuccess(Object object) {
+                if (!(object instanceof JsonObject)) {
                     return;
                 }
-                JsonArray userProfiles = response.body().getAsJsonArray("userProfiles");
+                JsonArray userProfiles = ((JsonObject) object).getAsJsonArray("userProfiles");
                 if (userProfiles == null) {
                     return;
                 }
@@ -345,8 +338,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             }
 
             @Override
-            public void onFailure(Call<JsonObject> call, Throwable t) {
-                notifySocketError(t);
+            public void onError(String error) {
+                notifySocketError(error);
             }
         });
     }
@@ -355,16 +348,13 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         if (chatId == null || chatId.trim().isEmpty()) {
             return;
         }
-        JsonObject body = new JsonObject();
-        body.addProperty("chatId", chatId);
-        body.addProperty("phoneNumber", toServerPhoneNumber(phoneNumber));
-        chatApi.getChat(body).enqueue(new Callback<JsonObject>() {
+        appFunctionManager.getChat(chatId, phoneNumber, new AppFunctionManager.Callback() {
             @Override
-            public void onResponse(Call<JsonObject> call, Response<JsonObject> response) {
-                if (!response.isSuccessful() || response.body() == null) {
+            public void onSuccess(Object object) {
+                if (!(object instanceof JsonObject)) {
                     return;
                 }
-                JsonElement chatElement = response.body().get("chat");
+                JsonElement chatElement = ((JsonObject) object).get("chat");
                 if (chatElement == null || !chatElement.isJsonObject()) {
                     return;
                 }
@@ -373,8 +363,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             }
 
             @Override
-            public void onFailure(Call<JsonObject> call, Throwable t) {
-                notifySocketError(t);
+            public void onError(String error) {
+                notifySocketError(error);
             }
         });
     }
@@ -383,19 +373,13 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         if (userIds == null || userIds.isEmpty()) {
             return;
         }
-        JsonObject body = new JsonObject();
-        JsonArray ids = new JsonArray();
-        for (String userId : userIds) {
-            ids.add(normalizeAccountId(userId));
-        }
-        body.add("userIds", ids);
-        chatApi.syncPresence(body).enqueue(new Callback<JsonObject>() {
+        appFunctionManager.syncPresence(userIds, new AppFunctionManager.Callback() {
             @Override
-            public void onResponse(Call<JsonObject> call, Response<JsonObject> response) {
-                if (!response.isSuccessful() || response.body() == null) {
+            public void onSuccess(Object object) {
+                if (!(object instanceof JsonObject)) {
                     return;
                 }
-                JsonArray presence = response.body().getAsJsonArray("presence");
+                JsonArray presence = ((JsonObject) object).getAsJsonArray("presence");
                 if (presence == null) {
                     return;
                 }
@@ -409,8 +393,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             }
 
             @Override
-            public void onFailure(Call<JsonObject> call, Throwable t) {
-                notifySocketError(t);
+            public void onError(String error) {
+                notifySocketError(error);
             }
         });
     }
@@ -419,16 +403,14 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         if (token == null || token.trim().isEmpty()) {
             return;
         }
-        JsonObject body = new JsonObject();
-        body.addProperty("fcmToken", token);
-        chatApi.updateFcmToken(body).enqueue(new Callback<JsonObject>() {
+        appFunctionManager.updateFcmToken(token, new AppFunctionManager.Callback() {
             @Override
-            public void onResponse(Call<JsonObject> call, Response<JsonObject> response) {
+            public void onSuccess(Object object) {
             }
 
             @Override
-            public void onFailure(Call<JsonObject> call, Throwable t) {
-                notifySocketError(t);
+            public void onError(String error) {
+                notifySocketError(error);
             }
         });
     }
@@ -715,17 +697,4 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         return normalized;
     }
 
-    private String toServerPhoneNumber(String value) {
-        if (value == null) {
-            return "";
-        }
-        String normalized = value.trim();
-        if (normalized.startsWith("<plus>")) {
-            return normalized.substring("<plus>".length());
-        }
-        if (normalized.startsWith("+")) {
-            return normalized.substring(1);
-        }
-        return normalized;
-    }
 }

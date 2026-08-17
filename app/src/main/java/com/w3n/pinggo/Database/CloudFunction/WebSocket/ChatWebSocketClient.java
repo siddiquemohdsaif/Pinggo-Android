@@ -1,10 +1,12 @@
-package com.w3n.pinggo.data.remote;
+package com.w3n.pinggo.Database.CloudFunction.WebSocket;
 
 import android.util.Log;
 
 import androidx.annotation.Nullable;
 
 import com.google.gson.JsonObject;
+import com.w3n.pinggo.Database.CloudFunction.RestApi.APIAuth;
+import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -40,7 +42,7 @@ public class ChatWebSocketClient {
         authenticated = false;
         String authToken = userId + "_" + encryptedCredential;
         Request request = new Request.Builder()
-                .url(RealtimeConfig.WS_URL)
+                .url(APIAuth.WS_URL)
                 .addHeader("Authorization", "Bearer " + authToken)
                 .build();
         webSocket = client.newWebSocket(request, new WebSocketListener() {
@@ -82,8 +84,10 @@ public class ChatWebSocketClient {
             public void onFailure(WebSocket webSocket, Throwable t, @Nullable Response response) {
                 authenticated = false;
                 if (listener != null) {
-                    Log.d("CHAT_REPOSITORY", "onFailure: "+t.getMessage());
-                    listener.onFailure(t == null || t.getMessage() == null ? "WebSocket failed." : t.getMessage());
+                    Log.d("CHAT_REPOSITORY", "onFailure: " + t.getMessage());
+                    listener.onFailure(t == null || t.getMessage() == null
+                            ? "WebSocket failed."
+                            : t.getMessage());
                 }
             }
         });
@@ -98,7 +102,7 @@ public class ChatWebSocketClient {
     }
 
     public boolean send(JsonObject event) {
-        Log.d("CHAT_REPOSITORY", "send: "+event.toString());
+        Log.d("CHAT_REPOSITORY", "send: " + event);
         if (webSocket == null) {
             return false;
         }

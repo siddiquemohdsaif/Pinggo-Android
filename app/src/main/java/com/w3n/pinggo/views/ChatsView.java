@@ -1,6 +1,7 @@
 package com.w3n.pinggo.views;
 
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Typeface;
@@ -16,9 +17,9 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.w3n.pinggo.R;
-import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
+import com.w3n.pinggo.activity.NewChatActivity;
 import com.w3n.pinggo.data.local.ChatEntity;
 import com.w3n.pinggo.data.local.PresenceEntity;
 import com.w3n.pinggo.data.repository.ChatRepository;
@@ -69,9 +70,7 @@ public class ChatsView extends ScrollView {
 
         chatRepository.observeChats().observeForever(chatEntities -> post(() -> {
             List<Chat> cachedChats = toChats(chatEntities);
-            if (!cachedChats.isEmpty()) {
-                renderChats(cachedChats);
-            }
+            renderChats(cachedChats);
         }));
         chatRepository.refreshChatList(phoneNumber);
     }
@@ -86,13 +85,55 @@ public class ChatsView extends ScrollView {
     private void renderChats(List<Chat> chats) {
         listContainer.removeAllViews();
         if (chats.isEmpty()) {
-            showStatus("No chats found.");
+            showEmptyChats();
             return;
         }
+
+        listContainer.setGravity(Gravity.TOP);
 
         for (Chat chat : chats) {
             listContainer.addView(createChatRow(chat));
         }
+    }
+
+    private void showEmptyChats() {
+        listContainer.removeAllViews();
+        listContainer.setGravity(Gravity.CENTER);
+
+        LinearLayout emptyState = new LinearLayout(getContext());
+        emptyState.setOrientation(LinearLayout.VERTICAL);
+        emptyState.setGravity(Gravity.CENTER);
+        emptyState.setPadding(dp(24), dp(24), dp(24), dp(24));
+        emptyState.setBackgroundResource(android.R.drawable.list_selector_background);
+        emptyState.setClickable(true);
+        emptyState.setFocusable(true);
+        emptyState.setOnClickListener(v -> getContext().startActivity(
+                new Intent(getContext(), NewChatActivity.class)
+        ));
+
+        ImageView chatIcon = new ImageView(getContext());
+        chatIcon.setImageResource(R.drawable.ic_chat);
+        chatIcon.setColorFilter(getContext().getColor(R.color.pinggo_action));
+        chatIcon.setContentDescription(getContext().getString(R.string.start_new_conversation));
+        emptyState.addView(chatIcon, new LinearLayout.LayoutParams(dp(64), dp(64)));
+
+        TextView message = new TextView(getContext());
+        message.setText(R.string.start_new_conversation);
+        message.setTextColor(getContext().getColor(R.color.pinggo_action));
+        message.setTextSize(18);
+        message.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        message.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams messageParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        messageParams.topMargin = dp(12);
+        emptyState.addView(message, messageParams);
+
+        listContainer.addView(emptyState, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
     }
 
     private View createChatRow(Chat chat) {
@@ -193,6 +234,7 @@ public class ChatsView extends ScrollView {
 
     private void showStatus(String message) {
         listContainer.removeAllViews();
+        listContainer.setGravity(Gravity.TOP);
         TextView statusTextView = new TextView(getContext());
         statusTextView.setText(message);
         statusTextView.setTextColor(getContext().getColor(R.color.secondary_text));

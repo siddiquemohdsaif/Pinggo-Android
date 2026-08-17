@@ -103,4 +103,19 @@ public interface AppRestAPI {
             @Body RequestBody body
     );
 
+    @POST("chats/sync")
+    Call<JsonObject> syncChatMessages(
+            @Body RequestBody body
+    );
+
+    @POST("profile/presence")
+    Call<JsonObject> syncPresence(
+            @Body RequestBody body
+    );
+
+    @POST("profile/updateFcmToken")
+    Call<JsonObject> updateFcmToken(
+            @Body RequestBody body
+    );
+
 }

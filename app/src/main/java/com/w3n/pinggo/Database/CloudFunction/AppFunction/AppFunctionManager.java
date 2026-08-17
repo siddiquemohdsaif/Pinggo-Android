@@ -138,6 +138,18 @@ public class AppFunctionManager {
         ChatHandler.discoverContacts(appApi, phoneNumber, contacts, callback);
     }
 
+    public void syncChatMessages(String phoneNumber, long lastSyncTime, Callback callback) {
+        ChatHandler.syncMessages(appApi, phoneNumber, lastSyncTime, callback);
+    }
+
+    public void syncPresence(List<String> userIds, Callback callback) {
+        ChatHandler.syncPresence(appApi, userIds, callback);
+    }
+
+    public void updateFcmToken(String token, Callback callback) {
+        ChatHandler.updateFcmToken(appApi, token, callback);
+    }
+
     public interface Callback{
         void onSuccess(Object object);
         void onError(String error);

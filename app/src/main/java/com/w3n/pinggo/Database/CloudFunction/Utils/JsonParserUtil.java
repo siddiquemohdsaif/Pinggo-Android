@@ -1,4 +1,4 @@
-package com.w3n.pinggo.data.remote;
+package com.w3n.pinggo.Database.CloudFunction.Utils;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
