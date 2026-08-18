@@ -1,133 +1,146 @@
 package com.w3n.pinggo.activity;
 
 import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
-import android.view.View;
-import android.widget.PopupMenu;
-import android.widget.FrameLayout;
-import android.widget.TextView;
+import android.view.Window;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 
-import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
-import com.w3n.pinggo.R;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
+import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
+import com.w3n.pinggo.R;
+import com.w3n.pinggo.data.local.ChatEntity;
+import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.modals.CallLog;
 import com.w3n.pinggo.modals.Chat;
-import com.w3n.pinggo.views.CallsView;
-import com.w3n.pinggo.views.ChatsView;
 import com.w3n.pinggo.views.common.ExitAppController;
+import com.w3n.pinggo.views.home.HomeView;
 
-public class HomeActivity extends AppCompatActivity {
-    private TextView topTitleTextView;
-    private View searchEditText;
-    private FrameLayout contentFrameLayout;
-    private ExtendedFloatingActionButton newChatFab;
-    private ExtendedFloatingActionButton makeCallFab;
-    private ChatsView chatsView;
-    private CallsView callsView;
+import java.util.ArrayList;
+import java.util.List;
 
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
+/** Hosts the AAR-native home surface and owns lifecycle, data, and navigation. */
+public class HomeActivity extends AppCompatActivity implements HomeView.Listener {
+    private HomeView homeView;
+
+    @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        EdgeToEdge.enable(this);
-        setContentView(R.layout.activity_home);
+        configureSystemBars();
+        homeView = new HomeView(this, this);
+        setContentView(homeView);
         ExitAppController.install(this, null);
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
-            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
-            return insets;
+        ViewCompat.setOnApplyWindowInsetsListener(homeView, (view, windowInsets) -> {
+            Insets bars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars());
+            homeView.setInsets(bars.top, bars.bottom);
+            return windowInsets;
         });
-
-        topTitleTextView = findViewById(R.id.topTitleTextView);
-        searchEditText = findViewById(R.id.searchEditText);
-        contentFrameLayout = findViewById(R.id.contentFrameLayout);
-        newChatFab = findViewById(R.id.newChatFab);
-        makeCallFab = findViewById(R.id.makeCallFab);
-        chatsView = new ChatsView(this, this::openChat);
-        callsView = new CallsView(this, this::openCallLog);
-
-        findViewById(R.id.overflowButton).setOnClickListener(this::showOverflowMenu);
-        findViewById(R.id.bottomNavigationView).setOnApplyWindowInsetsListener(null);
-        com.google.android.material.bottomnavigation.BottomNavigationView bottomNavigationView = findViewById(R.id.bottomNavigationView);
-        bottomNavigationView.setOnItemSelectedListener(item -> {
-            if (item.getItemId() == R.id.navigation_chats) {
-                showChats();
-                return true;
-            } else if (item.getItemId() == R.id.navigation_calls) {
-                showCalls();
-                return true;
-            }
-            return false;
-        });
-
-        newChatFab.setOnClickListener(v -> startActivity(new Intent(this, NewChatActivity.class)));
-        makeCallFab.setOnClickListener(v -> Toast.makeText(this, R.string.make_call, Toast.LENGTH_SHORT).show());
-        showChats();
+        ViewCompat.requestApplyInsets(homeView);
+        loadChats();
     }
 
-    private void showChats() {
-        topTitleTextView.setText(R.string.app_name);
-        searchEditText.setVisibility(View.VISIBLE);
-        findViewById(R.id.overflowButton).setVisibility(View.VISIBLE);
-        showContent(chatsView);
-        chatsView.loadChats();
-        newChatFab.setVisibility(View.VISIBLE);
-        makeCallFab.setVisibility(View.GONE);
+    private void configureSystemBars() {
+        Window window = getWindow();
+        int systemBarColor = ContextCompat.getColor(
+                this, R.color.login_system_bar_background);
+        window.setStatusBarColor(systemBarColor);
+        window.setNavigationBarColor(systemBarColor);
+
+        WindowInsetsControllerCompat controller =
+                WindowCompat.getInsetsController(window, window.getDecorView());
+        controller.setAppearanceLightStatusBars(true);
+        controller.setAppearanceLightNavigationBars(true);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.setNavigationBarContrastEnforced(false);
+        }
     }
 
-    private void showCalls() {
-        topTitleTextView.setText(R.string.call);
-        searchEditText.setVisibility(View.GONE);
-        findViewById(R.id.overflowButton).setVisibility(View.GONE);
-        showContent(callsView);
-        newChatFab.setVisibility(View.GONE);
-        makeCallFab.setVisibility(View.VISIBLE);
+    private void loadChats() {
+        homeView.showChatLoading();
+        ChatRepository repository = ChatRepository.getInstance(this);
+        repository.observeChats().observe(this,
+                entities -> homeView.submitChats(toChats(entities)));
+        String uid = LoginStateManager.getInstance().getUID(this);
+        if (uid != null && !uid.trim().isEmpty()) {
+            repository.refreshChatList(normalizeAccountId(uid));
+        }
     }
 
-    private void showOverflowMenu(View anchor) {
-        PopupMenu popupMenu = new PopupMenu(this, anchor);
-        popupMenu.getMenu().add(R.string.settings);
-        popupMenu.setOnMenuItemClickListener(item -> {
-            startActivity(new Intent(this, SettingsActivity.class));
-            return true;
-        });
-        popupMenu.show();
-    }
-
-    private void showContent(View contentView) {
-        contentFrameLayout.removeAllViews();
-        contentFrameLayout.addView(contentView, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-        ));
-    }
-
-    private void openChat(Chat chat) {
+    @Override public void onOpenChat(Chat chat) {
         Intent intent = new Intent(this, ChatActivity.class);
         intent.putExtra(ChatActivity.EXTRA_CHAT_NAME, chat.getContactName());
         intent.putExtra(ChatActivity.EXTRA_CHAT_ID, chat.getChatId());
         intent.putExtra(ChatActivity.EXTRA_PROFILE_PHOTO_URL, chat.getProfilePhotoUrl());
-        String localProfilePhotoPath = chat.getLocalProfilePhotoPath();
-        if (localProfilePhotoPath == null || localProfilePhotoPath.trim().isEmpty()) {
-            localProfilePhotoPath = ChatProfilePhotoStore.getLocalPath(this, chat.getPhoneNumber());
+        String localPath = chat.getLocalProfilePhotoPath();
+        if (localPath == null || localPath.trim().isEmpty()) {
+            localPath = ChatProfilePhotoStore.getLocalPath(this, chat.getPhoneNumber());
         }
-        intent.putExtra(ChatActivity.EXTRA_LOCAL_PROFILE_PHOTO_PATH, localProfilePhotoPath);
+        intent.putExtra(ChatActivity.EXTRA_LOCAL_PROFILE_PHOTO_PATH, localPath);
         startActivity(intent);
     }
 
-    private void openCallLog(CallLog callLog) {
+    @Override public void onOpenCall(CallLog callLog) {
         Intent intent = new Intent(this, CallDetailActivity.class);
         intent.putExtra(CallDetailActivity.EXTRA_CONTACT_NAME, callLog.getContactName());
         intent.putExtra(CallDetailActivity.EXTRA_CALLED_TIME, callLog.getCalledTime());
-        intent.putExtra(CallDetailActivity.EXTRA_FULL_CALLED_DATE_TIME, callLog.getFullCalledDateTime());
+        intent.putExtra(CallDetailActivity.EXTRA_FULL_CALLED_DATE_TIME,
+                callLog.getFullCalledDateTime());
         intent.putExtra(CallDetailActivity.EXTRA_DURATION, callLog.getDuration());
         intent.putExtra(CallDetailActivity.EXTRA_IS_VIDEO_CALL, callLog.isVideoCall());
         startActivity(intent);
+    }
+
+    @Override public void onNewChat() {
+        startActivity(new Intent(this, NewChatActivity.class));
+    }
+
+    @Override public void onMakeCall() {
+        Toast.makeText(this, R.string.make_call, Toast.LENGTH_SHORT).show();
+    }
+
+    @Override public void onOpenSettings() {
+        startActivity(new Intent(this, SettingsActivity.class));
+    }
+
+    private List<Chat> toChats(List<ChatEntity> entities) {
+        List<Chat> chats = new ArrayList<>();
+        if (entities == null) return chats;
+        for (ChatEntity entity : entities) {
+            String contact = entity.contactName == null || entity.contactName.isEmpty()
+                    ? entity.otherUserId : entity.contactName;
+            String localPath = entity.localProfilePhotoPath;
+            if (localPath == null || localPath.isEmpty()) {
+                localPath = ChatProfilePhotoStore.getLocalPath(this, entity.otherUserId);
+            }
+            chats.add(new Chat(entity.chatId, contact, entity.profilePhotoUrl, localPath,
+                    entity.isOnline, entity.lastSeen));
+        }
+        return chats;
+    }
+
+    private static String normalizeAccountId(String value) {
+        String normalized = value == null ? "" : value.trim();
+        if (normalized.startsWith("<plus>")) {
+            return normalized.substring("<plus>".length());
+        }
+        return normalized.startsWith("+") ? normalized.substring(1) : normalized;
+    }
+
+    @Override protected void onDestroy() {
+        if (homeView != null) {
+            ViewCompat.setOnApplyWindowInsetsListener(homeView, null);
+            homeView.release();
+            homeView = null;
+        }
+        super.onDestroy();
     }
 }

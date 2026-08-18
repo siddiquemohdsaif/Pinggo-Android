@@ -2,6 +2,7 @@ package com.w3n.pinggo.utils.login;
 
 import static org.junit.Assert.assertEquals;
 
+import com.w3n.pinggo.Util.login.LoginFlowResolver;
 import com.w3n.pinggo.modals.AppConfiguration;
 
 import org.junit.Test;

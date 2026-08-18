@@ -1,27 +1,30 @@
 package com.w3n.pinggo.activity;
 
+import android.app.Dialog;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
-import android.view.View;
+import android.view.Gravity;
+import android.view.ViewGroup;
+import android.view.Window;
 import android.widget.Button;
 import android.widget.EditText;
-import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
-
+import androidx.activity.EdgeToEdge;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
-import androidx.activity.EdgeToEdge;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
-
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ProfilePhotoLocalStore;
@@ -29,342 +32,294 @@ import com.w3n.pinggo.R;
 import com.w3n.pinggo.data.local.LogoutDataCleaner;
 import com.w3n.pinggo.modals.UserData;
 import com.w3n.pinggo.views.CropImageView;
-
+import com.w3n.pinggo.views.settings.SettingsView;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
 
-public class SettingsActivity extends AppCompatActivity {
-    private static final int PROFILE_PHOTO_PREVIEW_SIZE_DP = 150;
-    private static final int PROFILE_PHOTO_EMPTY_PADDING_DP = 32;
-    private static final int PROFILE_PHOTO_CROP_BOX_SIZE_DP = 280;
+public class SettingsActivity extends AppCompatActivity implements SettingsView.Listener {
+  private SettingsView settingsView;
+  private ActivityResultLauncher<String> picker;
+  private Bitmap selectedPhoto;
+  private String phone = "";
 
-    private ImageView profilePhotoImageView;
-    private CropImageView cropImageView;
-    private View cropContainer;
-    private Button editProfilePhotoButton;
-    private Button okCropButton;
-    private Button retryCropButton;
-    private TextView nameValueTextView;
-    private TextView descriptionValueTextView;
-    private TextView phoneValueTextView;
-    private Uri pendingProfilePhotoUri;
-    private Bitmap pendingProfilePhotoBitmap;
-    private Bitmap selectedProfilePhotoBitmap;
-    private ActivityResultLauncher<String> profilePhotoPicker;
-
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        EdgeToEdge.enable(this);
-        setContentView(R.layout.activity_settings);
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
-            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
-            return insets;
+  @Override
+  protected void onCreate(Bundle state) {
+    super.onCreate(state);
+    EdgeToEdge.enable(this);
+    settingsView = new SettingsView(this, this);
+    setContentView(settingsView);
+    ViewCompat.setOnApplyWindowInsetsListener(
+        settingsView,
+        (v, i) -> {
+          Insets b = i.getInsets(WindowInsetsCompat.Type.systemBars());
+          settingsView.setInsets(b.top, b.bottom);
+          return i;
         });
+    ViewCompat.requestApplyInsets(settingsView);
+    picker =
+        registerForActivityResult(new ActivityResultContracts.GetContent(), this::photoSelected);
+    refresh();
+  }
 
-        profilePhotoPicker = registerForActivityResult(new ActivityResultContracts.GetContent(), uri -> {
-            if (uri == null) {
-                return;
-            }
-            pendingProfilePhotoUri = uri;
-            showCropView(uri);
+  private void refresh() {
+    UserData user = LoginStateManager.getInstance().getUserDataModal(this);
+    UserData.ProfileData p = user == null ? null : user.getProfileData();
+    phone =
+        p != null && p.getPhoneNumber() != null
+            ? p.getPhoneNumber()
+            : user == null ? "" : user.getPhoneNumber();
+    settingsView.setValues(p == null ? null : p.getName(), phone);
+    loadPhoto(p);
+  }
+
+  private void loadPhoto(UserData.ProfileData p) {
+    String local = p == null ? null : p.getLocalProfilePhotoPath();
+    if (local != null && new File(local).exists()) {
+      Bitmap b = BitmapFactory.decodeFile(local);
+      if (b != null) {
+        settingsView.setProfilePhoto(b);
+        return;
+      }
+    }
+    String url = p == null ? null : p.getProfilePhotoUrl();
+    if (url == null || url.trim().isEmpty()) {
+      settingsView.setProfilePhoto(null);
+      return;
+    }
+    new Thread(
+            () -> {
+              try (InputStream in = new URL(url).openStream()) {
+                Bitmap b = BitmapFactory.decodeStream(in);
+                runOnUiThread(() -> settingsView.setProfilePhoto(b));
+              } catch (IOException e) {
+                runOnUiThread(
+                    () ->
+                        Toast.makeText(this, R.string.image_load_failed, Toast.LENGTH_SHORT)
+                            .show());
+              }
+            })
+        .start();
+  }
+
+  @Override
+  public void onBack() {
+    finish();
+  }
+
+  @Override
+  public void onPhoto() {
+    picker.launch("image/*");
+  }
+
+  private void photoSelected(Uri uri) {
+    if (uri == null) return;
+    Bitmap bitmap = decode(uri);
+    if (bitmap == null) {
+      Toast.makeText(this, R.string.image_load_failed, Toast.LENGTH_SHORT).show();
+      return;
+    }
+    showCrop(bitmap);
+  }
+
+  private Bitmap decode(Uri uri) {
+    try (InputStream in = getContentResolver().openInputStream(uri)) {
+      return BitmapFactory.decodeStream(in);
+    } catch (IOException | SecurityException e) {
+      return null;
+    }
+  }
+
+  private void showCrop(Bitmap bitmap) {
+    Dialog dialog = new Dialog(this);
+    LinearLayout root = new LinearLayout(this);
+    root.setOrientation(LinearLayout.VERTICAL);
+    root.setPadding(dp(20), dp(20), dp(20), dp(20));
+    root.setBackgroundColor(Color.WHITE);
+    TextView title = new TextView(this);
+    title.setText(R.string.select_crop_region);
+    title.setTextSize(22);
+    title.setGravity(Gravity.CENTER);
+    root.addView(title, new LinearLayout.LayoutParams(-1, -2));
+    CropImageView crop = new CropImageView(this);
+    crop.setCropBoxSizeDp(280);
+    crop.setBitmap(bitmap);
+    LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, 0, 1);
+    cp.topMargin = dp(12);
+    root.addView(crop, cp);
+    LinearLayout actions = new LinearLayout(this);
+    actions.setOrientation(LinearLayout.HORIZONTAL);
+    Button retry = new Button(this);
+    retry.setText(R.string.retry);
+    Button ok = new Button(this);
+    ok.setText(android.R.string.ok);
+    actions.addView(retry, new LinearLayout.LayoutParams(0, dp(56), 1));
+    actions.addView(ok, new LinearLayout.LayoutParams(0, dp(56), 1));
+    root.addView(actions);
+    retry.setOnClickListener(
+        v -> {
+          dialog.dismiss();
+          picker.launch("image/*");
         });
-
-        profilePhotoImageView = findViewById(R.id.profilePhotoImageView);
-        cropImageView = findViewById(R.id.cropImageView);
-        cropContainer = findViewById(R.id.cropContainer);
-        editProfilePhotoButton = findViewById(R.id.editProfilePhotoButton);
-        okCropButton = findViewById(R.id.okCropButton);
-        retryCropButton = findViewById(R.id.retryCropButton);
-        nameValueTextView = findViewById(R.id.nameValueTextView);
-        descriptionValueTextView = findViewById(R.id.descriptionValueTextView);
-        phoneValueTextView = findViewById(R.id.phoneValueTextView);
-        applyProfilePhotoSizing();
-        cropImageView.setCropBoxSizeDp(PROFILE_PHOTO_CROP_BOX_SIZE_DP);
-
-        findViewById(R.id.backButton).setOnClickListener(v -> finish());
-        profilePhotoImageView.setOnClickListener(v -> showProfilePhotoOptions());
-        editProfilePhotoButton.setOnClickListener(v -> openProfilePhotoPicker());
-        okCropButton.setOnClickListener(v -> confirmCropAndUpload());
-        retryCropButton.setOnClickListener(v -> {
-            hideCropView();
-            openProfilePhotoPicker();
-        });
-        findViewById(R.id.nameRow).setOnClickListener(v -> showEditDialog(
-                getString(R.string.name),
-                getCurrentProfileValue("name"),
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PERSON_NAME | InputType.TYPE_TEXT_FLAG_CAP_WORDS,
-                this::updateName
-        ));
-        findViewById(R.id.descriptionRow).setOnClickListener(v -> showEditDialog(
-                getString(R.string.description),
-                getCurrentProfileValue("description"),
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES,
-                this::updateDescription
-        ));
-        findViewById(R.id.phoneRow).setOnClickListener(v -> showPhoneDialog());
-        findViewById(R.id.logOutButton).setOnClickListener(v -> logOut());
-
-        refreshUserData();
-    }
-
-    private void logOut() {
-        findViewById(R.id.logOutButton).setEnabled(false);
-        new Thread(() -> {
-            LogoutDataCleaner.clear(SettingsActivity.this);
-            LoginStateManager.getInstance().logOut(SettingsActivity.this);
-            runOnUiThread(() -> {
-                Intent intent = new Intent(this, LoginActivity.class);
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                startActivity(intent);
-                finish();
-            });
-        }).start();
-    }
-
-    private void refreshUserData() {
-        UserData userData = LoginStateManager.getInstance().getUserDataModal(this);
-        UserData.ProfileData profileData = userData == null ? null : userData.getProfileData();
-
-        nameValueTextView.setText(getValueOrDash(profileData == null ? null : profileData.getName()));
-        descriptionValueTextView.setText(getValueOrDash(profileData == null ? null : profileData.getDescription()));
-        loadProfilePhoto(profileData);
-
-        String phoneNumber = null;
-        if (profileData != null && profileData.getPhoneNumber() != null) {
-            phoneNumber = profileData.getPhoneNumber();
-        } else if (userData != null) {
-            phoneNumber = userData.getPhoneNumber();
-        }
-        phoneValueTextView.setText(getValueOrDash(phoneNumber));
-    }
-
-    private void applyProfilePhotoSizing() {
-        int previewSize = dp(PROFILE_PHOTO_PREVIEW_SIZE_DP);
-        profilePhotoImageView.getLayoutParams().width = previewSize;
-        profilePhotoImageView.getLayoutParams().height = previewSize;
-        profilePhotoImageView.requestLayout();
-    }
-
-    private void openProfilePhotoPicker() {
-        profilePhotoPicker.launch("image/*");
-    }
-
-    private void showCropView(Uri uri) {
-        pendingProfilePhotoBitmap = decodeBitmap(uri);
-        if (pendingProfilePhotoBitmap == null) {
+    ok.setOnClickListener(
+        v -> {
+          Bitmap value = crop.getCroppedBitmap();
+          if (value == null) {
             Toast.makeText(this, R.string.image_load_failed, Toast.LENGTH_SHORT).show();
             return;
-        }
-        cropImageView.setBitmap(pendingProfilePhotoBitmap);
-        cropContainer.setVisibility(View.VISIBLE);
-    }
+          }
+          dialog.dismiss();
+          upload(value);
+        });
+    dialog.setContentView(root);
+    Window w = dialog.getWindow();
+    if (w != null) w.setBackgroundDrawable(new ColorDrawable(Color.WHITE));
+    dialog.show();
+    if (w != null)
+      w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+  }
 
-    private void confirmCropAndUpload() {
-        Bitmap croppedBitmap = cropImageView.getCroppedBitmap();
-        if (croppedBitmap == null) {
-            Toast.makeText(this, R.string.image_load_failed, Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        selectedProfilePhotoBitmap = croppedBitmap;
-        profilePhotoImageView.setPadding(0, 0, 0, 0);
-        profilePhotoImageView.setImageBitmap(selectedProfilePhotoBitmap);
-        hideCropView();
-        AppFunctionManager.getInstance().uploadProfilePhoto(selectedProfilePhotoBitmap, new AppFunctionManager.Callback() {
-            @Override
-            public void onSuccess(Object object) {
-                UserData userData = object instanceof UserData
-                        ? (UserData) object
+  private void upload(Bitmap bitmap) {
+    selectedPhoto = bitmap;
+    settingsView.setProfilePhoto(bitmap);
+    AppFunctionManager.getInstance()
+        .uploadProfilePhoto(
+            bitmap,
+            new AppFunctionManager.Callback() {
+              @Override
+              public void onSuccess(Object o) {
+                UserData user =
+                    o instanceof UserData
+                        ? (UserData) o
                         : LoginStateManager.getInstance().getUserDataModal(SettingsActivity.this);
-                saveLocalProfilePhoto(userData);
-                refreshUserData();
-                Toast.makeText(SettingsActivity.this, R.string.profile_updated, Toast.LENGTH_SHORT).show();
-            }
+                saveLocal(user);
+                refresh();
+                Toast.makeText(SettingsActivity.this, R.string.profile_updated, Toast.LENGTH_SHORT)
+                    .show();
+              }
 
-            @Override
-            public void onError(String error) {
-                Toast.makeText(SettingsActivity.this, error, Toast.LENGTH_SHORT).show();
-            }
-        });
+              @Override
+              public void onError(String e) {
+                Toast.makeText(SettingsActivity.this, e, Toast.LENGTH_SHORT).show();
+              }
+            });
+  }
+
+  private void saveLocal(UserData user) {
+    if (user == null || selectedPhoto == null) return;
+    UserData.ProfileData p = user.getProfileData();
+    if (p == null) {
+      p = new UserData.ProfileData();
+      p.setPhoneNumber(user.getPhoneNumber());
+      user.setProfileData(p);
     }
+    String path = ProfilePhotoLocalStore.save(this, selectedPhoto);
+    if (path != null) p.setLocalProfilePhotoPath(path);
+    LoginStateManager.getInstance().setUserData(this, user);
+  }
 
-    private void showProfilePhotoOptions() {
-        UserData userData = LoginStateManager.getInstance().getUserDataModal(this);
-        UserData.ProfileData profileData = userData == null ? null : userData.getProfileData();
-        if (profileData == null || (isEmpty(profileData.getLocalProfilePhotoPath()) && isEmpty(profileData.getProfilePhotoUrl()))) {
-            openProfilePhotoPicker();
-            return;
-        }
+  @Override
+  public void onName() {
+    edit(
+        getString(R.string.name),
+        current("name"),
+        InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PERSON_NAME,
+        value -> AppFunctionManager.getInstance().updateUserName(value, updateCallback()));
+  }
 
+  @Override
+  public void onPhone() {
+    new AlertDialog.Builder(this)
+        .setTitle(R.string.phone_number)
+        .setMessage(getString(R.string.phone_cannot_be_changed, phone))
+        .setPositiveButton(android.R.string.ok, null)
+        .show();
+  }
+
+  private void edit(String title, String current, int type, ValueHandler handler) {
+    EditText field = new EditText(this);
+    field.setInputType(type);
+    field.setSingleLine(true);
+    field.setText(current);
+    field.setSelection(current.length());
+    AlertDialog dialog =
         new AlertDialog.Builder(this)
-                .setItems(new CharSequence[]{getString(R.string.edit_profile_photo)}, (dialog, which) -> openProfilePhotoPicker())
-                .show();
-    }
+            .setTitle(title)
+            .setView(field)
+            .setPositiveButton(R.string.confirm, null)
+            .setNegativeButton(android.R.string.cancel, null)
+            .create();
+    dialog.setOnShowListener(
+        x ->
+            dialog
+                .getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(
+                    v -> {
+                      String value = field.getText().toString().trim();
+                      if (value.isEmpty()) {
+                        field.setError(getString(R.string.field_required));
+                        return;
+                      }
+                      dialog.dismiss();
+                      handler.accept(value);
+                    }));
+    dialog.show();
+  }
 
-    private void hideCropView() {
-        cropContainer.setVisibility(View.GONE);
-    }
+  private AppFunctionManager.Callback updateCallback() {
+    return new AppFunctionManager.Callback() {
+      @Override
+      public void onSuccess(Object o) {
+        refresh();
+        Toast.makeText(SettingsActivity.this, R.string.profile_updated, Toast.LENGTH_SHORT).show();
+      }
 
-    private Bitmap decodeBitmap(Uri uri) {
-        try (InputStream inputStream = getContentResolver().openInputStream(uri)) {
-            return BitmapFactory.decodeStream(inputStream);
-        } catch (IOException e) {
-            return null;
-        }
-    }
+      @Override
+      public void onError(String e) {
+        Toast.makeText(SettingsActivity.this, e, Toast.LENGTH_SHORT).show();
+      }
+    };
+  }
 
-    private void loadProfilePhoto(UserData.ProfileData profileData) {
-        String localPath = profileData == null ? null : profileData.getLocalProfilePhotoPath();
-        if (!isEmpty(localPath) && new File(localPath).exists()) {
-            Bitmap bitmap = BitmapFactory.decodeFile(localPath);
-            if (bitmap != null) {
-                profilePhotoImageView.setPadding(0, 0, 0, 0);
-                profilePhotoImageView.setImageBitmap(bitmap);
-                editProfilePhotoButton.setVisibility(View.GONE);
-                return;
-            }
-        }
+  private String current(String field) {
+    UserData u = LoginStateManager.getInstance().getUserDataModal(this);
+    UserData.ProfileData p = u == null ? null : u.getProfileData();
+    if (p == null) return "";
+    String v = p.getName();
+    return v == null ? "" : v;
+  }
 
-        String profilePhotoUrl = profileData == null ? null : profileData.getProfilePhotoUrl();
-        if (isEmpty(profilePhotoUrl)) {
-            profilePhotoImageView.setPadding(
-                    dp(PROFILE_PHOTO_EMPTY_PADDING_DP),
-                    dp(PROFILE_PHOTO_EMPTY_PADDING_DP),
-                    dp(PROFILE_PHOTO_EMPTY_PADDING_DP),
-                    dp(PROFILE_PHOTO_EMPTY_PADDING_DP)
-            );
-            profilePhotoImageView.setImageResource(android.R.drawable.ic_menu_camera);
-            editProfilePhotoButton.setVisibility(View.VISIBLE);
-            return;
-        }
+  @Override
+  public void onLogout() {
+    settingsView.setLoading(true);
+    new Thread(
+            () -> {
+              LogoutDataCleaner.clear(this);
+              LoginStateManager.getInstance().logOut(this);
+              runOnUiThread(
+                  () -> {
+                    Intent i = new Intent(this, LoginActivity.class);
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                    startActivity(i);
+                    finish();
+                  });
+            })
+        .start();
+  }
 
-        new Thread(() -> {
-            try (InputStream inputStream = new URL(profilePhotoUrl).openStream()) {
-                Bitmap bitmap = BitmapFactory.decodeStream(inputStream);
-                runOnUiThread(() -> {
-                    profilePhotoImageView.setPadding(0, 0, 0, 0);
-                    profilePhotoImageView.setImageBitmap(bitmap);
-                    editProfilePhotoButton.setVisibility(View.GONE);
-                });
-            } catch (IOException e) {
-                runOnUiThread(() -> Toast.makeText(this, R.string.image_load_failed, Toast.LENGTH_SHORT).show());
-            }
-        }).start();
-    }
+  private int dp(int v) {
+    return Math.round(v * getResources().getDisplayMetrics().density);
+  }
 
-    private void saveLocalProfilePhoto(UserData userData) {
-        if (userData == null || selectedProfilePhotoBitmap == null) {
-            return;
-        }
+  @Override
+  protected void onDestroy() {
+    if (settingsView != null) settingsView.release();
+    settingsView = null;
+    super.onDestroy();
+  }
 
-        UserData.ProfileData profileData = userData.getProfileData();
-        if (profileData == null) {
-            profileData = new UserData.ProfileData();
-            profileData.setPhoneNumber(userData.getPhoneNumber());
-            userData.setProfileData(profileData);
-        }
-
-        String localPath = ProfilePhotoLocalStore.save(this, selectedProfilePhotoBitmap);
-        if (localPath != null) {
-            profileData.setLocalProfilePhotoPath(localPath);
-        }
-        LoginStateManager.getInstance().setUserData(this, userData);
-    }
-
-    private String getCurrentProfileValue(String field) {
-        UserData userData = LoginStateManager.getInstance().getUserDataModal(this);
-        UserData.ProfileData profileData = userData == null ? null : userData.getProfileData();
-        if (profileData == null) {
-            return "";
-        }
-
-        if ("name".equals(field)) {
-            return getNonNull(profileData.getName());
-        } else if ("description".equals(field)) {
-            return getNonNull(profileData.getDescription());
-        }
-        return "";
-    }
-
-    private void showEditDialog(String title, String currentValue, int inputType, OnConfirmListener listener) {
-        EditText editText = new EditText(this);
-        editText.setInputType(inputType);
-        editText.setSingleLine(true);
-        editText.setText(currentValue);
-        editText.setSelection(editText.getText().length());
-        editText.setPadding(dp(20), dp(12), dp(20), dp(12));
-
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle(title)
-                .setView(editText)
-                .setPositiveButton(R.string.confirm, null)
-                .setNegativeButton(android.R.string.cancel, null)
-                .create();
-
-        dialog.setOnShowListener(dialogInterface -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-            String value = editText.getText().toString().trim();
-            if (value.isEmpty()) {
-                editText.setError(getString(R.string.field_required));
-                return;
-            }
-            listener.onConfirm(value, dialog);
-        }));
-        dialog.show();
-    }
-
-    private void showPhoneDialog() {
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.phone_number)
-                .setMessage(getString(R.string.phone_cannot_be_changed, phoneValueTextView.getText().toString()))
-                .setPositiveButton(android.R.string.ok, null)
-                .show();
-    }
-
-    private void updateName(String name, AlertDialog dialog) {
-        AppFunctionManager.getInstance().updateUserName(name, createUpdateCallback(dialog));
-    }
-
-    private void updateDescription(String description, AlertDialog dialog) {
-        AppFunctionManager.getInstance().updateUserDescription(description, createUpdateCallback(dialog));
-    }
-
-    private AppFunctionManager.Callback createUpdateCallback(AlertDialog dialog) {
-        return new AppFunctionManager.Callback() {
-            @Override
-            public void onSuccess(Object object) {
-                dialog.dismiss();
-                refreshUserData();
-                Toast.makeText(SettingsActivity.this, R.string.profile_updated, Toast.LENGTH_SHORT).show();
-            }
-
-            @Override
-            public void onError(String error) {
-                Toast.makeText(SettingsActivity.this, error, Toast.LENGTH_SHORT).show();
-            }
-        };
-    }
-
-    private String getValueOrDash(String value) {
-        return value == null || value.trim().isEmpty() ? "-" : value;
-    }
-
-    private boolean isEmpty(String value) {
-        return value == null || value.trim().isEmpty();
-    }
-
-    private String getNonNull(String value) {
-        return value == null ? "" : value;
-    }
-
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
-    }
-
-    private interface OnConfirmListener {
-        void onConfirm(String value, AlertDialog dialog);
-    }
+  private interface ValueHandler {
+    void accept(String value);
+  }
 }

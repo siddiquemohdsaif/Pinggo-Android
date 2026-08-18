@@ -51,11 +51,11 @@ import com.hbb20.CCPCountry;
 import com.hbb20.CountryCodePicker;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.views.common.NativeTextFieldImeController;
-import com.w3n.pinggo.utils.login.CountryAdapter;
-import com.w3n.pinggo.utils.login.CountryCardLayout;
-import com.w3n.pinggo.utils.login.CountryDetector;
-import com.w3n.pinggo.utils.login.CountryListView;
-import com.w3n.pinggo.utils.login.CountrySearchItem;
+import com.w3n.pinggo.Util.login.CountryAdapter;
+import com.w3n.pinggo.Util.login.CountryCardLayout;
+import com.w3n.pinggo.Util.login.CountryDetector;
+import com.w3n.pinggo.Util.login.CountryListView;
+import com.w3n.pinggo.Util.login.CountrySearchItem;
 
 import java.util.ArrayList;
 import java.util.List;

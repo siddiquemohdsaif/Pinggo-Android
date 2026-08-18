@@ -1,0 +1,510 @@
+package com.w3n.pinggo.views.chat;
+
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.text.InputType;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputConnection;
+import com.ogfa.nativeviews.button.Button;
+import com.ogfa.nativeviews.font.NativeFonts;
+import com.ogfa.nativeviews.image.Image;
+import com.ogfa.nativeviews.list.ComponentList;
+import com.ogfa.nativeviews.text.FontVariation;
+import com.ogfa.nativeviews.text.Text;
+import com.ogfa.nativeviews.textfield.TextField;
+import com.ogfa.nativeviews.zlayer.ZLayer;
+import com.ogfa.nativeviews.zlayer.ZLayerGroup;
+import com.w3n.pinggo.data.local.MessageEntity;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+/** AAR-native conversation screen and message composer. */
+public final class ChatView extends View {
+  private static final int PRIMARY = 0xFF000E1A, SECONDARY = 0xFF687382, ACCENT = 0xFF019CC4;
+  private final ZLayerGroup layers = new ZLayerGroup(this);
+  private final ZLayer bg = layers.addLayer("background"),
+      content = layers.addLayer("content"),
+      overlay = layers.addLayer("overlay");
+  private final Listener listener;
+  private final MessageAdapter adapter = new MessageAdapter();
+  private final Bitmap white = color(Color.WHITE),
+      divider = color(0xFFE5EAF0),
+      accent = color(ACCENT),
+      incoming = color(0xFFE9EEF3),
+      outgoing = color(ACCENT);
+  private final String chatName, currentUser;
+  private final Bitmap profile;
+  private ComponentList<MessageEntity> list;
+  private Text presence, status, replyText;
+  private TextField input;
+  private Button send;
+  private int topInset, bottomInset, imeInset;
+  private boolean imeVisible;
+  private String draft = "", replyPreview = "";
+  private float headerBottom, baseListBottom;
+
+  public ChatView(Context c, String name, String currentUser, String photoPath, Listener l) {
+    super(c);
+    chatName = name;
+    this.currentUser = normalize(currentUser);
+    listener = l;
+    Bitmap b =
+        photoPath == null || photoPath.trim().isEmpty()
+            ? null
+            : BitmapFactory.decodeFile(photoPath);
+    profile = b == null ? avatar(name) : b;
+    setBackgroundColor(0xFFF7F9FB);
+    setClickable(true);
+    setFocusableInTouchMode(true);
+  }
+
+  public void setInsets(int top, int bottom, int ime, boolean visible) {
+    int nextTop = Math.max(0, top);
+    int nextBottom = Math.max(0, bottom);
+    boolean structureChanged = topInset != nextTop || bottomInset != nextBottom;
+    topInset = nextTop;
+    bottomInset = nextBottom;
+    imeInset = Math.max(0, ime);
+    imeVisible = visible;
+    if (getWidth() <= 0) return;
+    if (structureChanged || input == null || list == null) build();
+    else applyKeyboardInsets();
+  }
+
+  public void setPresence(String value) {
+    if (presence != null)
+      presence.setText(value == null ? "" : value).setVisible(value != null && !value.isEmpty());
+    invalidate();
+  }
+
+  public void showStatus(String value) {
+    adapter.submit(new ArrayList<>());
+    if (status != null) status.setText(value).setVisible(true);
+    if (list != null) list.setVisible(false);
+    invalidate();
+  }
+
+  public void submitMessages(List<MessageEntity> values) {
+    adapter.submit(values);
+    boolean empty = adapter.getItemCount() == 0;
+    if (status != null) status.setText("No messages found.").setVisible(empty);
+    if (list != null) {
+      list.setVisible(!empty).setEnabled(!empty);
+      if (!empty) list.scrollToPosition(adapter.getItemCount() - 1);
+    }
+    invalidate();
+  }
+
+  public String getDraft() {
+    return input == null ? draft : input.getText().trim();
+  }
+
+  public void clearDraft() {
+    draft = "";
+    if (input != null) input.clear();
+  }
+
+  public void showReply(String value) {
+    replyPreview = value == null ? "" : value;
+    updateReply();
+  }
+
+  public void clearReply() {
+    replyPreview = "";
+    updateReply();
+  }
+
+  public void setDraft(String value) {
+    draft = value == null ? "" : value;
+    if (input != null) {
+      input.setText(draft);
+      input.setSelection(draft.length());
+      input.requestFocus();
+    }
+  }
+
+  private void updateReply() {
+    if (getWidth() > 0 && getHeight() > 0) {
+      build();
+    } else {
+      invalidate();
+    }
+  }
+
+  @Override
+  protected void onSizeChanged(int w, int h, int ow, int oh) {
+    super.onSizeChanged(w, h, ow, oh);
+    if (w > 0 && h > 0) build();
+  }
+
+  private void build() {
+    if (input != null) draft = input.getText();
+    bg.clear();
+    content.clear();
+    overlay.clear();
+    float w = getWidth(),
+        top = topInset,
+        composerBottom = getHeight() - bottomInset,
+        composerTop = composerBottom - dp(68),
+        nextHeaderBottom = top + dp(70);
+    headerBottom = nextHeaderBottom;
+    bg.add(
+        new Image.Builder(getContext(), "bg", white, new RectF(0, 0, w, getHeight()))
+            .setScaleType(Image.ScaleType.FIT_XY));
+    button(
+        content,
+        "back",
+        white,
+        "‹",
+        new RectF(dp(6), top + dp(10), dp(52), top + dp(58)),
+        PRIMARY,
+        id -> listener.onBack());
+    content.add(
+        new Image.Builder(
+                getContext(),
+                "profile",
+                profile,
+                new RectF(dp(58), top + dp(10), dp(106), top + dp(58)))
+            .setScaleType(Image.ScaleType.CENTER_CROP));
+    text(
+        content,
+        "name",
+        chatName,
+        new RectF(dp(116), top + dp(7), w - dp(60), top + dp(38)),
+        sp(17),
+        PRIMARY,
+        FontVariation.SEMI_BOLD,
+        Text.Alignment.START);
+    presence =
+        text(
+            content,
+            "presence",
+            "connecting...",
+            new RectF(dp(116), top + dp(34), w - dp(60), top + dp(61)),
+            sp(13),
+            SECONDARY,
+            FontVariation.REGULAR,
+            Text.Alignment.START);
+    button(
+        content,
+        "more",
+        white,
+        "⋮",
+        new RectF(w - dp(54), top + dp(10), w - dp(6), top + dp(58)),
+        PRIMARY,
+        id -> listener.onMore());
+    content.add(
+        new Image.Builder(
+                getContext(),
+                "head_line",
+                divider,
+                new RectF(0, headerBottom - dp(1), w, headerBottom))
+            .setScaleType(Image.ScaleType.FIT_XY));
+    float replyHeight = replyPreview.isEmpty() ? 0 : dp(42), listBottom = composerTop - replyHeight;
+    baseListBottom = listBottom;
+    list =
+        content.add(
+            new ComponentList.Builder<MessageEntity>(
+                    getContext(), "messages", new RectF(0, headerBottom, w, listBottom))
+                .setOrientation(ComponentList.Orientation.VERTICAL)
+                .setItemSizeProvider(
+                    (message, position) ->
+                        message.repliedMessageId == null || message.repliedMessageId.isEmpty()
+                            ? dp(72)
+                            : dp(94))
+                .setPaddingPx(dp(12), dp(8), dp(12), dp(12))
+                .setAdapter(adapter)
+                .setClipToBounds(true)
+                .setOverscrollEnabled(false)
+                .setOnItemLongClickListener(
+                    (componentList, message, position) -> {
+                      listener.onMessageLongPress(message);
+                      return true;
+                    }));
+    status =
+        text(
+            content,
+            "status",
+            "Loading messages...",
+            new RectF(dp(20), headerBottom + dp(20), w - dp(20), headerBottom + dp(120)),
+            sp(16),
+            SECONDARY,
+            FontVariation.REGULAR,
+            Text.Alignment.CENTER);
+    float replyTop = replyPreview.isEmpty() ? composerTop - dp(1) : listBottom;
+    replyText =
+        text(
+            overlay,
+            "reply",
+            replyPreview,
+            new RectF(dp(16), replyTop, w - dp(16), composerTop),
+            sp(13),
+            SECONDARY,
+            FontVariation.REGULAR,
+            Text.Alignment.START);
+    replyText.setVisible(!replyPreview.isEmpty());
+    input =
+        overlay.add(
+            new TextField.Builder(
+                    getContext(),
+                    "composer",
+                    new RectF(dp(12), composerTop + dp(8), w - dp(72), composerBottom - dp(8)))
+                .setText(draft)
+                .setHint("Message")
+                .setMaxLength(4000)
+                .setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE)
+                .setImeOptions(EditorInfo.IME_ACTION_NONE)
+                .setFont(NativeFonts.INTER)
+                .setFontVariations(FontVariation.REGULAR)
+                .setTextSizePx(sp(16))
+                .setTextColor(PRIMARY)
+                .setHintColor(SECONDARY)
+                .setCursorColor(ACCENT)
+                .setBackgroundColor(0xFFF7F9FB, 0xFFF7F9FB)
+                .setStrokeColor(0xFFE5EAF0, ACCENT)
+                .setStrokeWidthPx(dp(1))
+                .setCornerRadiusPx(dp(18))
+                .setPaddingPx(dp(14), dp(10))
+                .setOnTextChangedListener(
+                    (id, value) -> {
+                      draft = value;
+                      listener.onTypingChanged(value);
+                    }));
+    send =
+        button(
+            overlay,
+            "send",
+            accent,
+            "➤",
+            new RectF(w - dp(64), composerTop + dp(8), w - dp(8), composerBottom - dp(8)),
+            Color.WHITE,
+            id -> listener.onSend());
+    overlay.add(
+        new Image.Builder(
+                getContext(),
+                "composer_line",
+                divider,
+                new RectF(0, composerTop - dp(1), w, composerTop))
+            .setScaleType(Image.ScaleType.FIT_XY));
+    boolean empty = adapter.getItemCount() == 0;
+    list.setVisible(!empty);
+    status.setVisible(empty);
+    if (!empty) list.scrollToPosition(adapter.getItemCount() - 1);
+    applyKeyboardInsets();
+    invalidate();
+  }
+
+  private void applyKeyboardInsets() {
+    if (list == null || getWidth() <= 0) return;
+    float shift = imeVisible ? -Math.max(0, imeInset - bottomInset) : 0;
+    overlay.setTranslationY(shift);
+    float listBottom = Math.max(headerBottom + dp(1), baseListBottom + shift);
+    list.setRegion(new RectF(0, headerBottom, getWidth(), listBottom));
+    invalidate();
+  }
+
+  private final class MessageAdapter extends ComponentList.Adapter<MessageEntity> {
+    private final List<MessageEntity> messages = new ArrayList<>();
+    private final Map<String, String> texts = new HashMap<>();
+
+    void submit(List<MessageEntity> values) {
+      messages.clear();
+      texts.clear();
+      if (values != null) {
+        messages.addAll(values);
+        for (MessageEntity m : values) texts.put(m.messageId, m.text);
+      }
+      notifyDataSetChanged();
+    }
+
+    @Override
+    public int getItemCount() {
+      return messages.size();
+    }
+
+    @Override
+    public MessageEntity getItem(int p) {
+      return messages.get(p);
+    }
+
+    @Override
+    public int getItemViewType(int p) {
+      return currentUser.equals(normalize(messages.get(p).senderId)) ? 1 : 0;
+    }
+
+    @Override
+    public long getItemId(int p) {
+      String id = messages.get(p).messageId;
+      return id == null ? p : id.hashCode();
+    }
+
+    @Override
+    public void onCreateItem(ComponentList.Item item, int type) {
+      ComponentList.ItemScope s = item.getScope();
+      float w = s.width(),
+          h = s.height(),
+          left = type == 1 ? w - dp(292) : dp(4),
+          right = type == 1 ? w - dp(4) : dp(292);
+      ZLayer row = item.addLayer("row");
+      row.add(
+          new Image.Builder(
+                  getContext(),
+                  s.id("bubble"),
+                  type == 1 ? outgoing : incoming,
+                  new RectF(left, dp(8), right, h - dp(8)))
+              .setScaleType(Image.ScaleType.FIT_XY));
+      row.add(
+          textBuilder(
+              s.id("reply"),
+              "",
+              new RectF(left + dp(12), dp(7), right - dp(12), dp(30)),
+              sp(11),
+              type == 1 ? 0xDDFFFFFF : SECONDARY,
+              FontVariation.REGULAR));
+      row.add(
+          textBuilder(
+              s.id("message"),
+              "",
+              new RectF(left + dp(12), dp(24), right - dp(12), h - dp(9)),
+              sp(15),
+              type == 1 ? Color.WHITE : PRIMARY,
+              FontVariation.REGULAR));
+    }
+
+    @Override
+    public void onBindItem(ComponentList.Item item, MessageEntity m, int p) {
+      String replied = m.repliedMessageId == null ? "" : texts.get(m.repliedMessageId);
+      Text r = item.find("reply", Text.class);
+      r.setText(replied == null ? "Reply" : replied)
+          .setVisible(m.repliedMessageId != null && !m.repliedMessageId.isEmpty());
+      item.find("message", Text.class).setText(m.text == null ? "" : m.text);
+    }
+  }
+
+  private Text.Builder textBuilder(String id, String v, RectF r, float sz, int c, FontVariation f) {
+    return new Text.Builder(getContext(), id, v, r)
+        .setFont(NativeFonts.INTER)
+        .setFontVariations(f)
+        .setTextSizePx(sz)
+        .setTextColor(c)
+        .setVerticalAlignment(Text.VerticalAlignment.CENTER)
+        .setMaxLines(3);
+  }
+
+  private Text text(
+      ZLayer l, String id, String v, RectF r, float sz, int c, FontVariation f, Text.Alignment a) {
+    return l.add(textBuilder(id, v, r, sz, c, f).setAlignment(a));
+  }
+
+  private Button button(
+      ZLayer l, String id, Bitmap b, String label, RectF r, int c, Button.OnClickListener click) {
+    return l.add(
+        new Button.Builder(getContext(), id, b, label, r)
+            .setImageScaleType(Image.ScaleType.FIT_XY)
+            .setCornerRadiusPx(dp(16))
+            .setFont(NativeFonts.INTER)
+            .setFontVariations(FontVariation.SEMI_BOLD)
+            .setTextSizePx(sp(18))
+            .setTextColor(c)
+            .setRippleEnabled(true)
+            .setRippleColor(0x22019CC4)
+            .setOnClickListener(click));
+  }
+
+  @Override
+  protected void onDraw(Canvas c) {
+    super.onDraw(c);
+    layers.draw(c);
+  }
+
+  @Override
+  public boolean onTouchEvent(MotionEvent e) {
+    return layers.onTouchEvent(e) || super.onTouchEvent(e);
+  }
+
+  @Override
+  public boolean onCheckIsTextEditor() {
+    return layers.onCheckIsTextEditor();
+  }
+
+  @Override
+  public InputConnection onCreateInputConnection(EditorInfo a) {
+    InputConnection x = layers.onCreateInputConnection(a);
+    return x != null ? x : super.onCreateInputConnection(a);
+  }
+
+  @Override
+  public boolean onKeyDown(int k, KeyEvent e) {
+    return layers.onKeyDown(k, e) || super.onKeyDown(k, e);
+  }
+
+  public void release() {
+    layers.release();
+    recycle(white, divider, accent, incoming, outgoing);
+  }
+
+  private Bitmap avatar(String value) {
+    int s = Math.round(dp(48));
+    Bitmap b = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
+    Canvas c = new Canvas(b);
+    Paint p = new Paint(1);
+    p.setColor(0xFFD9F1F7);
+    c.drawCircle(s / 2f, s / 2f, s / 2f, p);
+    String x =
+        value == null || value.isEmpty() ? "?" : value.substring(0, 1).toUpperCase(Locale.US);
+    p.setColor(ACCENT);
+    p.setTextSize(s * .42f);
+    p.setTextAlign(Paint.Align.CENTER);
+    Paint.FontMetrics m = p.getFontMetrics();
+    c.drawText(x, s / 2f, s / 2f - (m.ascent + m.descent) / 2, p);
+    return b;
+  }
+
+  private static String normalize(String v) {
+    if (v == null) return "";
+    String n = v.trim();
+    if (n.startsWith("<plus>")) n = n.substring(6);
+    return n.startsWith("+") ? n.substring(1) : n;
+  }
+
+  private float dp(float v) {
+    return v * getResources().getDisplayMetrics().density;
+  }
+
+  private float sp(float v) {
+    return v * getResources().getDisplayMetrics().scaledDensity;
+  }
+
+  private static Bitmap color(int c) {
+    Bitmap b = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
+    b.eraseColor(c);
+    return b;
+  }
+
+  private static void recycle(Bitmap... bs) {
+    for (Bitmap b : bs) if (b != null && !b.isRecycled()) b.recycle();
+  }
+
+  public interface Listener {
+    void onBack();
+
+    void onMore();
+
+    void onSend();
+
+    void onTypingChanged(String value);
+
+    void onMessageLongPress(MessageEntity message);
+  }
+}

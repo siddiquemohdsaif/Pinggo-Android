@@ -21,7 +21,7 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.OtpHandler;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.activity.HomeActivity;
 import com.w3n.pinggo.activity.SignUpActivity;
-import com.w3n.pinggo.utils.login.LoginFlowResolver;
+import com.w3n.pinggo.Util.login.LoginFlowResolver;
 import com.w3n.pinggo.views.common.BlockingProgressView;
 import com.w3n.pinggo.views.login.FlashCallLoginView;
 

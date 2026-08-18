@@ -46,14 +46,9 @@
     <string name="sms_available_countdown">You can request an SMS in %1$s</string>
     <string name="sms_available_now">You can request an SMS now</string>
     <string name="send_sms">Send SMS</string>
-    <string name="dob">Date of birth</string>
-    <string name="description">Description</string>
-    <string name="default_description">Hey There !</string>
     <string name="next">Next</string>
     <string name="name_required">Enter name</string>
-    <string name="description_required">Enter description</string>
     <string name="email_required">Enter email</string>
-    <string name="dob_required">Enter date of birth</string>
     <string name="sign_up_complete">Sign up complete</string>
     <string name="phone_number">Phone number</string>
     <string name="pinggo_brand">PingGo</string>
