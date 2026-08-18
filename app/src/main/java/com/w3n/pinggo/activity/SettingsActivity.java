@@ -143,7 +143,7 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
     title.setGravity(Gravity.CENTER);
     root.addView(title, new LinearLayout.LayoutParams(-1, -2));
     CropImageView crop = new CropImageView(this);
-    crop.setCropBoxSizeDp(280);
+    crop.setCropBoxSizeRangeDp(180, 420);
     crop.setBitmap(bitmap);
     LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, 0, 1);
     cp.topMargin = dp(12);

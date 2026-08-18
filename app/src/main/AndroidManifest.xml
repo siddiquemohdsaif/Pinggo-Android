@@ -47,6 +47,7 @@
         <activity
             android:name=".activity.SplashScreenActivity"
             android:exported="true"
+            android:theme="@style/Theme.PingGo.Splash"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

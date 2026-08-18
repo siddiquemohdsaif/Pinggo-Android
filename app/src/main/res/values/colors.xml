@@ -3,6 +3,7 @@
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
     <color name="screen_background">#F7FAFC</color>
+    <color name="splash_screen_background">#EBF1F7</color>
     <color name="primary_text">#18212F</color>
     <color name="secondary_text">#627082</color>
     <color name="input_background">#FFFFFFFF</color>

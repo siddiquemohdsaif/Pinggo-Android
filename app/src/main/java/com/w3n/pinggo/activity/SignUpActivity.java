@@ -44,7 +44,8 @@ import java.io.InputStream;
 public class SignUpActivity extends AppCompatActivity {
   public static final String EXTRA_PHONE_NUMBER = "com.w3n.pinggo.extra.PHONE_NUMBER";
   public static final String EXTRA_EMAIL = "com.w3n.pinggo.extra.EMAIL";
-  private static final int CROP_BOX_SIZE_DP = 280;
+  private static final int MIN_CROP_BOX_SIZE_DP = 180;
+  private static final int MAX_CROP_BOX_SIZE_DP = 420;
 
   private final ActivityResultLauncher<String> photoPicker =
       registerForActivityResult(new ActivityResultContracts.GetContent(), this::onPhotoSelected);
@@ -153,7 +154,7 @@ public class SignUpActivity extends AppCompatActivity {
 
     CropImageView cropView = new CropImageView(this);
     cropView.setBackgroundColor(Color.BLACK);
-    cropView.setCropBoxSizeDp(CROP_BOX_SIZE_DP);
+    cropView.setCropBoxSizeRangeDp(MIN_CROP_BOX_SIZE_DP, MAX_CROP_BOX_SIZE_DP);
     cropView.setBitmap(bitmap);
     LinearLayout.LayoutParams cropParams =
         new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);

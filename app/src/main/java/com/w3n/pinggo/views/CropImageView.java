@@ -14,14 +14,19 @@ public class CropImageView extends View {
     private final Paint imagePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Paint dimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint borderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint handlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF imageRect = new RectF();
     private final RectF cropRect = new RectF();
 
     private Bitmap bitmap;
-    private int cropBoxSizePx;
+    private int minimumCropBoxSizePx;
+    private int maximumCropBoxSizePx = Integer.MAX_VALUE;
     private float downX;
     private float downY;
     private boolean draggingCrop;
+    private boolean resizingCrop;
+    private float resizeStartDistance;
+    private float resizeStartSize;
 
     public CropImageView(Context context) {
         super(context);
@@ -38,6 +43,8 @@ public class CropImageView extends View {
         borderPaint.setColor(Color.WHITE);
         borderPaint.setStyle(Paint.Style.STROKE);
         borderPaint.setStrokeWidth(dp(3));
+        handlePaint.setColor(Color.WHITE);
+        handlePaint.setStyle(Paint.Style.FILL);
     }
 
     public void setBitmap(Bitmap bitmap) {
@@ -47,7 +54,16 @@ public class CropImageView extends View {
     }
 
     public void setCropBoxSizeDp(int cropBoxSizeDp) {
-        cropBoxSizePx = Math.round(dp(cropBoxSizeDp));
+        setCropBoxSizeRangeDp(cropBoxSizeDp, cropBoxSizeDp);
+    }
+
+    /** Makes the square crop box responsive within the supplied size range. */
+    public void setCropBoxSizeRangeDp(int minimumSizeDp, int maximumSizeDp) {
+        if (minimumSizeDp < 0 || maximumSizeDp <= 0 || minimumSizeDp > maximumSizeDp) {
+            throw new IllegalArgumentException("Invalid crop box size range");
+        }
+        minimumCropBoxSizePx = Math.round(dp(minimumSizeDp));
+        maximumCropBoxSizePx = Math.round(dp(maximumSizeDp));
         resetRects();
         invalidate();
     }
@@ -87,6 +103,7 @@ public class CropImageView extends View {
         canvas.drawRect(imageRect.left, cropRect.top, cropRect.left, cropRect.bottom, dimPaint);
         canvas.drawRect(cropRect.right, cropRect.top, imageRect.right, cropRect.bottom, dimPaint);
         canvas.drawRect(cropRect, borderPaint);
+        drawResizeHandles(canvas);
     }
 
     @Override
@@ -99,9 +116,19 @@ public class CropImageView extends View {
             case MotionEvent.ACTION_DOWN:
                 downX = event.getX();
                 downY = event.getY();
-                draggingCrop = cropRect.contains(downX, downY);
-                return draggingCrop;
+                resizingCrop = isNearCropBorder(downX, downY);
+                draggingCrop = !resizingCrop && cropRect.contains(downX, downY);
+                if (resizingCrop) {
+                    resizeStartDistance = distanceFromCropCenter(downX, downY);
+                    resizeStartSize = cropRect.width();
+                }
+                return resizingCrop || draggingCrop;
             case MotionEvent.ACTION_MOVE:
+                if (resizingCrop) {
+                    resizeCrop(event.getX(), event.getY());
+                    invalidate();
+                    return true;
+                }
                 if (!draggingCrop) {
                     return false;
                 }
@@ -115,6 +142,7 @@ public class CropImageView extends View {
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
                 draggingCrop = false;
+                resizingCrop = false;
                 return true;
             default:
                 return false;
@@ -142,8 +170,11 @@ public class CropImageView extends View {
         float top = (getHeight() - height) / 2f;
         imageRect.set(left, top, left + width, top + height);
 
-        float cropSize = cropBoxSizePx > 0 ? cropBoxSizePx : Math.min(imageRect.width(), imageRect.height()) * 0.72f;
-        cropSize = Math.min(cropSize, Math.min(imageRect.width(), imageRect.height()));
+        float availableSize = Math.min(imageRect.width(), imageRect.height());
+        float cropSize = Math.min(availableSize, maximumCropBoxSizePx);
+        if (availableSize >= minimumCropBoxSizePx) {
+            cropSize = Math.max(cropSize, minimumCropBoxSizePx);
+        }
         float cropLeft = imageRect.centerX() - cropSize / 2f;
         float cropTop = imageRect.centerY() - cropSize / 2f;
         cropRect.set(cropLeft, cropTop, cropLeft + cropSize, cropTop + cropSize);
@@ -157,6 +188,53 @@ public class CropImageView extends View {
         nextLeft = Math.max(imageRect.left, Math.min(nextLeft, imageRect.right - size));
         nextTop = Math.max(imageRect.top, Math.min(nextTop, imageRect.bottom - size));
         cropRect.set(nextLeft, nextTop, nextLeft + size, nextTop + size);
+    }
+
+    private void resizeCrop(float touchX, float touchY) {
+        float centerX = cropRect.centerX();
+        float centerY = cropRect.centerY();
+        float distance = Math.max(Math.abs(touchX - centerX), Math.abs(touchY - centerY));
+        float requestedSize = resizeStartSize + 2f * (distance - resizeStartDistance);
+
+        float maximumAroundCenter = 2f * Math.min(
+                Math.min(centerX - imageRect.left, imageRect.right - centerX),
+                Math.min(centerY - imageRect.top, imageRect.bottom - centerY)
+        );
+        float maximumSize = Math.min(maximumCropBoxSizePx, maximumAroundCenter);
+        float minimumSize = Math.min(minimumCropBoxSizePx, maximumSize);
+        float size = Math.max(minimumSize, Math.min(requestedSize, maximumSize));
+        float halfSize = size / 2f;
+        cropRect.set(
+                centerX - halfSize,
+                centerY - halfSize,
+                centerX + halfSize,
+                centerY + halfSize
+        );
+    }
+
+    private boolean isNearCropBorder(float x, float y) {
+        float touchTarget = dp(24);
+        if (x < cropRect.left - touchTarget || x > cropRect.right + touchTarget
+                || y < cropRect.top - touchTarget || y > cropRect.bottom + touchTarget) {
+            return false;
+        }
+        float nearestEdge = Math.min(
+                Math.min(Math.abs(x - cropRect.left), Math.abs(x - cropRect.right)),
+                Math.min(Math.abs(y - cropRect.top), Math.abs(y - cropRect.bottom))
+        );
+        return nearestEdge <= touchTarget;
+    }
+
+    private float distanceFromCropCenter(float x, float y) {
+        return Math.max(Math.abs(x - cropRect.centerX()), Math.abs(y - cropRect.centerY()));
+    }
+
+    private void drawResizeHandles(Canvas canvas) {
+        float radius = dp(6);
+        canvas.drawCircle(cropRect.left, cropRect.top, radius, handlePaint);
+        canvas.drawCircle(cropRect.right, cropRect.top, radius, handlePaint);
+        canvas.drawCircle(cropRect.left, cropRect.bottom, radius, handlePaint);
+        canvas.drawCircle(cropRect.right, cropRect.bottom, radius, handlePaint);
     }
 
     private int clamp(int value, int min, int max) {

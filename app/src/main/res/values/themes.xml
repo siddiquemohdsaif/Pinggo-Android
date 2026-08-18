@@ -7,6 +7,14 @@
 
     <style name="Theme.PingGo" parent="Base.Theme.PingGo" />
 
+    <style name="Theme.PingGo.Splash" parent="Theme.PingGo">
+        <item name="android:windowBackground">@color/splash_screen_background</item>
+        <item name="android:statusBarColor">@color/splash_screen_background</item>
+        <item name="android:navigationBarColor">@color/splash_screen_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+
     <style name="ShapeAppearanceOverlay" />
 
     <style name="ShapeAppearanceOverlay.PingGo" />
