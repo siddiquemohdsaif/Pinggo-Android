@@ -1,26 +1,16 @@
 package com.w3n.pinggo.activity;
 
-import android.app.Dialog;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.Color;
-import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
-import android.view.Gravity;
 import android.view.ViewGroup;
-import android.view.Window;
-import android.widget.Button;
-import android.widget.EditText;
-import android.widget.LinearLayout;
-import android.widget.TextView;
 import android.widget.Toast;
 import androidx.activity.EdgeToEdge;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
-import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -31,7 +21,8 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.ProfilePhotoLocalStore;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.data.local.LogoutDataCleaner;
 import com.w3n.pinggo.modals.UserData;
-import com.w3n.pinggo.views.CropImageView;
+import com.w3n.pinggo.views.common.NativeCropDialogView;
+import com.w3n.pinggo.views.common.NativePromptDialogView;
 import com.w3n.pinggo.views.settings.SettingsView;
 import java.io.File;
 import java.io.IOException;
@@ -42,6 +33,8 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
   private SettingsView settingsView;
   private ActivityResultLauncher<String> picker;
   private Bitmap selectedPhoto;
+  private NativeCropDialogView cropDialog;
+  private NativePromptDialogView promptDialog;
   private String phone = "";
 
   @Override
@@ -132,52 +125,29 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
   }
 
   private void showCrop(Bitmap bitmap) {
-    Dialog dialog = new Dialog(this);
-    LinearLayout root = new LinearLayout(this);
-    root.setOrientation(LinearLayout.VERTICAL);
-    root.setPadding(dp(20), dp(20), dp(20), dp(20));
-    root.setBackgroundColor(Color.WHITE);
-    TextView title = new TextView(this);
-    title.setText(R.string.select_crop_region);
-    title.setTextSize(22);
-    title.setGravity(Gravity.CENTER);
-    root.addView(title, new LinearLayout.LayoutParams(-1, -2));
-    CropImageView crop = new CropImageView(this);
-    crop.setCropBoxSizeRangeDp(180, 420);
-    crop.setBitmap(bitmap);
-    LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, 0, 1);
-    cp.topMargin = dp(12);
-    root.addView(crop, cp);
-    LinearLayout actions = new LinearLayout(this);
-    actions.setOrientation(LinearLayout.HORIZONTAL);
-    Button retry = new Button(this);
-    retry.setText(R.string.retry);
-    Button ok = new Button(this);
-    ok.setText(android.R.string.ok);
-    actions.addView(retry, new LinearLayout.LayoutParams(0, dp(56), 1));
-    actions.addView(ok, new LinearLayout.LayoutParams(0, dp(56), 1));
-    root.addView(actions);
-    retry.setOnClickListener(
-        v -> {
-          dialog.dismiss();
-          picker.launch("image/*");
-        });
-    ok.setOnClickListener(
-        v -> {
-          Bitmap value = crop.getCroppedBitmap();
-          if (value == null) {
-            Toast.makeText(this, R.string.image_load_failed, Toast.LENGTH_SHORT).show();
-            return;
+    cropDialog = new NativeCropDialogView(this, bitmap, 180, 420,
+        new NativeCropDialogView.Listener() {
+          @Override public void onRetry() { picker.launch("image/*"); }
+          @Override public void onConfirm(Bitmap cropped) { upload(cropped); }
+          @Override public void onInvalidCrop() {
+            Toast.makeText(SettingsActivity.this, R.string.image_load_failed,
+                Toast.LENGTH_SHORT).show();
           }
-          dialog.dismiss();
-          upload(value);
+          @Override public void onDismiss() { removeCropDialog(); }
         });
-    dialog.setContentView(root);
-    Window w = dialog.getWindow();
-    if (w != null) w.setBackgroundDrawable(new ColorDrawable(Color.WHITE));
-    dialog.show();
-    if (w != null)
-      w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+    ((ViewGroup) findViewById(android.R.id.content)).addView(cropDialog,
+        new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT));
+  }
+
+  private void removeCropDialog() {
+    NativeCropDialogView current = cropDialog;
+    cropDialog = null;
+    if (current == null) return;
+    if (current.getParent() instanceof ViewGroup) {
+      ((ViewGroup) current.getParent()).removeView(current);
+    }
+    current.release();
   }
 
   private void upload(Bitmap bitmap) {
@@ -230,41 +200,37 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
 
   @Override
   public void onPhone() {
-    new AlertDialog.Builder(this)
-        .setTitle(R.string.phone_number)
-        .setMessage(getString(R.string.phone_cannot_be_changed, phone))
-        .setPositiveButton(android.R.string.ok, null)
-        .show();
+    showPrompt(NativePromptDialogView.message(this, getString(R.string.phone_number),
+        getString(R.string.phone_cannot_be_changed, phone), this::removePrompt));
   }
 
   private void edit(String title, String current, int type, ValueHandler handler) {
-    EditText field = new EditText(this);
-    field.setInputType(type);
-    field.setSingleLine(true);
-    field.setText(current);
-    field.setSelection(current.length());
-    AlertDialog dialog =
-        new AlertDialog.Builder(this)
-            .setTitle(title)
-            .setView(field)
-            .setPositiveButton(R.string.confirm, null)
-            .setNegativeButton(android.R.string.cancel, null)
-            .create();
-    dialog.setOnShowListener(
-        x ->
-            dialog
-                .getButton(AlertDialog.BUTTON_POSITIVE)
-                .setOnClickListener(
-                    v -> {
-                      String value = field.getText().toString().trim();
-                      if (value.isEmpty()) {
-                        field.setError(getString(R.string.field_required));
-                        return;
-                      }
-                      dialog.dismiss();
-                      handler.accept(value);
-                    }));
-    dialog.show();
+    showPrompt(NativePromptDialogView.input(this, title, current, type, value -> {
+      if (value.isEmpty()) {
+        Toast.makeText(this, R.string.field_required, Toast.LENGTH_SHORT).show();
+        return false;
+      }
+      handler.accept(value);
+      return true;
+    }, this::removePrompt));
+  }
+
+  private void showPrompt(NativePromptDialogView prompt) {
+    removePrompt();
+    promptDialog = prompt;
+    ((ViewGroup) findViewById(android.R.id.content)).addView(prompt,
+        new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT));
+  }
+
+  private void removePrompt() {
+    NativePromptDialogView current = promptDialog;
+    promptDialog = null;
+    if (current == null) return;
+    if (current.getParent() instanceof ViewGroup) {
+      ((ViewGroup) current.getParent()).removeView(current);
+    }
+    current.release();
   }
 
   private AppFunctionManager.Callback updateCallback() {
@@ -314,6 +280,8 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
 
   @Override
   protected void onDestroy() {
+    removeCropDialog();
+    removePrompt();
     if (settingsView != null) settingsView.release();
     settingsView = null;
     super.onDestroy();

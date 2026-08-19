@@ -3,9 +3,9 @@ package com.w3n.pinggo.activity;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.ViewGroup;
 import android.widget.Toast;
 import androidx.activity.EdgeToEdge;
-import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -15,6 +15,7 @@ import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.local.PresenceEntity;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.views.chat.ChatView;
+import com.w3n.pinggo.views.common.NativePromptDialogView;
 import java.text.DateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -32,6 +33,7 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
   private final Set<String> pendingSeen = new HashSet<>();
   private ChatView chatView;
   private ChatRepository repository;
+  private NativePromptDialogView promptDialog;
   private String chatId, currentUser, receiverId, replyingId, editingId;
   private boolean typingStarted, peerTyping;
   private PresenceEntity latestPresence;
@@ -185,11 +187,8 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
     actions.add("Reply");
     if (own) actions.add("Edit");
     actions.add("Delete");
-    new AlertDialog.Builder(this)
-        .setItems(
-            actions.toArray(new CharSequence[0]),
-            (d, which) -> handleAction(actions.get(which), message, own))
-        .show();
+    showPrompt(NativePromptDialogView.actions(this, actions,
+        which -> handleAction(actions.get(which), message, own), this::removePrompt));
   }
 
   private void handleAction(String action, MessageEntity message, boolean own) {
@@ -229,11 +228,26 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
 
   @Override
   public void onMore() {
-    new AlertDialog.Builder(this)
-        .setTitle("Chat")
-        .setMessage("Messages, presence, reply, edit and delete are connected.")
-        .setPositiveButton(android.R.string.ok, null)
-        .show();
+    showPrompt(NativePromptDialogView.message(this, "Chat",
+        "Messages, presence, reply, edit and delete are connected.", this::removePrompt));
+  }
+
+  private void showPrompt(NativePromptDialogView prompt) {
+    removePrompt();
+    promptDialog = prompt;
+    ((ViewGroup) findViewById(android.R.id.content)).addView(prompt,
+        new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT));
+  }
+
+  private void removePrompt() {
+    NativePromptDialogView current = promptDialog;
+    promptDialog = null;
+    if (current == null) return;
+    if (current.getParent() instanceof ViewGroup) {
+      ((ViewGroup) current.getParent()).removeView(current);
+    }
+    current.release();
   }
 
   private String receiver() {
@@ -254,6 +268,7 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
 
   @Override
   protected void onDestroy() {
+    removePrompt();
     stopTyping.run();
     typingHandler.removeCallbacksAndMessages(null);
     if (repository != null) repository.setEventListener(null);

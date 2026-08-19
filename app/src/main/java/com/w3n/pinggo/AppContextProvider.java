@@ -8,10 +8,10 @@ import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.FrameLayout;
-import android.widget.TextView;
 
 import com.google.gson.Gson;
 import com.w3n.pinggo.modals.AppConfiguration;
+import com.w3n.pinggo.views.common.NativeMessageView;
 
 import org.json.JSONObject;
 
@@ -88,18 +88,14 @@ public class AppContextProvider extends Application {
             return; // already added
         }
 
-        TextView devLabel = new TextView(activity);
-        devLabel.setText("DEV");
+        NativeMessageView devLabel = new NativeMessageView(activity, "DEV", Color.WHITE, 18f);
         devLabel.setTag(tag);
-        devLabel.setTextColor(Color.WHITE);
         devLabel.setBackgroundColor(Color.RED);
-        devLabel.setPadding(20, 10, 20, 10);
-        devLabel.setTextSize(18);
         devLabel.setAlpha(0.8f);
 
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT
+                Math.round(72 * activity.getResources().getDisplayMetrics().density),
+                Math.round(40 * activity.getResources().getDisplayMetrics().density)
         );
         params.gravity = Gravity.TOP | Gravity.END;
         params.setMargins(16, 50, 16, 16); // adjust top margin if needed

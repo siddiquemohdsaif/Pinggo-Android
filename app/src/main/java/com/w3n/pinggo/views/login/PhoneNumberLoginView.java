@@ -27,12 +27,9 @@ import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.FrameLayout;
 import android.widget.PopupWindow;
-import android.widget.TextView;
-import android.util.TypedValue;
 
 import androidx.annotation.NonNull;
 import androidx.core.content.ContextCompat;
-import androidx.core.content.res.ResourcesCompat;
 
 import com.ogfa.nativeviews.button.Button;
 import com.ogfa.nativeviews.card.Card;
@@ -51,6 +48,7 @@ import com.hbb20.CCPCountry;
 import com.hbb20.CountryCodePicker;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.views.common.NativeTextFieldImeController;
+import com.w3n.pinggo.views.common.NativeMessageView;
 import com.w3n.pinggo.Util.login.CountryAdapter;
 import com.w3n.pinggo.Util.login.CountryCardLayout;
 import com.w3n.pinggo.Util.login.CountryDetector;
@@ -117,7 +115,7 @@ public class PhoneNumberLoginView extends View {
     private CountryAdapter countryAdapter;
     private CountryCardLayout countryPopupCardLayout;
     private CountryListView countryListView;
-    private TextView countryEmptyText;
+    private NativeMessageView countryEmptyText;
     private Runnable pendingCountryFilter;
     private String selectedCountryName = "India";
     private String selectedCountryCode = "+91";
@@ -560,12 +558,8 @@ public class PhoneNumberLoginView extends View {
                 });
         countryPopupCardLayout.addView(countryListView);
 
-        countryEmptyText = new TextView(getContext());
-        countryEmptyText.setText("No matched country found");
-        countryEmptyText.setTextColor(MUTED_TEXT_COLOR);
-        countryEmptyText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
-        countryEmptyText.setGravity(Gravity.CENTER);
-        countryEmptyText.setTypeface(ResourcesCompat.getFont(getContext(), R.font.inter_opsz_wght));
+        countryEmptyText = new NativeMessageView(getContext(),
+                "No matched country found", MUTED_TEXT_COLOR, 16f);
         countryEmptyText.setVisibility(View.GONE);
         countryPopupCardLayout.addView(countryEmptyText);
 
@@ -590,6 +584,7 @@ public class PhoneNumberLoginView extends View {
             countryAdapter = null;
             countryPopupCardLayout = null;
             countryListView = null;
+            if (countryEmptyText != null) countryEmptyText.release();
             countryEmptyText = null;
             if (pendingCountryFilter != null) removeCallbacks(pendingCountryFilter);
             pendingCountryFilter = null;

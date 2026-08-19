@@ -1,22 +1,14 @@
 package com.w3n.pinggo.activity;
 
-import android.app.Dialog;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.Color;
-import android.graphics.Typeface;
-import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.view.Gravity;
 import android.view.ViewGroup;
 import android.view.Window;
-import android.widget.Button;
 import android.widget.FrameLayout;
-import android.widget.LinearLayout;
-import android.widget.TextView;
 import android.widget.Toast;
 import androidx.activity.EdgeToEdge;
 import androidx.activity.result.ActivityResultLauncher;
@@ -33,9 +25,9 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ProfilePhotoLocalStore;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.modals.UserData;
-import com.w3n.pinggo.views.CropImageView;
 import com.w3n.pinggo.views.common.BlockingProgressView;
 import com.w3n.pinggo.views.common.ExitAppController;
+import com.w3n.pinggo.views.common.NativeCropDialogView;
 import com.w3n.pinggo.views.signup.ProfileSetupView;
 import java.io.IOException;
 import java.io.InputStream;
@@ -52,7 +44,7 @@ public class SignUpActivity extends AppCompatActivity {
   private ProfileSetupView profileSetupView;
   private BlockingProgressView progressView;
   private Bitmap selectedPhoto;
-  private Dialog cropDialog;
+  private NativeCropDialogView cropDialog;
   private String phoneNumber;
   private String email;
   private boolean requestInProgress;
@@ -134,77 +126,35 @@ public class SignUpActivity extends AppCompatActivity {
   }
 
   private void showCropDialog(Bitmap bitmap) {
-    Dialog dialog = new Dialog(this);
-    cropDialog = dialog;
-    LinearLayout root = new LinearLayout(this);
-    root.setOrientation(LinearLayout.VERTICAL);
-    root.setPadding(dp(24), dp(24), dp(24), dp(24));
-    root.setBackgroundColor(Color.WHITE);
-
-    TextView title = new TextView(this);
-    title.setText(R.string.select_crop_region);
-    title.setTextColor(0xFF000E1A);
-    title.setTextSize(24f);
-    title.setGravity(Gravity.CENTER);
-    title.setTypeface(title.getTypeface(), Typeface.BOLD);
-    root.addView(
-        title,
-        new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-    CropImageView cropView = new CropImageView(this);
-    cropView.setBackgroundColor(Color.BLACK);
-    cropView.setCropBoxSizeRangeDp(MIN_CROP_BOX_SIZE_DP, MAX_CROP_BOX_SIZE_DP);
-    cropView.setBitmap(bitmap);
-    LinearLayout.LayoutParams cropParams =
-        new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-    cropParams.topMargin = dp(16);
-    root.addView(cropView, cropParams);
-
-    LinearLayout actions = new LinearLayout(this);
-    actions.setOrientation(LinearLayout.HORIZONTAL);
-    LinearLayout.LayoutParams actionsParams =
-        new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56));
-    actionsParams.topMargin = dp(16);
-    root.addView(actions, actionsParams);
-    Button retry = actionButton(actions, R.string.retry, true);
-    Button confirm = actionButton(actions, android.R.string.ok, false);
-    retry.setOnClickListener(
-        view -> {
-          dialog.dismiss();
-          photoPicker.launch("image/*");
-        });
-    confirm.setOnClickListener(
-        view -> {
-          Bitmap cropped = cropView.getCroppedBitmap();
-          if (cropped == null) {
-            Toast.makeText(this, R.string.image_load_failed, Toast.LENGTH_SHORT).show();
-            return;
+    cropDialog = new NativeCropDialogView(this, bitmap,
+        MIN_CROP_BOX_SIZE_DP, MAX_CROP_BOX_SIZE_DP,
+        new NativeCropDialogView.Listener() {
+          @Override public void onRetry() { photoPicker.launch("image/*"); }
+          @Override public void onConfirm(Bitmap cropped) {
+            selectedPhoto = cropped;
+            profileSetupView.setProfilePhoto(cropped);
           }
-          selectedPhoto = cropped;
-          profileSetupView.setProfilePhoto(cropped);
-          dialog.dismiss();
+          @Override public void onInvalidCrop() {
+            Toast.makeText(SignUpActivity.this, R.string.image_load_failed,
+                Toast.LENGTH_SHORT).show();
+          }
+          @Override public void onDismiss() { removeCropDialog(); }
         });
-
-    dialog.setContentView(root);
-    Window window = dialog.getWindow();
-    if (window != null) window.setBackgroundDrawable(new ColorDrawable(Color.WHITE));
-    dialog.setOnDismissListener(ignored -> cropDialog = cropDialog == dialog ? null : cropDialog);
-    dialog.show();
-    if (window != null) {
-      window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-    }
+    ((ViewGroup) findViewById(android.R.id.content)).addView(cropDialog,
+        new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT));
   }
 
-  private Button actionButton(LinearLayout parent, int text, boolean first) {
-    Button button = new Button(this);
-    button.setText(text);
-    LinearLayout.LayoutParams params =
-        new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
-    if (first) params.rightMargin = dp(8);
-    else params.leftMargin = dp(8);
-    parent.addView(button, params);
-    return button;
+  private void removeCropDialog() {
+    NativeCropDialogView current = cropDialog;
+    cropDialog = null;
+    if (current == null) return;
+    if (current.getParent() instanceof ViewGroup) {
+    if (current.getParent() instanceof ViewGroup) {
+      ((ViewGroup) current.getParent()).removeView(current);
+    }
+    }
+    current.release();
   }
 
   private void confirmSignUp(String name) {
@@ -303,8 +253,7 @@ public class SignUpActivity extends AppCompatActivity {
       ViewCompat.setOnApplyWindowInsetsListener(profileSetupView, null);
     }
     if (progressView != null) progressView.setLoading(false);
-    if (cropDialog != null) cropDialog.dismiss();
-    cropDialog = null;
+    removeCropDialog();
     requestInProgress = false;
     super.onDestroy();
   }
