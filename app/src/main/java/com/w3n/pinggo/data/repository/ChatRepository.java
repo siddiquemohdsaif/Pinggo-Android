@@ -1,16 +1,24 @@
 package com.w3n.pinggo.data.repository;
 
 import android.content.Context;
+import android.database.Cursor;
+import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.Log;
 
 import androidx.lifecycle.LiveData;
+import androidx.work.Constraints;
+import androidx.work.ExistingWorkPolicy;
+import androidx.work.NetworkType;
+import androidx.work.OneTimeWorkRequest;
+import androidx.work.WorkManager;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
+import com.w3n.pinggo.Database.CloudFunction.RestApi.APIAuth;
+import com.w3n.pinggo.Database.CloudFunction.RestApi.AppRestAPI;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
 import com.w3n.pinggo.Database.CloudFunction.WebSocket.ChatWebSocketClient;
@@ -22,6 +30,10 @@ import com.w3n.pinggo.data.local.ChatEntity;
 import com.w3n.pinggo.data.local.PresenceDao;
 import com.w3n.pinggo.data.local.PresenceEntity;
 import com.w3n.pinggo.data.local.PingGoDatabase;
+import com.w3n.pinggo.data.local.TransferDao;
+import com.w3n.pinggo.data.local.TransferEntity;
+import com.w3n.pinggo.data.worker.AttachmentUploadWorker;
+import com.w3n.pinggo.data.worker.AttachmentDownloadWorker;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -29,12 +41,36 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.io.IOException;
+import java.io.InputStream;
+
+import android.provider.OpenableColumns;
+import okhttp3.MediaType;
+import okhttp3.MultipartBody;
+import okhttp3.RequestBody;
+import okio.BufferedSink;
+import retrofit2.Call;
+import retrofit2.Callback;
+import retrofit2.Response;
 
 public class ChatRepository implements ChatWebSocketClient.Listener {
+    private static final long ATTACHMENT_CHUNK_SIZE = 3L * 1024L * 1024L;
     public interface EventListener {
         void onTyping(String chatId, String userId, boolean typing);
 
         void onSocketError(String error);
+    }
+
+    public interface AttachmentCallback {
+        void onSent();
+
+        void onError(String message);
+    }
+
+    public interface DownloadCallback {
+        void onAvailable(Uri uri);
+        void onQueued();
+        void onError(String message);
     }
 
     private static volatile ChatRepository instance;
@@ -43,6 +79,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     private final MessageDao messageDao;
     private final ChatDao chatDao;
     private final PresenceDao presenceDao;
+    private final TransferDao transferDao;
     private final AppFunctionManager appFunctionManager;
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -56,6 +93,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         messageDao = database.messageDao();
         chatDao = database.chatDao();
         presenceDao = database.presenceDao();
+        transferDao = database.transferDao();
         appFunctionManager = AppFunctionManager.getInstance();
         socketClient = new ChatWebSocketClient(this);
     }
@@ -93,6 +131,53 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         return chatDao.observeChats();
     }
 
+    public LiveData<List<TransferEntity>> observeTransfers(String chatId) {
+        return transferDao.observeChat(chatId);
+    }
+
+    public void downloadAttachment(MessageEntity message, DownloadCallback callback) {
+        ioExecutor.execute(() -> {
+            if (message == null || message.attachmentId == null || message.attachmentUrl == null) {
+                mainHandler.post(() -> callback.onError("Download URL is unavailable."));
+                return;
+            }
+            TransferEntity transfer = transferDao.findByAttachmentId(message.attachmentId);
+            if (transfer != null && transfer.localUri != null
+                    && canReadAttachment(Uri.parse(transfer.localUri))) {
+                Uri uri = Uri.parse(transfer.localUri);
+                mainHandler.post(() -> callback.onAvailable(uri));
+                return;
+            }
+            if (transfer == null) transfer = new TransferEntity(UUID.randomUUID().toString());
+            transfer.attachmentId = message.attachmentId;
+            transfer.clientMessageId = message.clientMessageId;
+            transfer.direction = "download";
+            transfer.chatId = message.chatId;
+            transfer.senderId = message.senderId;
+            transfer.receiverId = message.receiverId;
+            transfer.kind = message.messageType;
+            transfer.fileName = message.attachmentName == null ? "attachment" : message.attachmentName;
+            transfer.mimeType = message.attachmentMimeType == null ? "application/octet-stream" : message.attachmentMimeType;
+            transfer.remoteUrl = message.attachmentUrl;
+            transfer.totalSize = message.attachmentSize == null ? 0 : message.attachmentSize;
+            transfer.fileHash = message.attachmentSha256;
+            transfer.status = "queued";
+            transfer.error = null;
+            transfer.updatedTime = System.currentTimeMillis();
+            transferDao.upsert(transfer);
+            Constraints constraints = new Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED).build();
+            OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(AttachmentDownloadWorker.class)
+                    .setConstraints(constraints)
+                    .setInputData(new androidx.work.Data.Builder()
+                            .putString(AttachmentDownloadWorker.KEY_TRANSFER_ID, transfer.transferId).build())
+                    .build();
+            WorkManager.getInstance(appContext).enqueueUniqueWork(
+                    "pinggo-download-" + transfer.attachmentId, ExistingWorkPolicy.KEEP, request);
+            mainHandler.post(callback::onQueued);
+        });
+    }
+
     public LiveData<PresenceEntity> observePresence(String userId) {
         return presenceDao.observePresence(normalizeAccountId(userId));
     }
@@ -104,7 +189,6 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             return;
         }
         socketClient.connect(currentUserId, encryptedCredential);
-        Log.d("CHAT_REPOSITORY", "connect: ");
     }
 
     public void disconnect() {
@@ -112,6 +196,308 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     public void sendMessage(String chatId, String receiverId, String text, String repliedMessageId) {
+        sendTypedMessage(chatId, receiverId, text, repliedMessageId, "text", null, null);
+    }
+
+    public void sendLocation(String chatId, String receiverId, double latitude, double longitude,
+                             float accuracy, String repliedMessageId) {
+        JsonObject location = new JsonObject();
+        location.addProperty("latitude", latitude);
+        location.addProperty("longitude", longitude);
+        location.addProperty("accuracy", accuracy);
+        sendTypedMessage(chatId, receiverId, "", repliedMessageId, "location", null, location);
+    }
+
+    public void uploadAndSendAttachment(String chatId, String receiverId, String caption,
+                                        String repliedMessageId, Uri uri, String kind,
+                                        AttachmentCallback callback) {
+        AttachmentCallback mainCallback = onMainThread(callback);
+        ioExecutor.execute(() -> enqueueAttachmentTransfer(chatId, receiverId, caption,
+                repliedMessageId, uri, kind, null, mainCallback));
+    }
+
+    private void enqueueAttachmentTransfer(String chatId, String receiverId, String caption,
+                                           String repliedMessageId, Uri uri, String kind,
+                                           String existingClientMessageId,
+                                           AttachmentCallback callback) {
+        if (uri == null || kind == null || !canReadAttachment(uri)) {
+            callback.onError("File no longer available.");
+            return;
+        }
+        String name = attachmentName(uri);
+        long size = attachmentSize(uri);
+        if (size > 25L * 1024L * 1024L) {
+            callback.onError("Attachment must be 25 MB or smaller.");
+            return;
+        }
+        String mime = appContext.getContentResolver().getType(uri);
+        if (mime == null) mime = "application/octet-stream";
+        String clientMessageId = existingClientMessageId == null
+                ? "local_" + UUID.randomUUID() : existingClientMessageId;
+        String senderId = currentUserId == null || currentUserId.isEmpty()
+                ? normalizeAccountId(LoginStateManager.getInstance().getUID(appContext)) : currentUserId;
+        String normalizedReceiverId = normalizeAccountId(receiverId);
+        if (existingClientMessageId == null) {
+            messageDao.upsert(new MessageEntity(clientMessageId, clientMessageId, chatId, senderId,
+                    normalizedReceiverId, caption, repliedMessageId, System.currentTimeMillis(),
+                    null, null, MessageStatus.SENDING, kind, null, kind, name, mime, null,
+                    uri.toString(), size < 0 ? null : size, null, null, null));
+        } else {
+            messageDao.updateStatusByClientMessageId(clientMessageId, MessageStatus.SENDING);
+        }
+        TransferEntity transfer = transferDao.findByClientMessageId(clientMessageId);
+        if (transfer == null) transfer = new TransferEntity(UUID.randomUUID().toString());
+        transfer.clientMessageId = clientMessageId;
+        transfer.direction = "upload";
+        transfer.chatId = chatId;
+        transfer.senderId = senderId;
+        transfer.receiverId = normalizedReceiverId;
+        transfer.kind = kind;
+        transfer.caption = caption;
+        transfer.repliedMessageId = repliedMessageId;
+        transfer.fileName = name;
+        transfer.mimeType = mime;
+        transfer.sourceUri = uri.toString();
+        transfer.totalSize = Math.max(0, size);
+        transfer.status = "queued";
+        transfer.error = null;
+        transfer.updatedTime = System.currentTimeMillis();
+        transferDao.upsert(transfer);
+        enqueueUploadWork(transfer.transferId);
+        callback.onSent();
+    }
+
+    private void enqueueUploadWork(String transferId) {
+        Constraints constraints = new Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED).build();
+        OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(AttachmentUploadWorker.class)
+                .setConstraints(constraints)
+                .setInputData(new androidx.work.Data.Builder()
+                        .putString(AttachmentUploadWorker.KEY_TRANSFER_ID, transferId).build())
+                .build();
+        WorkManager.getInstance(appContext).enqueueUniqueWork(
+                "pinggo-upload-" + transferId, ExistingWorkPolicy.REPLACE, request);
+    }
+
+    public void sendCompletedBackgroundAttachment(TransferEntity transfer, JsonObject attachment) {
+        connect();
+        sendExistingMessage(transfer.clientMessageId, transfer.chatId, transfer.senderId,
+                transfer.receiverId, transfer.caption, transfer.repliedMessageId,
+                transfer.kind, attachment, null);
+    }
+
+    private void uploadAndSendAttachmentInternal(String chatId, String receiverId, String caption,
+                                                  String repliedMessageId, Uri uri, String kind,
+                                                  String existingClientMessageId,
+                                                  AttachmentCallback callback) {
+        if (uri == null || kind == null) {
+            callback.onError("Attachment is missing.");
+            return;
+        }
+        if (!canReadAttachment(uri)) {
+            callback.onError("Attachment access expired. Select the file again.");
+            return;
+        }
+        String name = attachmentName(uri);
+        long size = attachmentSize(uri);
+        if (size > 25L * 1024L * 1024L) {
+            callback.onError("Attachment must be 25 MB or smaller.");
+            return;
+        }
+        String mime = appContext.getContentResolver().getType(uri);
+        if (mime == null) mime = "application/octet-stream";
+        String clientMessageId = existingClientMessageId == null
+                ? "local_" + UUID.randomUUID() : existingClientMessageId;
+        String senderId = currentUserId == null || currentUserId.isEmpty()
+                ? normalizeAccountId(LoginStateManager.getInstance().getUID(appContext)) : currentUserId;
+        String normalizedReceiverId = normalizeAccountId(receiverId);
+        if (existingClientMessageId == null) {
+            MessageEntity localMessage = new MessageEntity(
+                    clientMessageId, clientMessageId, chatId, senderId, normalizedReceiverId,
+                    caption, repliedMessageId, System.currentTimeMillis(), null, null,
+                    MessageStatus.SENDING, kind, null, kind, name, mime, null, uri.toString(),
+                    size < 0 ? null : size, null, null, null);
+            ioExecutor.execute(() -> messageDao.upsert(localMessage));
+        } else {
+            ioExecutor.execute(() -> messageDao.updateStatusByClientMessageId(
+                    clientMessageId, MessageStatus.SENDING));
+        }
+        RequestBody streamBody = contentUriBody(uri, mime, size);
+        MultipartBody.Part file = MultipartBody.Part.createFormData("file", name, streamBody);
+        String token = LoginStateManager.getInstance().getUID(appContext) + "_"
+                + LoginStateManager.getInstance().getENC(appContext);
+        AppRestAPI api = new APIAuth(token).getRetrofit().create(AppRestAPI.class);
+        if (size > ATTACHMENT_CHUNK_SIZE) {
+            uploadAttachmentInChunks(api, uri, name, mime, size, chatId, kind,
+                    clientMessageId, senderId, normalizedReceiverId, caption,
+                    repliedMessageId, callback);
+            return;
+        }
+        RequestBody chatPart = RequestBody.create(chatId, MediaType.get("text/plain"));
+        RequestBody kindPart = RequestBody.create(kind, MediaType.get("text/plain"));
+        api.uploadChatAttachment(file, chatPart, kindPart).enqueue(new Callback<JsonObject>() {
+            @Override
+            public void onResponse(Call<JsonObject> call, Response<JsonObject> response) {
+                JsonObject body = response.body();
+                JsonObject attachment = body == null ? null : body.getAsJsonObject("attachment");
+                if (!response.isSuccessful() || attachment == null) {
+                    ioExecutor.execute(() -> messageDao.updateStatusByClientMessageId(
+                            clientMessageId, MessageStatus.FAILED));
+                    callback.onError("Attachment upload failed.");
+                    return;
+                }
+                ioExecutor.execute(() -> messageDao.applyAttachmentUpload(
+                        clientMessageId,
+                        JsonParserUtil.getString(attachment, "id"),
+                        JsonParserUtil.getString(attachment, "kind"),
+                        JsonParserUtil.getString(attachment, "name"),
+                        JsonParserUtil.getString(attachment, "mimeType"),
+                        JsonParserUtil.getString(attachment, "url"),
+                        JsonParserUtil.getLong(attachment, "size")));
+                sendExistingMessage(clientMessageId, chatId, senderId, normalizedReceiverId,
+                        caption, repliedMessageId, kind, attachment, null);
+                callback.onSent();
+            }
+
+            @Override
+            public void onFailure(Call<JsonObject> call, Throwable throwable) {
+                ioExecutor.execute(() -> messageDao.updateStatusByClientMessageId(
+                        clientMessageId, MessageStatus.FAILED));
+                callback.onError(throwable.getMessage() == null ? "Attachment upload failed." : throwable.getMessage());
+            }
+        });
+    }
+
+    private void uploadAttachmentInChunks(AppRestAPI api, Uri uri, String name, String mime,
+                                          long size, String chatId, String kind,
+                                          String clientMessageId, String senderId,
+                                          String receiverId, String caption,
+                                          String repliedMessageId, AttachmentCallback callback) {
+        int totalChunks = (int) Math.ceil((double) size / ATTACHMENT_CHUNK_SIZE);
+        JsonObject request = new JsonObject();
+        request.addProperty("chatId", chatId);
+        request.addProperty("kind", kind);
+        request.addProperty("fileName", name);
+        request.addProperty("mimeType", mime);
+        request.addProperty("totalSize", size);
+        request.addProperty("totalChunks", totalChunks);
+        RequestBody body = RequestBody.create(request.toString(), MediaType.get("application/json"));
+        api.initChatAttachment(body).enqueue(new Callback<JsonObject>() {
+            @Override
+            public void onResponse(Call<JsonObject> call, Response<JsonObject> response) {
+                JsonObject responseBody = response.body();
+                JsonObject upload = responseBody == null ? null : responseBody.getAsJsonObject("upload");
+                String uploadId = upload == null ? null : JsonParserUtil.getString(upload, "uploadId");
+                if (!response.isSuccessful() || uploadId == null || uploadId.isEmpty()) {
+                    failAttachment(clientMessageId, callback,
+                            "Chunk upload initialization failed (HTTP " + response.code() + ").", null);
+                    return;
+                }
+                uploadNextChunk(api, uri, mime, size, uploadId, 0, totalChunks, name,
+                        chatId, kind, clientMessageId, senderId, receiverId, caption,
+                        repliedMessageId, callback);
+            }
+
+            @Override
+            public void onFailure(Call<JsonObject> call, Throwable throwable) {
+                failAttachment(clientMessageId, callback, "Chunk upload initialization failed.", throwable);
+            }
+        });
+    }
+
+    private void uploadNextChunk(AppRestAPI api, Uri uri, String mime, long totalSize,
+                                 String uploadId, int index, int totalChunks, String name,
+                                 String chatId, String kind, String clientMessageId,
+                                 String senderId, String receiverId, String caption,
+                                 String repliedMessageId, AttachmentCallback callback) {
+        if (index >= totalChunks) {
+            RequestBody emptyJson = RequestBody.create("{}", MediaType.get("application/json"));
+            api.completeChatAttachment(uploadId, emptyJson).enqueue(new Callback<JsonObject>() {
+                @Override
+                public void onResponse(Call<JsonObject> call, Response<JsonObject> response) {
+                    JsonObject responseBody = response.body();
+                    JsonObject attachment = responseBody == null ? null : responseBody.getAsJsonObject("attachment");
+                    if (!response.isSuccessful() || attachment == null) {
+                        failAttachment(clientMessageId, callback,
+                                "Attachment assembly failed (HTTP " + response.code() + ").", null);
+                        return;
+                    }
+                    finishAttachmentUpload(clientMessageId, chatId, senderId, receiverId,
+                            caption, repliedMessageId, kind, attachment, callback);
+                }
+
+                @Override
+                public void onFailure(Call<JsonObject> call, Throwable throwable) {
+                    failAttachment(clientMessageId, callback, "Attachment assembly failed.", throwable);
+                }
+            });
+            return;
+        }
+        long offset = index * ATTACHMENT_CHUNK_SIZE;
+        long length = Math.min(ATTACHMENT_CHUNK_SIZE, totalSize - offset);
+        RequestBody chunkBody = contentUriChunkBody(uri, mime, offset, length);
+        MultipartBody.Part chunk = MultipartBody.Part.createFormData(
+                "chunk", name + ".part" + index, chunkBody);
+        RequestBody emptyHash = RequestBody.create("", MediaType.get("text/plain"));
+        api.uploadChatAttachmentChunk(uploadId, index, chunk, emptyHash).enqueue(new Callback<JsonObject>() {
+            @Override
+            public void onResponse(Call<JsonObject> call, Response<JsonObject> response) {
+                if (!response.isSuccessful()) {
+                    String serverError = readErrorBody(response);
+                    failAttachment(clientMessageId, callback,
+                            "Chunk " + (index + 1) + " upload failed (HTTP " + response.code()
+                                    + ")" + (serverError.isEmpty() ? "." : ": " + serverError), null);
+                    return;
+                }
+                uploadNextChunk(api, uri, mime, totalSize, uploadId, index + 1, totalChunks,
+                        name, chatId, kind, clientMessageId, senderId, receiverId, caption,
+                        repliedMessageId, callback);
+            }
+
+            @Override
+            public void onFailure(Call<JsonObject> call, Throwable throwable) {
+                failAttachment(clientMessageId, callback,
+                        "Chunk " + (index + 1) + " upload failed.", throwable);
+            }
+        });
+    }
+
+    private void finishAttachmentUpload(String clientMessageId, String chatId, String senderId,
+                                        String receiverId, String caption, String repliedMessageId,
+                                        String kind, JsonObject attachment, AttachmentCallback callback) {
+        ioExecutor.execute(() -> messageDao.applyAttachmentUpload(
+                clientMessageId,
+                JsonParserUtil.getString(attachment, "id"),
+                JsonParserUtil.getString(attachment, "kind"),
+                JsonParserUtil.getString(attachment, "name"),
+                JsonParserUtil.getString(attachment, "mimeType"),
+                JsonParserUtil.getString(attachment, "url"),
+                JsonParserUtil.getLong(attachment, "size")));
+        sendExistingMessage(clientMessageId, chatId, senderId, receiverId, caption,
+                repliedMessageId, kind, attachment, null);
+        callback.onSent();
+    }
+
+    private void failAttachment(String clientMessageId, AttachmentCallback callback,
+                                String message, Throwable throwable) {
+        ioExecutor.execute(() -> messageDao.updateStatusByClientMessageId(
+                clientMessageId, MessageStatus.FAILED));
+        callback.onError(throwable != null && throwable.getMessage() != null
+                ? throwable.getMessage() : message);
+    }
+
+    private String readErrorBody(Response<?> response) {
+        if (response.errorBody() == null) return "";
+        try {
+            return response.errorBody().string();
+        } catch (IOException error) {
+            return "";
+        }
+    }
+
+    private void sendTypedMessage(String chatId, String receiverId, String text,
+                                  String repliedMessageId, String messageType,
+                                  JsonObject attachment, JsonObject location) {
         String senderId = currentUserId == null || currentUserId.isEmpty()
                 ? normalizeAccountId(LoginStateManager.getInstance().getUID(appContext))
                 : currentUserId;
@@ -130,18 +516,39 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 now,
                 null,
                 null,
-                MessageStatus.SENDING
+                MessageStatus.SENDING,
+                messageType,
+                attachment == null ? null : JsonParserUtil.getString(attachment, "id"),
+                attachment == null ? null : JsonParserUtil.getString(attachment, "kind"),
+                attachment == null ? null : JsonParserUtil.getString(attachment, "name"),
+                attachment == null ? null : JsonParserUtil.getString(attachment, "mimeType"),
+                attachment == null ? null : JsonParserUtil.getString(attachment, "url"),
+                null,
+                attachment == null ? null : JsonParserUtil.getLong(attachment, "size"),
+                location == null ? null : location.get("latitude").getAsDouble(),
+                location == null ? null : location.get("longitude").getAsDouble(),
+                location == null ? null : location.get("accuracy").getAsFloat()
         );
 
         ioExecutor.execute(() -> messageDao.upsert(localMessage));
 
+        sendExistingMessage(clientMessageId, chatId, senderId, normalizedReceiverId, text,
+                repliedMessageId, messageType, attachment, location);
+    }
+
+    private void sendExistingMessage(String clientMessageId, String chatId, String senderId,
+                                     String receiverId, String text, String repliedMessageId,
+                                     String messageType, JsonObject attachment, JsonObject location) {
         JsonObject event = new JsonObject();
         event.addProperty("type", "send_message");
         event.addProperty("clientMessageId", clientMessageId);
         event.addProperty("chatId", chatId);
         event.addProperty("senderId", senderId);
-        event.addProperty("receiverId", normalizedReceiverId);
+        event.addProperty("receiverId", receiverId);
         event.addProperty("text", text);
+        event.addProperty("messageType", messageType);
+        if (attachment != null) event.addProperty("attachmentId", JsonParserUtil.getString(attachment, "id"));
+        if (location != null) event.add("location", location);
         if (repliedMessageId != null && !repliedMessageId.trim().isEmpty()) {
             event.addProperty("repliedMessageId", repliedMessageId);
         }
@@ -149,6 +556,152 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         boolean sentToSocket = socketClient.send(event);
         if (!sentToSocket) {
             ioExecutor.execute(() -> messageDao.updateStatusByClientMessageId(clientMessageId, MessageStatus.FAILED));
+        }
+    }
+
+    public void resendMessage(MessageEntity message) {
+        if (message == null || !MessageStatus.FAILED.equals(message.status)) return;
+        String clientId = message.clientMessageId == null ? message.messageId : message.clientMessageId;
+        if (("image".equals(message.messageType) || "video".equals(message.messageType)
+                || "file".equals(message.messageType)) && message.attachmentId == null
+                && message.attachmentLocalUri != null) {
+            AttachmentCallback mainCallback = onMainThread(new AttachmentCallback() {
+                        @Override public void onSent() {}
+                        @Override public void onError(String error) { notifySocketError(error); }
+                    });
+            ioExecutor.execute(() -> enqueueAttachmentTransfer(
+                    message.chatId, message.receiverId, message.text,
+                    message.repliedMessageId, Uri.parse(message.attachmentLocalUri),
+                    message.messageType, clientId, mainCallback));
+            return;
+        }
+        JsonObject attachment = null;
+        if (message.attachmentId != null) {
+            attachment = new JsonObject();
+            attachment.addProperty("id", message.attachmentId);
+        }
+        JsonObject location = null;
+        if (message.latitude != null && message.longitude != null) {
+            location = new JsonObject();
+            location.addProperty("latitude", message.latitude);
+            location.addProperty("longitude", message.longitude);
+            if (message.locationAccuracy != null) location.addProperty("accuracy", message.locationAccuracy);
+        }
+        ioExecutor.execute(() -> messageDao.updateStatusByClientMessageId(clientId, MessageStatus.SENDING));
+        sendExistingMessage(clientId, message.chatId, message.senderId, message.receiverId,
+                message.text, message.repliedMessageId, message.messageType, attachment, location);
+    }
+
+    private AttachmentCallback onMainThread(AttachmentCallback callback) {
+        return new AttachmentCallback() {
+            @Override
+            public void onSent() {
+                mainHandler.post(callback::onSent);
+            }
+
+            @Override
+            public void onError(String message) {
+                mainHandler.post(() -> callback.onError(message));
+            }
+        };
+    }
+
+    private RequestBody contentUriBody(Uri uri, String mime, long size) {
+        return new RequestBody() {
+            @Override
+            public MediaType contentType() {
+                return MediaType.parse(mime);
+            }
+
+            @Override
+            public long contentLength() {
+                return size;
+            }
+
+            @Override
+            public void writeTo(BufferedSink sink) throws IOException {
+                try (InputStream input = appContext.getContentResolver().openInputStream(uri)) {
+                    if (input == null) throw new IOException("Unable to open attachment.");
+                    byte[] buffer = new byte[8192];
+                    long total = 0;
+                    int read;
+                    while ((read = input.read(buffer)) != -1) {
+                        total += read;
+                        if (total > 25L * 1024L * 1024L) throw new IOException("Attachment exceeds 25 MB.");
+                        sink.write(buffer, 0, read);
+                    }
+                }
+            }
+        };
+    }
+
+    private RequestBody contentUriChunkBody(Uri uri, String mime, long offset, long length) {
+        return new RequestBody() {
+            @Override
+            public MediaType contentType() {
+                return MediaType.parse(mime);
+            }
+
+            @Override
+            public long contentLength() {
+                return length;
+            }
+
+            @Override
+            public void writeTo(BufferedSink sink) throws IOException {
+                try (InputStream input = appContext.getContentResolver().openInputStream(uri)) {
+                    if (input == null) throw new IOException("Unable to open attachment.");
+                    long remainingSkip = offset;
+                    while (remainingSkip > 0) {
+                        long skipped = input.skip(remainingSkip);
+                        if (skipped > 0) {
+                            remainingSkip -= skipped;
+                        } else if (input.read() == -1) {
+                            throw new IOException("Attachment ended before chunk offset.");
+                        } else {
+                            remainingSkip--;
+                        }
+                    }
+                    byte[] buffer = new byte[8192];
+                    long remaining = length;
+                    while (remaining > 0) {
+                        int read = input.read(buffer, 0, (int) Math.min(buffer.length, remaining));
+                        if (read == -1) throw new IOException("Attachment ended before chunk was complete.");
+                        sink.write(buffer, 0, read);
+                        remaining -= read;
+                    }
+                }
+            }
+        };
+    }
+
+    private String attachmentName(Uri uri) {
+        try (Cursor cursor = appContext.getContentResolver().query(uri, null, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (column >= 0) return cursor.getString(column);
+            }
+        } catch (RuntimeException error) {
+        }
+        return "attachment";
+    }
+
+    private long attachmentSize(Uri uri) {
+        try (Cursor cursor = appContext.getContentResolver().query(uri, null, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int column = cursor.getColumnIndex(OpenableColumns.SIZE);
+                if (column >= 0 && !cursor.isNull(column)) return cursor.getLong(column);
+            }
+        } catch (RuntimeException error) {
+        }
+        return -1;
+    }
+
+    private boolean canReadAttachment(Uri uri) {
+        try (InputStream input = appContext.getContentResolver().openInputStream(uri)) {
+            return input != null;
+        } catch (IOException | RuntimeException error) {
+            return false;
         }
     }
 
@@ -302,7 +855,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                             }
                         }
                     }
-                    ioExecutor.execute(() -> messageDao.upsertAll(entities));
+                    ioExecutor.execute(() -> {
+                        preserveLocalAttachmentUris(entities);
+                        messageDao.upsertAll(entities);
+                    });
                 }
 
                 @Override
@@ -359,7 +915,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     return;
                 }
                 List<MessageEntity> messages = parseChatDocument(chatElement.getAsJsonObject(), chatId);
-                ioExecutor.execute(() -> messageDao.upsertAll(messages));
+                ioExecutor.execute(() -> {
+                    preserveLocalAttachmentUris(messages);
+                    messageDao.upsertAll(messages);
+                });
             }
 
             @Override
@@ -422,6 +981,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     @Override
     public void onConnected() {
+        resendCompletedUploadsAwaitingAck();
         String phoneNumber = LoginStateManager.getInstance().getUID(appContext);
         syncAfterReconnect(phoneNumber);
     }
@@ -434,7 +994,6 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         } else if ("message_failed".equals(type)) {
             handleMessageFailed(event);
         } else if ("new_message".equals(type)) {
-            Log.d("CHAT_REPOSITORY", "on_new_message: " + event);
             handleNewMessage(event);
         } else if ("message_seen".equals(type)) {
             handleMessageSeen(event);
@@ -482,7 +1041,30 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         String clientMessageId = JsonParserUtil.getString(event, "clientMessageId");
         String messageId = JsonParserUtil.getString(event, "messageId");
         long sentTime = JsonParserUtil.getLong(event, "sentTime");
-        ioExecutor.execute(() -> messageDao.applyAck(clientMessageId, messageId, MessageStatus.SENT, sentTime));
+        ioExecutor.execute(() -> {
+            messageDao.applyAck(clientMessageId, messageId, MessageStatus.SENT, sentTime);
+            transferDao.messageSent(clientMessageId, System.currentTimeMillis());
+        });
+    }
+
+    private void resendCompletedUploadsAwaitingAck() {
+        ioExecutor.execute(() -> {
+            for (TransferEntity transfer : transferDao.completedUploadsAwaitingAck()) {
+                MessageEntity message = messageDao.findByClientMessageId(transfer.clientMessageId);
+                if (message == null || !MessageStatus.SENDING.equals(message.status)
+                        || transfer.attachmentId == null) continue;
+                JsonObject attachment = new JsonObject();
+                attachment.addProperty("id", transfer.attachmentId);
+                attachment.addProperty("kind", transfer.kind);
+                attachment.addProperty("name", transfer.fileName);
+                attachment.addProperty("mimeType", transfer.mimeType);
+                attachment.addProperty("url", transfer.remoteUrl);
+                attachment.addProperty("size", transfer.totalSize);
+                sendExistingMessage(transfer.clientMessageId, transfer.chatId, transfer.senderId,
+                        transfer.receiverId, transfer.caption, transfer.repliedMessageId,
+                        transfer.kind, attachment, null);
+            }
+        });
     }
 
     private void handleMessageFailed(JsonObject event) {
@@ -500,6 +1082,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             return;
         }
         ioExecutor.execute(() -> {
+            preserveLocalAttachmentUri(message);
             messageDao.upsert(message);
             messageDao.markDelivered(
                     Collections.singletonList(message.messageId),
@@ -508,6 +1091,18 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             );
         });
         markDelivered(message.chatId, Collections.singletonList(message.messageId));
+    }
+
+    private void preserveLocalAttachmentUris(List<MessageEntity> messages) {
+        if (messages == null) return;
+        for (MessageEntity message : messages) preserveLocalAttachmentUri(message);
+    }
+
+    private void preserveLocalAttachmentUri(MessageEntity message) {
+        if (message == null || message.attachmentLocalUri != null
+                || message.clientMessageId == null || message.clientMessageId.isEmpty()) return;
+        MessageEntity existing = messageDao.findByClientMessageId(message.clientMessageId);
+        if (existing != null) message.attachmentLocalUri = existing.attachmentLocalUri;
     }
 
     private void handleMessageDelivered(JsonObject event) {
@@ -597,7 +1192,13 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         if (status.isEmpty()) {
             status = MessageStatus.SENT;
         }
-        return new MessageEntity(
+        JsonObject attachment = message.has("attachment") && message.get("attachment").isJsonObject()
+                ? message.getAsJsonObject("attachment") : null;
+        JsonObject location = message.has("location") && message.get("location").isJsonObject()
+                ? message.getAsJsonObject("location") : null;
+        String messageType = JsonParserUtil.getString(message, "messageType");
+        if (messageType.isEmpty()) messageType = "text";
+        MessageEntity entity = new MessageEntity(
                 id,
                 JsonParserUtil.getString(message, "clientMessageId"),
                 JsonParserUtil.getString(message, "chatId"),
@@ -608,8 +1209,23 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 JsonParserUtil.getLong(message, "sentTime"),
                 getNullableLong(message, "deliveredTime"),
                 getNullableLong(message, "readTime"),
-                status
+                status,
+                messageType,
+                attachment == null ? null : JsonParserUtil.getString(attachment, "id"),
+                attachment == null ? null : JsonParserUtil.getString(attachment, "kind"),
+                attachment == null ? null : JsonParserUtil.getString(attachment, "name"),
+                attachment == null ? null : JsonParserUtil.getString(attachment, "mimeType"),
+                attachment == null ? null : JsonParserUtil.getString(attachment, "url"),
+                null,
+                attachment == null ? null : JsonParserUtil.getLong(attachment, "size"),
+                location == null ? null : location.get("latitude").getAsDouble(),
+                location == null ? null : location.get("longitude").getAsDouble(),
+                location == null || !location.has("accuracy") || location.get("accuracy").isJsonNull()
+                        ? null : location.get("accuracy").getAsFloat()
         );
+        entity.attachmentSha256 = attachment == null ? null
+                : JsonParserUtil.getString(attachment, "sha256");
+        return entity;
     }
 
     private List<MessageEntity> parseChatDocument(JsonObject chat, String chatId) {

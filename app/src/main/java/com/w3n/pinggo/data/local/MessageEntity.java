@@ -27,6 +27,18 @@ public class MessageEntity {
     public Long deliveredTime;
     public Long readTime;
     public String status;
+    public String messageType;
+    public String attachmentId;
+    public String attachmentKind;
+    public String attachmentName;
+    public String attachmentMimeType;
+    public String attachmentUrl;
+    public String attachmentLocalUri;
+    public Long attachmentSize;
+    public String attachmentSha256;
+    public Double latitude;
+    public Double longitude;
+    public Float locationAccuracy;
 
     public MessageEntity(
             @NonNull String messageId,
@@ -39,7 +51,18 @@ public class MessageEntity {
             long sentTime,
             Long deliveredTime,
             Long readTime,
-            String status
+            String status,
+            String messageType,
+            String attachmentId,
+            String attachmentKind,
+            String attachmentName,
+            String attachmentMimeType,
+            String attachmentUrl,
+            String attachmentLocalUri,
+            Long attachmentSize,
+            Double latitude,
+            Double longitude,
+            Float locationAccuracy
     ) {
         this.messageId = messageId;
         this.clientMessageId = clientMessageId;
@@ -52,5 +75,16 @@ public class MessageEntity {
         this.deliveredTime = deliveredTime;
         this.readTime = readTime;
         this.status = status;
+        this.messageType = messageType;
+        this.attachmentId = attachmentId;
+        this.attachmentKind = attachmentKind;
+        this.attachmentName = attachmentName;
+        this.attachmentMimeType = attachmentMimeType;
+        this.attachmentUrl = attachmentUrl;
+        this.attachmentLocalUri = attachmentLocalUri;
+        this.attachmentSize = attachmentSize;
+        this.latitude = latitude;
+        this.longitude = longitude;
+        this.locationAccuracy = locationAccuracy;
     }
 }

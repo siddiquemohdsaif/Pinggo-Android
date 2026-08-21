@@ -3,9 +3,15 @@ package com.w3n.pinggo.Database.CloudFunction.RestApi;
 import androidx.annotation.Keep;
 import com.google.gson.JsonObject;
 import okhttp3.RequestBody;
+import okhttp3.MultipartBody;
 import retrofit2.Call;
 import retrofit2.http.Body;
 import retrofit2.http.POST;
+import retrofit2.http.Multipart;
+import retrofit2.http.Part;
+import retrofit2.http.Path;
+import retrofit2.http.DELETE;
+import retrofit2.http.GET;
 
 @Keep
 public interface AppRestAPI {
@@ -66,4 +72,33 @@ public interface AppRestAPI {
 
   @POST("profile/updateFcmToken")
   Call<JsonObject> updateFcmToken(@Body RequestBody body);
+
+  @Multipart
+  @POST("chats/attachments")
+  Call<JsonObject> uploadChatAttachment(
+      @Part MultipartBody.Part file,
+      @Part("chatId") RequestBody chatId,
+      @Part("kind") RequestBody kind);
+
+  @POST("chats/attachments/init")
+  Call<JsonObject> initChatAttachment(@Body RequestBody body);
+
+  @Multipart
+  @POST("chats/attachments/{uploadId}/chunks/{index}")
+  Call<JsonObject> uploadChatAttachmentChunk(
+      @Path("uploadId") String uploadId,
+      @Path("index") int index,
+      @Part MultipartBody.Part chunk,
+      @Part("chunkHash") RequestBody chunkHash);
+
+  @GET("chats/attachments/{uploadId}/status")
+  Call<JsonObject> getChatAttachmentStatus(@Path("uploadId") String uploadId);
+
+  @POST("chats/attachments/{uploadId}/complete")
+  Call<JsonObject> completeChatAttachment(
+      @Path("uploadId") String uploadId,
+      @Body RequestBody body);
+
+  @DELETE("chats/attachments/{uploadId}")
+  Call<JsonObject> cancelChatAttachment(@Path("uploadId") String uploadId);
 }

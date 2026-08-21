@@ -41,6 +41,7 @@ public final class ChatView extends View {
   private final Bitmap white = color(Color.WHITE),
       divider = color(0xFFE5EAF0),
       accent = color(ACCENT),
+      attachmentOption = color(0xFFEAF7FA),
       incoming = color(0xFFE9EEF3),
       outgoing = color(ACCENT);
   private final String chatName, currentUser;
@@ -50,8 +51,9 @@ public final class ChatView extends View {
   private TextField input;
   private Button send;
   private int topInset, bottomInset, imeInset;
-  private boolean imeVisible;
+  private boolean imeVisible, attachmentPanelVisible;
   private String draft = "", replyPreview = "";
+  private String attachmentPreviewType = "", attachmentPreviewName = "";
   private float headerBottom, baseListBottom;
 
   public ChatView(Context c, String name, String currentUser, String photoPath, Listener l) {
@@ -125,6 +127,18 @@ public final class ChatView extends View {
     updateReply();
   }
 
+  public void showAttachmentPreview(String type, String name) {
+    attachmentPreviewType = type == null ? "File" : type;
+    attachmentPreviewName = name == null || name.trim().isEmpty() ? "Attachment" : name;
+    if (getWidth() > 0) build();
+  }
+
+  public void clearAttachmentPreview() {
+    attachmentPreviewType = "";
+    attachmentPreviewName = "";
+    if (getWidth() > 0) build();
+  }
+
   public void setDraft(String value) {
     draft = value == null ? "" : value;
     if (input != null) {
@@ -142,6 +156,17 @@ public final class ChatView extends View {
     }
   }
 
+  private void toggleAttachmentPanel() {
+    attachmentPanelVisible = !attachmentPanelVisible;
+    build();
+  }
+
+  private void selectAttachment(String type) {
+    attachmentPanelVisible = false;
+    build();
+    listener.onAttachmentSelected(type);
+  }
+
   @Override
   protected void onSizeChanged(int w, int h, int ow, int oh) {
     super.onSizeChanged(w, h, ow, oh);
@@ -153,9 +178,11 @@ public final class ChatView extends View {
     bg.clear();
     content.clear();
     overlay.clear();
+    float attachmentPanelHeight = attachmentPanelVisible ? dp(112) : 0;
     float w = getWidth(),
         top = topInset,
-        composerBottom = getHeight() - bottomInset,
+        screenBottom = getHeight() - bottomInset,
+        composerBottom = screenBottom - attachmentPanelHeight,
         composerTop = composerBottom - dp(68),
         nextHeaderBottom = top + dp(70);
     headerBottom = nextHeaderBottom;
@@ -211,7 +238,9 @@ public final class ChatView extends View {
                 divider,
                 new RectF(0, headerBottom - dp(1), w, headerBottom))
             .setScaleType(Image.ScaleType.FIT_XY));
-    float replyHeight = replyPreview.isEmpty() ? 0 : dp(42), listBottom = composerTop - replyHeight;
+    float replyHeight = replyPreview.isEmpty() ? 0 : dp(42);
+    float previewHeight = attachmentPreviewType.isEmpty() ? 0 : dp(72);
+    float listBottom = composerTop - replyHeight - previewHeight;
     baseListBottom = listBottom;
     list =
         content.add(
@@ -220,9 +249,11 @@ public final class ChatView extends View {
                 .setOrientation(ComponentList.Orientation.VERTICAL)
                 .setItemSizeProvider(
                     (message, position) ->
-                        message.repliedMessageId == null || message.repliedMessageId.isEmpty()
-                            ? dp(72)
-                            : dp(94))
+                        dp(isRichMessage(message) ? 112 : 72)
+                            + (hasTransientStatus(message) ? dp(18) : 0)
+                            + (message.repliedMessageId == null || message.repliedMessageId.isEmpty()
+                                ? 0
+                                : dp(22)))
                 .setPaddingPx(dp(12), dp(8), dp(12), dp(12))
                 .setAdapter(adapter)
                 .setClipToBounds(true)
@@ -231,7 +262,9 @@ public final class ChatView extends View {
                     (componentList, message, position) -> {
                       listener.onMessageLongPress(message);
                       return true;
-                    }));
+                    })
+                .setOnItemClickListener(
+                    (componentList, message, position) -> listener.onMessageClick(message)));
     status =
         text(
             content,
@@ -242,24 +275,60 @@ public final class ChatView extends View {
             SECONDARY,
             FontVariation.REGULAR,
             Text.Alignment.CENTER);
-    float replyTop = replyPreview.isEmpty() ? composerTop - dp(1) : listBottom;
+    float replyTop = replyPreview.isEmpty() ? composerTop - previewHeight : listBottom;
     replyText =
         text(
             overlay,
             "reply",
             replyPreview,
-            new RectF(dp(16), replyTop, w - dp(16), composerTop),
+            new RectF(dp(16), replyTop, w - dp(16), replyTop + Math.max(dp(1), replyHeight)),
             sp(13),
             SECONDARY,
             FontVariation.REGULAR,
             Text.Alignment.START);
     replyText.setVisible(!replyPreview.isEmpty());
+    if (!attachmentPreviewType.isEmpty()) {
+      float previewTop = composerTop - previewHeight;
+      overlay.add(
+          new Image.Builder(
+                  getContext(), "attachment_preview_bg", white,
+                  new RectF(0, previewTop, w, composerTop))
+              .setScaleType(Image.ScaleType.FIT_XY));
+      text(
+          overlay,
+          "attachment_preview_text",
+          attachmentPreviewType + "\n" + attachmentPreviewName,
+          new RectF(dp(16), previewTop + dp(8), w - dp(132), composerTop - dp(8)),
+          sp(13),
+          PRIMARY,
+          FontVariation.SEMI_BOLD,
+          Text.Alignment.START);
+      button(
+          overlay,
+          "attachment_preview_remove",
+          white,
+          "×",
+          new RectF(w - dp(128), previewTop + dp(12), w - dp(82), composerTop - dp(12)),
+          SECONDARY,
+          id -> {
+            clearAttachmentPreview();
+            listener.onAttachmentPreviewRemoved();
+          });
+      button(
+          overlay,
+          "attachment_preview_send",
+          accent,
+          "Send",
+          new RectF(w - dp(78), previewTop + dp(12), w - dp(8), composerTop - dp(12)),
+          Color.WHITE,
+          id -> listener.onSend());
+    }
     input =
         overlay.add(
             new TextField.Builder(
                     getContext(),
                     "composer",
-                    new RectF(dp(12), composerTop + dp(8), w - dp(72), composerBottom - dp(8)))
+                    new RectF(dp(64), composerTop + dp(8), w - dp(72), composerBottom - dp(8)))
                 .setText(draft)
                 .setHint("Message")
                 .setMaxLength(4000)
@@ -281,6 +350,14 @@ public final class ChatView extends View {
                       draft = value;
                       listener.onTypingChanged(value);
                     }));
+    button(
+        overlay,
+        "attachment",
+        attachmentPanelVisible ? accent : white,
+        attachmentPanelVisible ? "×" : "+",
+        new RectF(dp(8), composerTop + dp(8), dp(60), composerBottom - dp(8)),
+        attachmentPanelVisible ? Color.WHITE : ACCENT,
+        id -> toggleAttachmentPanel());
     send =
         button(
             overlay,
@@ -297,6 +374,36 @@ public final class ChatView extends View {
                 divider,
                 new RectF(0, composerTop - dp(1), w, composerTop))
             .setScaleType(Image.ScaleType.FIT_XY));
+    if (attachmentPanelVisible) {
+      overlay.add(
+          new Image.Builder(
+                  getContext(),
+                  "attachment_panel_bg",
+                  white,
+                  new RectF(0, composerBottom, w, screenBottom))
+              .setScaleType(Image.ScaleType.FIT_XY));
+      overlay.add(
+          new Image.Builder(
+                  getContext(),
+                  "attachment_panel_line",
+                  divider,
+                  new RectF(0, composerBottom, w, composerBottom + dp(1)))
+              .setScaleType(Image.ScaleType.FIT_XY));
+      String[] attachmentTypes = {"Image", "Video", "File", "Location"};
+      float gap = dp(8), side = dp(10), optionWidth = (w - side * 2 - gap * 3) / 4f;
+      for (int i = 0; i < attachmentTypes.length; i++) {
+        String type = attachmentTypes[i];
+        float left = side + i * (optionWidth + gap);
+        button(
+            overlay,
+            "attachment_" + type.toLowerCase(Locale.US),
+            attachmentOption,
+            type,
+            new RectF(left, composerBottom + dp(16), left + optionWidth, screenBottom - dp(16)),
+            ACCENT,
+            id -> selectAttachment(type));
+      }
+    }
     boolean empty = adapter.getItemCount() == 0;
     list.setVisible(!empty);
     status.setVisible(empty);
@@ -323,7 +430,7 @@ public final class ChatView extends View {
       texts.clear();
       if (values != null) {
         messages.addAll(values);
-        for (MessageEntity m : values) texts.put(m.messageId, m.text);
+        for (MessageEntity m : values) texts.put(m.messageId, displayMessage(m));
       }
       notifyDataSetChanged();
     }
@@ -388,8 +495,67 @@ public final class ChatView extends View {
       Text r = item.find("reply", Text.class);
       r.setText(replied == null ? "Reply" : replied)
           .setVisible(m.repliedMessageId != null && !m.repliedMessageId.isEmpty());
-      item.find("message", Text.class).setText(m.text == null ? "" : m.text);
+      item.find("message", Text.class).setText(displayMessage(m));
     }
+  }
+
+  private String displayMessage(MessageEntity message) {
+    String type = message.messageType == null ? "text" : message.messageType;
+    String displayed;
+    if ("location".equals(type) && message.latitude != null && message.longitude != null) {
+      displayed = "[LOCATION]\n" + formatCoordinate(message.latitude) + ", "
+          + formatCoordinate(message.longitude) + "\nTap to open map";
+    } else if ("image".equals(type) || "video".equals(type) || "file".equals(type)) {
+      String fallback = "file".equals(type) ? "File" : capitalize(type);
+      String name = message.attachmentName == null || message.attachmentName.isEmpty()
+          ? fallback : message.attachmentName;
+      String size = message.attachmentSize == null ? "" : " • " + formatSize(message.attachmentSize);
+      String availability = "";
+      if (!"sending".equals(message.status) && !"failed".equals(message.status)) {
+        int state = listener.attachmentState(message);
+        if (state == 1) availability = "\n↓ Download";
+        else if (state == 2) availability = "\n◷ Downloading";
+      }
+      displayed = "[" + type.toUpperCase(Locale.US) + "]\n" + name + size
+          + captionSuffix(message.text) + availability;
+    } else {
+      displayed = message.text == null ? "" : message.text;
+    }
+    return displayed + statusSuffix(message);
+  }
+
+  private boolean hasTransientStatus(MessageEntity message) {
+    return "sending".equals(message.status) || "failed".equals(message.status);
+  }
+
+  private String statusSuffix(MessageEntity message) {
+    if (!currentUser.equals(normalize(message.senderId))) return "";
+    if ("sending".equals(message.status)) return "\n◷ Sending";
+    if ("failed".equals(message.status)) return "\nFailed • Tap to resend";
+    return "";
+  }
+
+  private boolean isRichMessage(MessageEntity message) {
+    String type = message.messageType == null ? "text" : message.messageType;
+    return !"text".equals(type);
+  }
+
+  private String formatSize(long bytes) {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return String.format(Locale.US, "%.1f KB", bytes / 1024f);
+    return String.format(Locale.US, "%.1f MB", bytes / (1024f * 1024f));
+  }
+
+  private String formatCoordinate(double value) {
+    return String.format(Locale.US, "%.6f", value);
+  }
+
+  private String capitalize(String value) {
+    return value.substring(0, 1).toUpperCase(Locale.US) + value.substring(1);
+  }
+
+  private String captionSuffix(String caption) {
+    return caption == null || caption.trim().isEmpty() ? "" : " — " + caption.trim();
   }
 
   private Text.Builder textBuilder(String id, String v, RectF r, float sz, int c, FontVariation f) {
@@ -399,7 +565,7 @@ public final class ChatView extends View {
         .setTextSizePx(sz)
         .setTextColor(c)
         .setVerticalAlignment(Text.VerticalAlignment.CENTER)
-        .setMaxLines(3);
+        .setMaxLines(4);
   }
 
   private Text text(
@@ -451,7 +617,7 @@ public final class ChatView extends View {
 
   public void release() {
     layers.release();
-    recycle(white, divider, accent, incoming, outgoing);
+    recycle(white, divider, accent, attachmentOption, incoming, outgoing);
   }
 
   private Bitmap avatar(String value) {
@@ -503,8 +669,17 @@ public final class ChatView extends View {
 
     void onSend();
 
+    void onAttachmentSelected(String type);
+
+    void onAttachmentPreviewRemoved();
+
     void onTypingChanged(String value);
 
     void onMessageLongPress(MessageEntity message);
+
+    void onMessageClick(MessageEntity message);
+
+    /** 0 = locally available, 1 = needs download, 2 = downloading. */
+    int attachmentState(MessageEntity message);
   }
 }

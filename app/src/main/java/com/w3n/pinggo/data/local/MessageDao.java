@@ -28,6 +28,13 @@ public interface MessageDao {
     @Query("UPDATE messages SET status = :status WHERE clientMessageId = :clientMessageId")
     void updateStatusByClientMessageId(String clientMessageId, String status);
 
+    @Query("UPDATE messages SET attachmentId = :attachmentId, attachmentKind = :kind, attachmentName = :name, attachmentMimeType = :mimeType, attachmentUrl = :url, attachmentSize = :size WHERE clientMessageId = :clientMessageId")
+    void applyAttachmentUpload(String clientMessageId, String attachmentId, String kind,
+                               String name, String mimeType, String url, long size);
+
+    @Query("UPDATE messages SET attachmentLocalUri=:localUri WHERE attachmentId=:attachmentId")
+    void updateAttachmentLocalUri(String attachmentId, String localUri);
+
     @Query("UPDATE messages SET text = :text WHERE messageId = :messageId")
     void updateText(String messageId, String text);
 
