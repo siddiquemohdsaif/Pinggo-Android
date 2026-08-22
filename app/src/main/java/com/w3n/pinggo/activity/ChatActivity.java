@@ -29,6 +29,7 @@ import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.local.PresenceEntity;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.views.chat.ChatView;
+import com.w3n.pinggo.call.ActiveCallRegistry;
 import com.w3n.pinggo.views.common.NativePromptDialogView;
 import java.text.DateFormat;
 import java.util.ArrayList;
@@ -134,7 +135,6 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
             Toast.makeText(ChatActivity.this, error, Toast.LENGTH_SHORT).show();
           }
         });
-    repository.connect();
     observe();
   }
 
@@ -164,6 +164,10 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
     repository.hydrateChat(chatId, LoginStateManager.getInstance().getUID(this));
     repository.syncAfterReconnect(LoginStateManager.getInstance().getUID(this));
     if (!receiverId.isEmpty()) repository.syncPresence(Collections.singletonList(receiverId));
+  }
+
+  public void setFloatingCallInset(int insetPx) {
+    if (chatView != null) chatView.setFloatingCallInset(insetPx);
   }
 
   private void messages(List<MessageEntity> values) {
@@ -266,7 +270,21 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
   }
 
   private void openCall(Class<? extends AppCompatActivity> activityClass) {
+    String requestedType = activityClass == VideoCallActivity.class
+        ? ActiveCallRegistry.TYPE_VIDEO : ActiveCallRegistry.TYPE_VOICE;
+    ActiveCallRegistry registry = ActiveCallRegistry.getInstance();
+    if (registry.matches(chatId, requestedType)) {
+      registry.openExisting(this);
+      return;
+    }
+    if (registry.hasActiveCall()) {
+      String activeType = ActiveCallRegistry.TYPE_VIDEO.equals(registry.getType()) ? "Video" : "Voice";
+      String state = registry.isConnected() ? " connected" : " active";
+      Toast.makeText(this, activeType + " call is already" + state + ".", Toast.LENGTH_SHORT).show();
+      return;
+    }
     Intent intent = new Intent(this, activityClass);
+    intent.putExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID, chatId);
     intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER,
         receiverId.isEmpty() ? "Unknown" : "+" + receiverId);
     intent.putExtra(VoiceCallActivity.EXTRA_PROFILE_PATH, profilePhotoPath);

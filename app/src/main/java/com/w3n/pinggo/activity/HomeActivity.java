@@ -67,6 +67,8 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
     private void loadChats() {
         homeView.showChatLoading();
         ChatRepository repository = ChatRepository.getInstance(this);
+        // Covers a fresh login completed after Application.onCreate().
+        repository.connect();
         repository.observeChats().observe(this,
                 entities -> homeView.submitChats(toChats(entities)));
         String uid = LoginStateManager.getInstance().getUID(this);

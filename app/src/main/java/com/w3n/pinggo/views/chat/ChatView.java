@@ -51,6 +51,7 @@ public final class ChatView extends View {
   private TextField input;
   private Button send;
   private int topInset, bottomInset, imeInset;
+  private int floatingCallInset;
   private boolean imeVisible, attachmentPanelVisible;
   private String draft = "", replyPreview = "";
   private String attachmentPreviewType = "", attachmentPreviewName = "";
@@ -82,6 +83,13 @@ public final class ChatView extends View {
     if (getWidth() <= 0) return;
     if (structureChanged || input == null || list == null) build();
     else applyKeyboardInsets();
+  }
+
+  public void setFloatingCallInset(int inset) {
+    int next = Math.max(0, inset);
+    if (floatingCallInset == next) return;
+    floatingCallInset = next;
+    if (getWidth() > 0 && getHeight() > 0) build();
   }
 
   public void setPresence(String value) {
@@ -180,7 +188,7 @@ public final class ChatView extends View {
     overlay.clear();
     float attachmentPanelHeight = attachmentPanelVisible ? dp(112) : 0;
     float w = getWidth(),
-        top = topInset,
+        top = topInset + floatingCallInset,
         screenBottom = getHeight() - bottomInset,
         composerBottom = screenBottom - attachmentPanelHeight,
         composerTop = composerBottom - dp(68),

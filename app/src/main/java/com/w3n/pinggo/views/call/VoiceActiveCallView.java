@@ -26,8 +26,14 @@ public final class VoiceActiveCallView extends View {
   private final String phone;
   private final Bitmap profile, light = color(0xFFF7F9FB), white = color(Color.WHITE);
   private final Bitmap control = color(0xFF26333E), selected = color(ACCENT), danger = color(0xFFE53935);
+  private final Bitmap accept = color(0xFF2EAD62);
+  private final Bitmap disabled = color(0xFFB8C0C8);
   private int topInset, bottomInset;
   private boolean speakerOn, muted;
+  private String callStatus = "Calling…";
+  private boolean remoteMuted;
+  private boolean incomingPrompt;
+  private boolean callConnected;
 
   public VoiceActiveCallView(Context context, String phone, String profilePath, Listener listener) {
     super(context);
@@ -44,6 +50,28 @@ public final class VoiceActiveCallView extends View {
   }
   public void setAudioState(boolean speaker, boolean mute) {
     speakerOn = speaker; muted = mute;
+    if (getWidth() > 0) build();
+  }
+  public void setCallStatus(String status) {
+    callStatus = status == null || status.trim().isEmpty() ? "Calling…" : status;
+    if (getWidth() > 0) build();
+  }
+  public void setRemoteMuted(boolean muted) {
+    remoteMuted = muted;
+    if (getWidth() > 0) build();
+  }
+  public void showIncomingPrompt() {
+    incomingPrompt = true;
+    callStatus = "Incoming voice call";
+    if (getWidth() > 0) build();
+  }
+  public void hideIncomingPrompt() {
+    incomingPrompt = false;
+    if (getWidth() > 0) build();
+  }
+  public void setCallConnected(boolean connected) {
+    callConnected = connected;
+    if (!connected) muted = false;
     if (getWidth() > 0) build();
   }
   @Override protected void onSizeChanged(int w, int h, int oldw, int oldh) {
@@ -63,9 +91,25 @@ public final class VoiceActiveCallView extends View {
     content.add(new Image.Builder(getContext(), "profile", profile,
         new RectF(w / 2 - size / 2, avatarTop, w / 2 + size / 2, avatarTop + size))
         .setScaleType(Image.ScaleType.CENTER_CROP));
-    text("status", "Voice call", new RectF(dp(24), avatarTop + size + dp(22), w - dp(24),
+    text("status", callStatus, new RectF(dp(24), avatarTop + size + dp(22), w - dp(24),
         avatarTop + size + dp(68)), sp(18), ACCENT, FontVariation.SEMI_BOLD, Text.Alignment.CENTER);
-    controls(w, h); invalidate();
+    if (remoteMuted) {
+      text("remote_mute", "Muted himself",
+          new RectF(dp(24), avatarTop + size + dp(66), w - dp(24), avatarTop + size + dp(104)),
+          sp(14), 0xFF687382, FontVariation.REGULAR, Text.Alignment.CENTER);
+    }
+    if (incomingPrompt) incomingControls(w, h); else controls(w, h);
+    invalidate();
+  }
+
+  private void incomingControls(float w, float h) {
+    float bottom = h - bottomInset - dp(24), top = bottom - dp(64), width = dp(118), gap = dp(28);
+    float x = (w - width * 2 - gap) / 2;
+    button("reject", danger, "Reject", new RectF(x, top, x + width, bottom), Color.WHITE,
+        id -> listener.onReject());
+    x += width + gap;
+    button("accept", accept, "Accept", new RectF(x, top, x + width, bottom), Color.WHITE,
+        id -> listener.onAccept());
   }
 
   private void controls(float w, float h) {
@@ -75,8 +119,10 @@ public final class VoiceActiveCallView extends View {
     button("speaker", speakerOn ? selected : control, speakerOn ? "Speaker on" : "Speaker",
         new RectF(x, top, x + width, bottom), Color.WHITE, id -> listener.onSpeaker());
     x += width + gap;
-    button("mute", muted ? selected : control, muted ? "Unmute" : "Mute",
-        new RectF(x, top, x + width, bottom), Color.WHITE, id -> listener.onMute());
+    Button muteButton = button("mute", !callConnected ? disabled : muted ? selected : control,
+        muted ? "Unmute" : "Mute", new RectF(x, top, x + width, bottom), Color.WHITE,
+        id -> { if (callConnected) listener.onMute(); });
+    muteButton.setEnabled(callConnected);
     x += width + gap;
     button("end", danger, "End", new RectF(x, top, x + width, bottom), Color.WHITE,
         id -> listener.onEnd());
@@ -88,9 +134,9 @@ public final class VoiceActiveCallView extends View {
         .setFontVariations(weight).setTextSizePx(size).setTextColor(color).setAlignment(alignment)
         .setVerticalAlignment(Text.VerticalAlignment.CENTER).setMaxLines(1));
   }
-  private void button(String id, Bitmap image, String label, RectF rect, int color,
+  private Button button(String id, Bitmap image, String label, RectF rect, int color,
       Button.OnClickListener click) {
-    content.add(new Button.Builder(getContext(), id, image, label, rect)
+    return content.add(new Button.Builder(getContext(), id, image, label, rect)
         .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(dp(24)).setFont(NativeFonts.INTER)
         .setFontVariations(FontVariation.SEMI_BOLD).setTextSizePx(sp(13)).setTextColor(color)
         .setRippleEnabled(true).setRippleColor(0x33FFFFFF).setOnClickListener(click));
@@ -99,7 +145,7 @@ public final class VoiceActiveCallView extends View {
   @Override public boolean onTouchEvent(MotionEvent event) {
     return layers.onTouchEvent(event) || super.onTouchEvent(event);
   }
-  public void release() { layers.release(); recycle(light, white, control, selected, danger, profile); }
+  public void release() { layers.release(); recycle(light, white, control, selected, danger, accept, disabled, profile); }
   private Bitmap avatar() {
     int size = Math.round(dp(180)); Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
     Canvas canvas = new Canvas(bitmap); Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -115,5 +161,7 @@ public final class VoiceActiveCallView extends View {
   private static void recycle(Bitmap... values) {
     for (Bitmap value : values) if (value != null && !value.isRecycled()) value.recycle();
   }
-  public interface Listener { void onBack(); void onSpeaker(); void onMute(); void onEnd(); }
+  public interface Listener {
+    void onBack(); void onAccept(); void onReject(); void onSpeaker(); void onMute(); void onEnd();
+  }
 }

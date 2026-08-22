@@ -61,6 +61,14 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         void onSocketError(String error);
     }
 
+    public interface CallEventListener {
+        void onCallEvent(JsonObject event);
+    }
+
+    public interface IncomingCallListener {
+        void onIncomingCall(JsonObject event);
+    }
+
     public interface AttachmentCallback {
         void onSent();
 
@@ -85,6 +93,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ChatWebSocketClient socketClient;
     private EventListener eventListener;
+    private CallEventListener callEventListener;
+    private IncomingCallListener incomingCallListener;
     private String currentUserId;
 
     private ChatRepository(Context context) {
@@ -121,6 +131,19 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     public void setEventListener(EventListener eventListener) {
         this.eventListener = eventListener;
+    }
+
+    public void setCallEventListener(CallEventListener listener) {
+        callEventListener = listener;
+    }
+
+    public void setIncomingCallListener(IncomingCallListener listener) {
+        incomingCallListener = listener;
+    }
+
+    public boolean sendCallEvent(JsonObject event) {
+        connect();
+        return socketClient.send(event);
     }
 
     public LiveData<List<MessageEntity>> observeMessages(String chatId) {
@@ -989,6 +1012,13 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     @Override
     public void onEvent(JsonObject event) {
         String type = JsonParserUtil.getString(event, "type");
+        if ("call_invite".equals(type) && incomingCallListener != null) {
+            mainHandler.post(() -> incomingCallListener.onIncomingCall(event));
+        }
+        if ((type.startsWith("call_") || "ice_candidate".equals(type))
+                && callEventListener != null) {
+            mainHandler.post(() -> callEventListener.onCallEvent(event));
+        }
         if ("message_ack".equals(type)) {
             handleMessageAck(event);
         } else if ("message_failed".equals(type)) {
@@ -1030,11 +1060,22 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     @Override
     public void onClosed() {
+        notifyCallSocketDisconnected();
     }
 
     @Override
     public void onFailure(String error) {
+        notifyCallSocketDisconnected();
         notifySocketError(error);
+    }
+
+    private void notifyCallSocketDisconnected() {
+        if (callEventListener == null) return;
+        JsonObject event = new JsonObject();
+        event.addProperty("type", "call_socket_disconnected");
+        mainHandler.post(() -> {
+            if (callEventListener != null) callEventListener.onCallEvent(event);
+        });
     }
 
     private void handleMessageAck(JsonObject event) {

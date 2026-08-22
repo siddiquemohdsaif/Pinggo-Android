@@ -8,6 +8,7 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.w3n.pinggo.views.call.VideoActiveCallView;
+import com.w3n.pinggo.call.ActiveCallRegistry;
 
 public class VideoCallActivity extends AppCompatActivity implements VideoActiveCallView.Listener {
   private VideoActiveCallView callView;
@@ -17,6 +18,8 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
   @Override protected void onCreate(Bundle state) {
     super.onCreate(state);
     EdgeToEdge.enable(this);
+    ActiveCallRegistry.getInstance().register(this,
+        getIntent().getStringExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID), ActiveCallRegistry.TYPE_VIDEO);
     audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
     if (audioManager != null) audioManager.setSpeakerphoneOn(true);
     callView = new VideoActiveCallView(this,
@@ -51,6 +54,7 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
     }
     if (callView != null) callView.release();
     callView = null;
+    ActiveCallRegistry.getInstance().clear(this);
     super.onDestroy();
   }
 }

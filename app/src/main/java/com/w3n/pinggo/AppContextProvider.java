@@ -3,6 +3,7 @@ package com.w3n.pinggo;
 import android.app.Activity;
 import android.app.Application;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.view.Gravity;
@@ -10,13 +11,19 @@ import android.view.View;
 import android.widget.FrameLayout;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
+import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
+import com.w3n.pinggo.activity.VoiceCallActivity;
+import com.w3n.pinggo.call.FloatingVoiceCallController;
+import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.modals.AppConfiguration;
 import com.w3n.pinggo.views.common.NativeMessageView;
 
 import org.json.JSONObject;
 
 
-public class AppContextProvider extends Application {
+public class AppContextProvider extends Application implements ChatRepository.IncomingCallListener {
     private static Context appContext;
     private static volatile JSONObject appConfig;
     private static volatile AppConfiguration parsedAppConfig;
@@ -28,11 +35,38 @@ public class AppContextProvider extends Application {
 
         // Initialize the app context when the application starts
         appContext = getApplicationContext();
+        FloatingVoiceCallController.getInstance().initialize(this);
+
+        // Keep one authenticated WebSocket for the complete logged-in app
+        // session instead of waiting for an individual chat screen to open.
+        ChatRepository repository = ChatRepository.getInstance(this);
+        repository.setIncomingCallListener(this);
+        if (LoginStateManager.getInstance().isLoggedIn(this)) repository.connect();
 
         isDevelopment = false;
         devOverlay(isDevelopment);
 
 
+    }
+
+    @Override
+    public void onIncomingCall(JsonObject event) {
+        JsonObject sdp = event.has("sdp") && event.get("sdp").isJsonObject()
+                ? event.getAsJsonObject("sdp") : null;
+        if (sdp == null) return;
+        String callerId = JsonParserUtil.getString(event, "callerId");
+        Intent intent = new Intent(this, VoiceCallActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER,
+                callerId.isEmpty() ? "Unknown" : "+" + callerId);
+        intent.putExtra(VoiceCallActivity.EXTRA_CALL_ID,
+                JsonParserUtil.getString(event, "callId"));
+        intent.putExtra(VoiceCallActivity.EXTRA_CALLER_ID, callerId);
+        intent.putExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID,
+                JsonParserUtil.getString(event, "chatId"));
+        intent.putExtra(VoiceCallActivity.EXTRA_SDP_OFFER,
+                JsonParserUtil.getString(sdp, "description"));
+        startActivity(intent);
     }
 
     private void devOverlay(boolean isDevelopment) {
