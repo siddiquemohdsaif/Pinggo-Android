@@ -66,6 +66,7 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
   private ChatRepository repository;
   private NativePromptDialogView promptDialog;
   private String chatId, currentUser, receiverId, replyingId, editingId;
+  private String profilePhotoPath;
   private String selectedAttachmentType;
   private Uri selectedAttachmentUri;
   private boolean typingStarted, peerTyping, locationPending, attachmentSending;
@@ -97,12 +98,13 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
     chatId = getIntent().getStringExtra(EXTRA_CHAT_ID);
     currentUser = normalize(LoginStateManager.getInstance().getUID(this));
     receiverId = receiver();
+    profilePhotoPath = getIntent().getStringExtra(EXTRA_LOCAL_PROFILE_PHOTO_PATH);
     chatView =
         new ChatView(
             this,
             name,
             currentUser,
-            getIntent().getStringExtra(EXTRA_LOCAL_PROFILE_PHOTO_PATH),
+            profilePhotoPath,
             this);
     setContentView(chatView);
     ViewCompat.setOnApplyWindowInsetsListener(
@@ -251,6 +253,24 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
       repository.sendMessage(chatId, receiverId, text, replyingId);
     }
     finishComposeAction();
+  }
+
+  @Override
+  public void onVideoCall() {
+    openCall(VideoCallActivity.class);
+  }
+
+  @Override
+  public void onVoiceCall() {
+    openCall(VoiceCallActivity.class);
+  }
+
+  private void openCall(Class<? extends AppCompatActivity> activityClass) {
+    Intent intent = new Intent(this, activityClass);
+    intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER,
+        receiverId.isEmpty() ? "Unknown" : "+" + receiverId);
+    intent.putExtra(VoiceCallActivity.EXTRA_PROFILE_PATH, profilePhotoPath);
+    startActivity(intent);
   }
 
   private void finishComposeAction() {

@@ -208,7 +208,7 @@ public final class ChatView extends View {
         content,
         "name",
         chatName,
-        new RectF(dp(116), top + dp(7), w - dp(60), top + dp(38)),
+        new RectF(dp(116), top + dp(7), w - dp(158), top + dp(38)),
         sp(17),
         PRIMARY,
         FontVariation.SEMI_BOLD,
@@ -218,11 +218,27 @@ public final class ChatView extends View {
             content,
             "presence",
             "connecting...",
-            new RectF(dp(116), top + dp(34), w - dp(60), top + dp(61)),
+            new RectF(dp(116), top + dp(34), w - dp(158), top + dp(61)),
             sp(13),
             SECONDARY,
             FontVariation.REGULAR,
             Text.Alignment.START);
+    button(
+        content,
+        "video_call",
+        white,
+        "▣",
+        new RectF(w - dp(150), top + dp(10), w - dp(106), top + dp(58)),
+        ACCENT,
+        id -> listener.onVideoCall());
+    button(
+        content,
+        "voice_call",
+        white,
+        "☎",
+        new RectF(w - dp(102), top + dp(10), w - dp(58), top + dp(58)),
+        ACCENT,
+        id -> listener.onVoiceCall());
     button(
         content,
         "more",
@@ -664,6 +680,10 @@ public final class ChatView extends View {
 
   public interface Listener {
     void onBack();
+
+    void onVideoCall();
+
+    void onVoiceCall();
 
     void onMore();
 
