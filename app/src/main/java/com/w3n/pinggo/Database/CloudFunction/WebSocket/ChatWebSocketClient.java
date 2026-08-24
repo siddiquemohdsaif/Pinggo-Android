@@ -2,6 +2,7 @@ package com.w3n.pinggo.Database.CloudFunction.WebSocket;
 
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 
 import androidx.annotation.Nullable;
 
@@ -22,6 +23,7 @@ import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 
 public class ChatWebSocketClient {
+    private static final String TAG = "PingGoChatSocket";
     public interface Listener {
         void onConnected();
 
@@ -45,6 +47,7 @@ public class ChatWebSocketClient {
     private boolean intentionalDisconnect;
     private String lastUserId;
     private String lastEncryptedCredential;
+    private int reconnectAttempts;
 
     public ChatWebSocketClient(Listener listener) {
         this.listener = listener;
@@ -56,6 +59,7 @@ public class ChatWebSocketClient {
         intentionalDisconnect = false;
         if (connecting || authenticated) return;
         connecting = true;
+        Log.d(TAG, "connect url=" + APIAuth.WS_URL + " attempt=" + reconnectAttempts);
         authenticated = false;
         String authToken = userId + "_" + encryptedCredential;
         Request request = new Request.Builder()
@@ -66,6 +70,7 @@ public class ChatWebSocketClient {
             @Override
             public void onOpen(WebSocket webSocket, Response response) {
                 connecting = false;
+                Log.d(TAG, "open responseCode=" + response.code());
                 sendAuth(userId, encryptedCredential);
             }
 
@@ -79,12 +84,19 @@ public class ChatWebSocketClient {
                     return;
                 }
                 String type = JsonParserUtil.getString(event, "type");
+                if (type.startsWith("call_") || "ice_candidate".equals(type)
+                        || "auth_success".equals(type)) {
+                    Log.d(TAG, "receive type=" + type + " callId="
+                            + JsonParserUtil.getString(event, "callId"));
+                }
                 if ("message_ack".equals(type) || "message_failed".equals(type)) {
                     String clientMessageId = JsonParserUtil.getString(event, "clientMessageId");
                     if (!clientMessageId.isEmpty()) unacknowledgedMessages.remove(clientMessageId);
                 }
                 if ("auth_success".equals(type) && listener != null) {
                     authenticated = true;
+                    reconnectAttempts = 0;
+                    reconnectHandler.removeCallbacksAndMessages(null);
                     flushPendingEvents();
                     resendUnacknowledgedMessages();
                     listener.onConnected();
@@ -96,6 +108,7 @@ public class ChatWebSocketClient {
 
             @Override
             public void onClosed(WebSocket webSocket, int code, String reason) {
+                Log.w(TAG, "closed code=" + code + " reason=" + reason);
                 authenticated = false;
                 connecting = false;
                 if (listener != null) {
@@ -106,6 +119,7 @@ public class ChatWebSocketClient {
 
             @Override
             public void onFailure(WebSocket webSocket, Throwable t, @Nullable Response response) {
+                Log.e(TAG, "failure responseCode=" + (response == null ? 0 : response.code()), t);
                 authenticated = false;
                 connecting = false;
                 if (listener != null) {
@@ -131,6 +145,11 @@ public class ChatWebSocketClient {
 
     public boolean send(JsonObject event) {
         String type = JsonParserUtil.getString(event, "type");
+        if (type.startsWith("call_") || "ice_candidate".equals(type)) {
+            Log.d(TAG, "send requested type=" + type + " callId="
+                    + JsonParserUtil.getString(event, "callId")
+                    + " socket=" + (webSocket != null) + " authenticated=" + authenticated);
+        }
         if ("send_message".equals(type)) {
             String clientMessageId = JsonParserUtil.getString(event, "clientMessageId");
             if (!clientMessageId.isEmpty()) unacknowledgedMessages.put(clientMessageId, event.deepCopy());
@@ -140,13 +159,13 @@ public class ChatWebSocketClient {
             }
             return webSocket.send(event.toString());
         }
-        if (webSocket == null) {
-            return false;
-        }
-        if (!authenticated && !"auth".equals(type)) {
-            pendingEvents.add(event);
+        if ((webSocket == null || !authenticated) && !"auth".equals(type)) {
+            pendingEvents.add(event.deepCopy());
+            Log.d(TAG, "queued type=" + type + " pendingCount=" + pendingEvents.size());
+            scheduleReconnect();
             return true;
         }
+        if (webSocket == null) return false;
         return webSocket.send(event.toString());
     }
 
@@ -163,6 +182,7 @@ public class ChatWebSocketClient {
             return;
         }
         List<JsonObject> events = new ArrayList<>(pendingEvents);
+        Log.d(TAG, "flushPending count=" + events.size());
         pendingEvents.clear();
         for (JsonObject event : events) {
             webSocket.send(event.toString());
@@ -180,11 +200,14 @@ public class ChatWebSocketClient {
         if (intentionalDisconnect || connecting || authenticated
                 || lastUserId == null || lastEncryptedCredential == null) return;
         reconnectHandler.removeCallbacksAndMessages(null);
+        long delayMs = Math.min(30000L, 2000L << Math.min(reconnectAttempts, 4));
+        reconnectAttempts++;
+        Log.d(TAG, "scheduleReconnect delayMs=" + delayMs + " attempt=" + reconnectAttempts);
         reconnectHandler.postDelayed(() -> {
             if (!intentionalDisconnect && !connecting && !authenticated) {
                 webSocket = null;
                 connect(lastUserId, lastEncryptedCredential);
             }
-        }, 2000);
+        }, delayMs);
     }
 }

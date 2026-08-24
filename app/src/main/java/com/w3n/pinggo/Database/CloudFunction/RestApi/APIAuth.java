@@ -15,11 +15,15 @@ public class APIAuth {
     private static final String DEV_URL = "https://function.cloudsw3.com/pinggo-app-api_dev/";
     private static final String DEV_SERVER_HOST = "function.cloudsw3.com";
     private static final String RELEASE_SERVER_HOST = "function.cloudsw3.com";
-    private static final int WEBSOCKET_PORT = 4100;
+    private static final int DEV_WEBSOCKET_PORT = 4200;
+    private static final int RELEASE_WEBSOCKET_PORT = 4100;
 
     public static final String WS_URL = AppContextProvider.isDevelopment
-            ? "ws://" + DEV_SERVER_HOST + ":" + WEBSOCKET_PORT + "/ws"
-            : "ws://" + RELEASE_SERVER_HOST + ":" + WEBSOCKET_PORT + "/ws";
+            ? "ws://" + DEV_SERVER_HOST + ":" + DEV_WEBSOCKET_PORT + "/ws"
+            : "ws://" + RELEASE_SERVER_HOST + ":" + RELEASE_WEBSOCKET_PORT + "/ws";
+    public static final String MEDIA_WS_URL = AppContextProvider.isDevelopment
+            ? "ws://" + DEV_SERVER_HOST + ":" + DEV_WEBSOCKET_PORT + "/media"
+            : "ws://" + RELEASE_SERVER_HOST + ":" + RELEASE_WEBSOCKET_PORT + "/media";
 
     private Retrofit retrofit;
 

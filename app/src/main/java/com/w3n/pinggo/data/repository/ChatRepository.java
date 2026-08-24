@@ -1007,6 +1007,13 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         resendCompletedUploadsAwaitingAck();
         String phoneNumber = LoginStateManager.getInstance().getUID(appContext);
         syncAfterReconnect(phoneNumber);
+        if (callEventListener != null) {
+            JsonObject event = new JsonObject();
+            event.addProperty("type", "call_socket_reconnected");
+            mainHandler.post(() -> {
+                if (callEventListener != null) callEventListener.onCallEvent(event);
+            });
+        }
     }
 
     @Override
@@ -1017,7 +1024,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         }
         if ((type.startsWith("call_") || "ice_candidate".equals(type))
                 && callEventListener != null) {
-            mainHandler.post(() -> callEventListener.onCallEvent(event));
+            CallEventListener listener = callEventListener;
+            mainHandler.post(() -> {
+                if (callEventListener == listener) listener.onCallEvent(event);
+            });
         }
         if ("message_ack".equals(type)) {
             handleMessageAck(event);

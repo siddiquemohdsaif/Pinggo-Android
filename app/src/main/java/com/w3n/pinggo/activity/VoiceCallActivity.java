@@ -20,14 +20,14 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
-import com.w3n.pinggo.call.WebRtcVoiceCallClient;
+import com.w3n.pinggo.call.WebRTCCallClient;
 import com.w3n.pinggo.call.FloatingVoiceCallController;
 import com.w3n.pinggo.call.ActiveCallRegistry;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.views.call.VoiceActiveCallView;
 
 public class VoiceCallActivity extends AppCompatActivity
-    implements VoiceActiveCallView.Listener, WebRtcVoiceCallClient.Listener,
+    implements VoiceActiveCallView.Listener, WebRTCCallClient.Listener,
     ChatRepository.CallEventListener {
   public static final String EXTRA_PHONE_NUMBER = "com.w3n.pinggo.EXTRA_CALL_PHONE_NUMBER";
   public static final String EXTRA_PROFILE_PATH = "com.w3n.pinggo.EXTRA_CALL_PROFILE_PATH";
@@ -37,7 +37,7 @@ public class VoiceCallActivity extends AppCompatActivity
   public static final String EXTRA_CALL_CHAT_ID = "com.w3n.pinggo.EXTRA_CALL_CHAT_ID";
   private VoiceActiveCallView callView;
   private AudioManager audioManager;
-  private WebRtcVoiceCallClient callClient;
+  private WebRTCCallClient callClient;
   private boolean speakerOn, muted;
   private final Handler timerHandler = new Handler(Looper.getMainLooper());
   private long connectedAt;
@@ -129,7 +129,7 @@ public class VoiceCallActivity extends AppCompatActivity
   }
 
   private void startCall() {
-    callClient = new WebRtcVoiceCallClient(this, ChatRepository.getInstance(this), this);
+    callClient = new WebRTCCallClient(this, ChatRepository.getInstance(this), this);
     String local = LoginStateManager.getInstance().getUID(this);
     String incomingOffer = getIntent().getStringExtra(EXTRA_SDP_OFFER);
     if (incomingOffer != null && !incomingOffer.isEmpty()) {

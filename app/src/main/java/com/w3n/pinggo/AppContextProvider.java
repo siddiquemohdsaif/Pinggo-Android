@@ -15,7 +15,10 @@ import com.google.gson.JsonObject;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
 import com.w3n.pinggo.activity.VoiceCallActivity;
+import com.w3n.pinggo.activity.VideoCallActivity;
 import com.w3n.pinggo.call.FloatingVoiceCallController;
+import com.w3n.pinggo.call.FloatingVideoCallController;
+import com.w3n.pinggo.call.WebRTCCallClient;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.modals.AppConfiguration;
 import com.w3n.pinggo.views.common.NativeMessageView;
@@ -36,6 +39,7 @@ public class AppContextProvider extends Application implements ChatRepository.In
         // Initialize the app context when the application starts
         appContext = getApplicationContext();
         FloatingVoiceCallController.getInstance().initialize(this);
+        FloatingVideoCallController.getInstance().initialize(this);
 
         // Keep one authenticated WebSocket for the complete logged-in app
         // session instead of waiting for an individual chat screen to open.
@@ -55,7 +59,8 @@ public class AppContextProvider extends Application implements ChatRepository.In
                 ? event.getAsJsonObject("sdp") : null;
         if (sdp == null) return;
         String callerId = JsonParserUtil.getString(event, "callerId");
-        Intent intent = new Intent(this, VoiceCallActivity.class);
+        boolean video = "video".equals(JsonParserUtil.getString(event, "mediaType"));
+        Intent intent = new Intent(this, video ? VideoCallActivity.class : VoiceCallActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER,
                 callerId.isEmpty() ? "Unknown" : "+" + callerId);
@@ -65,7 +70,7 @@ public class AppContextProvider extends Application implements ChatRepository.In
         intent.putExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID,
                 JsonParserUtil.getString(event, "chatId"));
         intent.putExtra(VoiceCallActivity.EXTRA_SDP_OFFER,
-                JsonParserUtil.getString(sdp, "description"));
+                WebRTCCallClient.decodeSdp(sdp));
         startActivity(intent);
     }
 

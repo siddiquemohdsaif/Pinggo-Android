@@ -26,8 +26,10 @@ public final class VideoActiveCallView extends View {
   private final String phone;
   private final Bitmap profile, dark = color(0xFF101820), control = color(0xFF26333E);
   private final Bitmap selected = color(ACCENT), danger = color(0xFFE53935);
+  private final Bitmap disabled = color(0xFF66717B);
   private int topInset, bottomInset;
-  private boolean speakerOn, muted;
+  private boolean speakerOn, muted, cameraEnabled = true, incomingPrompt, callConnected, remoteMuted;
+  private String callStatus = "Connecting…";
 
   public VideoActiveCallView(Context context, String phone, String profilePath, Listener listener) {
     super(context);
@@ -45,33 +47,78 @@ public final class VideoActiveCallView extends View {
     speakerOn = speaker; muted = mute;
     if (getWidth() > 0) build();
   }
+  public void setCallStatus(String status) {
+    callStatus = status == null || status.trim().isEmpty() ? "Video call" : status;
+    if (getWidth() > 0) build();
+  }
+  public void setCameraEnabled(boolean enabled) {
+    cameraEnabled = enabled;
+    if (getWidth() > 0) build();
+  }
+  public void setCallConnected(boolean connected) {
+    callConnected = connected;
+    if (!connected) muted = false;
+    if (getWidth() > 0) build();
+  }
+  public void setRemoteMuted(boolean value) {
+    remoteMuted = value;
+    if (getWidth() > 0) build();
+  }
+  public void showIncomingPrompt(boolean show) {
+    incomingPrompt = show;
+    if (getWidth() > 0) build();
+  }
   @Override protected void onSizeChanged(int w, int h, int oldw, int oldh) {
     super.onSizeChanged(w, h, oldw, oldh); if (w > 0 && h > 0) build();
   }
   private void build() {
     background.clear(); content.clear();
     float w = getWidth(), h = getHeight(), top = topInset + dp(10);
-    background.add(new Image.Builder(getContext(), "video_surface", dark, new RectF(0, 0, w, h))
-        .setScaleType(Image.ScaleType.FIT_XY));
     button("back", control, "‹", new RectF(dp(10), top, dp(58), top + dp(48)), Color.WHITE,
         id -> listener.onBack());
     content.add(new Image.Builder(getContext(), "header_profile", profile,
         new RectF(dp(68), top + dp(4), dp(108), top + dp(44))).setScaleType(Image.ScaleType.CENTER_CROP));
     text("phone", phone, new RectF(dp(118), top, w - dp(16), top + dp(48)), sp(17), Color.WHITE,
         FontVariation.SEMI_BOLD, Text.Alignment.START);
-    text("status", "Video call", new RectF(dp(24), top + dp(90), w - dp(24), top + dp(150)),
+    text("status", callStatus, new RectF(dp(24), top + dp(90), w - dp(24), top + dp(150)),
         sp(22), Color.WHITE, FontVariation.SEMI_BOLD, Text.Alignment.CENTER);
-    controls(w, h); invalidate();
+    if (remoteMuted) {
+      text("remote_mute", phone + " is muted", new RectF(dp(24), top + dp(145), w - dp(24),
+          top + dp(185)), sp(14), 0xFFCCD3D9, FontVariation.REGULAR, Text.Alignment.CENTER);
+    } else if (muted) {
+      text("local_mute", "You are muted", new RectF(dp(24), top + dp(145), w - dp(24),
+          top + dp(185)), sp(14), 0xFFCCD3D9, FontVariation.REGULAR, Text.Alignment.CENTER);
+    }
+    if (incomingPrompt) incomingControls(w, h); else controls(w, h);
+    invalidate();
+  }
+  private void incomingControls(float w, float h) {
+    float bottom = h - bottomInset - dp(28), top = bottom - dp(68), gap = dp(28);
+    float width = Math.min(dp(130), (w - dp(48) - gap) / 2);
+    float x = (w - width * 2 - gap) / 2;
+    button("reject", danger, "Reject", new RectF(x, top, x + width, bottom), Color.WHITE,
+        id -> listener.onReject());
+    x += width + gap;
+    button("accept", selected, "Accept", new RectF(x, top, x + width, bottom), Color.WHITE,
+        id -> listener.onAccept());
   }
   private void controls(float w, float h) {
-    float bottom = h - bottomInset - dp(24), top = bottom - dp(64), gap = dp(18);
-    float width = Math.min(dp(92), (w - dp(48) - gap * 2) / 3);
-    float x = (w - (width * 3 + gap * 2)) / 2;
+    float bottom = h - bottomInset - dp(24), top = bottom - dp(64), gap = dp(8);
+    float width = Math.min(dp(70), (w - dp(24) - gap * 4) / 5);
+    float x = (w - (width * 5 + gap * 4)) / 2;
+    button("flip", control, "Flip", new RectF(x, top, x + width, bottom), Color.WHITE,
+        id -> listener.onFlipCamera());
+    x += width + gap;
+    button("camera", cameraEnabled ? selected : control, cameraEnabled ? "Camera" : "Camera off",
+        new RectF(x, top, x + width, bottom), Color.WHITE, id -> listener.onCamera());
+    x += width + gap;
     button("speaker", speakerOn ? selected : control, speakerOn ? "Speaker on" : "Speaker",
         new RectF(x, top, x + width, bottom), Color.WHITE, id -> listener.onSpeaker());
     x += width + gap;
-    button("mute", muted ? selected : control, muted ? "Unmute" : "Mute",
-        new RectF(x, top, x + width, bottom), Color.WHITE, id -> listener.onMute());
+    Button muteButton = button("mute", !callConnected ? disabled : muted ? selected : control,
+        muted ? "Unmute" : "Mute", new RectF(x, top, x + width, bottom), Color.WHITE,
+        id -> { if (callConnected) listener.onMute(); });
+    muteButton.setEnabled(callConnected);
     x += width + gap;
     button("end", danger, "End", new RectF(x, top, x + width, bottom), Color.WHITE,
         id -> listener.onEnd());
@@ -82,9 +129,9 @@ public final class VideoActiveCallView extends View {
         .setFontVariations(weight).setTextSizePx(size).setTextColor(color).setAlignment(alignment)
         .setVerticalAlignment(Text.VerticalAlignment.CENTER).setMaxLines(1));
   }
-  private void button(String id, Bitmap image, String label, RectF rect, int color,
+  private Button button(String id, Bitmap image, String label, RectF rect, int color,
       Button.OnClickListener click) {
-    content.add(new Button.Builder(getContext(), id, image, label, rect)
+    return content.add(new Button.Builder(getContext(), id, image, label, rect)
         .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(dp(24)).setFont(NativeFonts.INTER)
         .setFontVariations(FontVariation.SEMI_BOLD).setTextSizePx(sp(13)).setTextColor(color)
         .setRippleEnabled(true).setRippleColor(0x33FFFFFF).setOnClickListener(click));
@@ -93,7 +140,7 @@ public final class VideoActiveCallView extends View {
   @Override public boolean onTouchEvent(MotionEvent event) {
     return layers.onTouchEvent(event) || super.onTouchEvent(event);
   }
-  public void release() { layers.release(); recycle(dark, control, selected, danger, profile); }
+  public void release() { layers.release(); recycle(dark, control, selected, danger, disabled, profile); }
   private Bitmap avatar() {
     int size = Math.round(dp(180)); Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
     Canvas canvas = new Canvas(bitmap); Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -109,5 +156,9 @@ public final class VideoActiveCallView extends View {
   private static void recycle(Bitmap... values) {
     for (Bitmap value : values) if (value != null && !value.isRecycled()) value.recycle();
   }
-  public interface Listener { void onBack(); void onSpeaker(); void onMute(); void onEnd(); }
+  public interface Listener {
+    void onBack(); void onSpeaker(); void onMute(); void onEnd();
+    void onFlipCamera(); void onCamera();
+    void onAccept(); void onReject();
+  }
 }

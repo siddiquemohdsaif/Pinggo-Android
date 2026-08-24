@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.UUID;
 import java.io.File;
 import java.io.FileNotFoundException;
 
@@ -50,6 +51,7 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
       EXTRA_PROFILE_PHOTO_URL = "com.w3n.pinggo.EXTRA_PROFILE_PHOTO_URL",
       EXTRA_LOCAL_PROFILE_PHOTO_PATH = "com.w3n.pinggo.EXTRA_LOCAL_PROFILE_PHOTO_PATH";
   private final Handler typingHandler = new Handler(Looper.getMainLooper());
+  private long lastSocketErrorToastAt;
   private final ActivityResultLauncher<String[]> attachmentPicker =
       registerForActivityResult(new ActivityResultContracts.OpenDocument(), this::onAttachmentPicked);
   private final ActivityResultLauncher<String[]> locationPermission =
@@ -132,7 +134,16 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
 
           @Override
           public void onSocketError(String error) {
-            Toast.makeText(ChatActivity.this, error, Toast.LENGTH_SHORT).show();
+            long now = System.currentTimeMillis();
+            if (now - lastSocketErrorToastAt < 15000L) return;
+            lastSocketErrorToastAt = now;
+            String message = error != null && error.contains("Control frames must be final")
+                ? "Chat connection interrupted. Reconnecting…"
+                : error;
+            Toast.makeText(ChatActivity.this,
+                message == null || message.trim().isEmpty()
+                    ? "Chat connection interrupted." : message,
+                Toast.LENGTH_SHORT).show();
           }
         });
     observe();
@@ -285,6 +296,8 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
     }
     Intent intent = new Intent(this, activityClass);
     intent.putExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID, chatId);
+    intent.putExtra(VoiceCallActivity.EXTRA_CALL_ID, UUID.randomUUID().toString());
+    intent.putExtra(VoiceCallActivity.EXTRA_CALLER_ID, receiverId);
     intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER,
         receiverId.isEmpty() ? "Unknown" : "+" + receiverId);
     intent.putExtra(VoiceCallActivity.EXTRA_PROFILE_PATH, profilePhotoPath);
