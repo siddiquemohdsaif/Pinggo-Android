@@ -21,6 +21,7 @@ import com.w3n.pinggo.Database.CloudFunction.RestApi.APIAuth;
 import com.w3n.pinggo.Database.CloudFunction.RestApi.AppRestAPI;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
+import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.Database.CloudFunction.WebSocket.ChatWebSocketClient;
 import com.w3n.pinggo.data.local.MessageDao;
 import com.w3n.pinggo.data.local.MessageEntity;
@@ -37,7 +38,9 @@ import com.w3n.pinggo.data.worker.AttachmentDownloadWorker;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -55,6 +58,7 @@ import retrofit2.Response;
 
 public class ChatRepository implements ChatWebSocketClient.Listener {
     private static final long ATTACHMENT_CHUNK_SIZE = 3L * 1024L * 1024L;
+    private static final int CHAT_LIST_PAGE_SIZE = 20;
     public interface EventListener {
         void onTyping(String chatId, String userId, boolean typing);
 
@@ -90,12 +94,21 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     private final TransferDao transferDao;
     private final AppFunctionManager appFunctionManager;
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService profilePhotoExecutor = Executors.newFixedThreadPool(4);
+    private final Set<String> profilePhotoDownloads =
+            Collections.synchronizedSet(new HashSet<>());
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ChatWebSocketClient socketClient;
     private EventListener eventListener;
+    private String chatListPhoneNumber = "";
+    private String nextChatListCursor;
+    private boolean chatListHasMore;
+    private boolean chatListPageLoading;
+    private int chatListGeneration;
     private CallEventListener callEventListener;
     private IncomingCallListener incomingCallListener;
     private String currentUserId;
+    private volatile String activeChatId = "";
 
     private ChatRepository(Context context) {
         appContext = context.getApplicationContext();
@@ -152,6 +165,27 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     public LiveData<List<ChatEntity>> observeChats() {
         return chatDao.observeChats();
+    }
+
+    public void updateChatSetting(String chatId, String setting, long value,
+                                  AppFunctionManager.Callback callback) {
+        String phoneNumber = normalizeAccountId(
+                LoginStateManager.getInstance().getUID(appContext));
+        appFunctionManager.updateChatSettings(
+                phoneNumber, chatId, setting, value, callback);
+    }
+
+    public void setActiveChat(String chatId) {
+        activeChatId = chatId == null ? "" : chatId.trim();
+        if (!activeChatId.isEmpty()) {
+            String openedChatId = activeChatId;
+            ioExecutor.execute(() -> chatDao.clearUnreadCount(openedChatId));
+        }
+    }
+
+    public void clearActiveChat(String chatId) {
+        String closingChatId = chatId == null ? "" : chatId.trim();
+        if (activeChatId.equals(closingChatId)) activeChatId = "";
     }
 
     public LiveData<List<TransferEntity>> observeTransfers(String chatId) {
@@ -261,10 +295,13 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 ? normalizeAccountId(LoginStateManager.getInstance().getUID(appContext)) : currentUserId;
         String normalizedReceiverId = normalizeAccountId(receiverId);
         if (existingClientMessageId == null) {
-            messageDao.upsert(new MessageEntity(clientMessageId, clientMessageId, chatId, senderId,
+            MessageEntity localMessage = new MessageEntity(clientMessageId, clientMessageId,
+                    chatId, senderId,
                     normalizedReceiverId, caption, repliedMessageId, System.currentTimeMillis(),
                     null, null, MessageStatus.SENDING, kind, null, kind, name, mime, null,
-                    uri.toString(), size < 0 ? null : size, null, null, null));
+                    uri.toString(), size < 0 ? null : size, null, null, null);
+            messageDao.upsert(localMessage);
+            updateChatSummary(localMessage);
         } else {
             messageDao.updateStatusByClientMessageId(clientMessageId, MessageStatus.SENDING);
         }
@@ -340,7 +377,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     caption, repliedMessageId, System.currentTimeMillis(), null, null,
                     MessageStatus.SENDING, kind, null, kind, name, mime, null, uri.toString(),
                     size < 0 ? null : size, null, null, null);
-            ioExecutor.execute(() -> messageDao.upsert(localMessage));
+            ioExecutor.execute(() -> {
+                messageDao.upsert(localMessage);
+                updateChatSummary(localMessage);
+            });
         } else {
             ioExecutor.execute(() -> messageDao.updateStatusByClientMessageId(
                     clientMessageId, MessageStatus.SENDING));
@@ -553,7 +593,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 location == null ? null : location.get("accuracy").getAsFloat()
         );
 
-        ioExecutor.execute(() -> messageDao.upsert(localMessage));
+        ioExecutor.execute(() -> {
+            messageDao.upsert(localMessage);
+            updateChatSummary(localMessage);
+        });
 
         sendExistingMessage(clientMessageId, chatId, senderId, normalizedReceiverId, text,
                 repliedMessageId, messageType, attachment, location);
@@ -865,7 +908,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     if (!(object instanceof JsonObject)) {
                         return;
                     }
-                    JsonArray messages = ((JsonObject) object).getAsJsonArray("messages");
+                    JsonObject response = (JsonObject) object;
+                    JsonArray messages = response.getAsJsonArray("messages");
+                    JsonObject chatListSettings = response.has("chatList")
+                            && response.get("chatList").isJsonObject()
+                            ? response.getAsJsonObject("chatList") : null;
                     if (messages == null) {
                         return;
                     }
@@ -881,6 +928,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     ioExecutor.execute(() -> {
                         preserveLocalAttachmentUris(entities);
                         messageDao.upsertAll(entities);
+                        for (MessageEntity message : entities) updateChatSummary(message);
+                        applySyncedUnreadCounts(chatListSettings);
                     });
                 }
 
@@ -893,34 +942,144 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     public void refreshChatList(String phoneNumber) {
-        appFunctionManager.getChatList(phoneNumber, new AppFunctionManager.Callback() {
+        String normalizedPhoneNumber = normalizeAccountId(phoneNumber);
+        final int generation;
+        synchronized (this) {
+            chatListPhoneNumber = normalizedPhoneNumber;
+            nextChatListCursor = null;
+            chatListHasMore = true;
+            chatListPageLoading = false;
+            generation = ++chatListGeneration;
+        }
+        requestChatListPage(normalizedPhoneNumber, null, generation);
+    }
+
+    public void loadNextChatListPage() {
+        final String phoneNumber;
+        final String cursor;
+        final int generation;
+        synchronized (this) {
+            if (chatListPageLoading || !chatListHasMore
+                    || nextChatListCursor == null || nextChatListCursor.isEmpty()
+                    || chatListPhoneNumber.isEmpty()) {
+                return;
+            }
+            phoneNumber = chatListPhoneNumber;
+            cursor = nextChatListCursor;
+            generation = chatListGeneration;
+        }
+        requestChatListPage(phoneNumber, cursor, generation);
+    }
+
+    private void requestChatListPage(String phoneNumber, String cursor, int generation) {
+        synchronized (this) {
+            if (chatListPageLoading || generation != chatListGeneration) return;
+            chatListPageLoading = true;
+        }
+        appFunctionManager.getChatList(
+                phoneNumber,
+                CHAT_LIST_PAGE_SIZE,
+                cursor,
+                new AppFunctionManager.Callback() {
             @Override
             public void onSuccess(Object object) {
+                synchronized (ChatRepository.this) {
+                    if (generation != chatListGeneration) return;
+                }
                 if (!(object instanceof JsonObject)) {
+                    finishChatListPage(generation, null, false);
                     return;
                 }
-                JsonArray userProfiles = ((JsonObject) object).getAsJsonArray("userProfiles");
+                JsonObject response = (JsonObject) object;
+                JsonArray userProfiles = response.getAsJsonArray("userProfiles");
                 if (userProfiles == null) {
+                    finishChatListPage(generation, null, false);
                     return;
                 }
+                String returnedCursor = JsonParserUtil.getString(response, "nextCursor");
+                boolean hasMore = JsonParserUtil.getBoolean(response, "hasMore")
+                        && !returnedCursor.isEmpty();
+                finishChatListPage(generation, returnedCursor, hasMore);
                 List<ChatEntity> chats = new ArrayList<>();
+                Set<String> chatsWithServerUnreadCount = new HashSet<>();
                 long now = System.currentTimeMillis();
                 for (JsonElement element : userProfiles) {
                     if (element != null && element.isJsonObject()) {
-                        ChatEntity chat = toChatEntity(element.getAsJsonObject(), now);
+                        JsonObject profile = element.getAsJsonObject();
+                        ChatEntity chat = toChatEntity(profile, now);
                         if (chat != null) {
                             chats.add(chat);
+                            if (profile.has("unread_count")
+                                    && !profile.get("unread_count").isJsonNull()) {
+                                chatsWithServerUnreadCount.add(chat.chatId);
+                            }
                         }
                     }
                 }
-                ioExecutor.execute(() -> chatDao.upsertAll(chats));
+                ioExecutor.execute(() -> {
+                    for (ChatEntity chat : chats) {
+                        ChatEntity existing = chatDao.findByChatId(chat.chatId);
+                        if (chat.chatId.equals(activeChatId)) {
+                            chat.unreadCount = 0;
+                        } else if (existing != null
+                                && !chatsWithServerUnreadCount.contains(chat.chatId)) {
+                            chat.unreadCount = existing.unreadCount;
+                        }
+                    }
+                    chatDao.upsertAll(chats);
+                    prefetchChatProfilePhotos(chats);
+                });
             }
 
             @Override
             public void onError(String error) {
+                releaseChatListPage(generation);
                 notifySocketError(error);
             }
         });
+    }
+
+    private synchronized void finishChatListPage(
+            int generation, String cursor, boolean hasMore) {
+        if (generation != chatListGeneration) return;
+        chatListPageLoading = false;
+        nextChatListCursor = cursor;
+        chatListHasMore = hasMore;
+    }
+
+    private synchronized void releaseChatListPage(int generation) {
+        if (generation == chatListGeneration) chatListPageLoading = false;
+    }
+
+    private void prefetchChatProfilePhotos(List<ChatEntity> chats) {
+        if (chats == null || chats.isEmpty()) return;
+        for (ChatEntity chat : chats) {
+            if (chat == null || chat.chatId == null || chat.chatId.isEmpty()
+                    || chat.otherUserId == null || chat.otherUserId.isEmpty()
+                    || chat.profilePhotoUrl == null || chat.profilePhotoUrl.trim().isEmpty()
+                    || !profilePhotoDownloads.add(chat.chatId)) {
+                continue;
+            }
+            profilePhotoExecutor.execute(() -> {
+                try {
+                    String localPath = ChatProfilePhotoStore.downloadAndStore(
+                            appContext,
+                            chat.otherUserId,
+                            chat.profilePhotoUrl
+                    );
+                    if (localPath != null) {
+                        chatDao.updateLocalProfilePhotoPath(
+                                chat.chatId,
+                                chat.profilePhotoUrl,
+                                localPath,
+                                System.currentTimeMillis()
+                        );
+                    }
+                } finally {
+                    profilePhotoDownloads.remove(chat.chatId);
+                }
+            });
+        }
     }
 
     public void hydrateChat(String chatId, String phoneNumber) {
@@ -1094,6 +1253,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         long sentTime = JsonParserUtil.getLong(event, "sentTime");
         ioExecutor.execute(() -> {
             messageDao.applyAck(clientMessageId, messageId, MessageStatus.SENT, sentTime);
+            MessageEntity acknowledged = messageDao.findByClientMessageId(clientMessageId);
+            if (acknowledged != null) updateChatSummary(acknowledged);
             transferDao.messageSent(clientMessageId, System.currentTimeMillis());
         });
     }
@@ -1133,8 +1294,18 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             return;
         }
         ioExecutor.execute(() -> {
+            boolean isNewMessage = !messageDao.existsByMessageId(message.messageId);
             preserveLocalAttachmentUri(message);
             messageDao.upsert(message);
+            updateChatSummary(message);
+            boolean incoming = !normalizeAccountId(message.senderId).equals(currentUserId);
+            if (incoming && isNewMessage) {
+                if (message.chatId.equals(activeChatId)) {
+                    chatDao.clearUnreadCount(message.chatId);
+                } else {
+                    chatDao.incrementUnreadCount(message.chatId);
+                }
+            }
             messageDao.markDelivered(
                     Collections.singletonList(message.messageId),
                     MessageStatus.DELIVERED,
@@ -1320,6 +1491,25 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         String phoneNumber = JsonParserUtil.getString(profile, "phoneNumber");
         boolean isOnline = JsonParserUtil.getBoolean(profile,"isOnline");
         long lastSeen = JsonParserUtil.getLong(profile,"lastSeen");
+        String lastMessage = "";
+        long lastMessageTime = 0;
+        JsonElement lastMessageElement = profile.get("last_message");
+        if (lastMessageElement == null || lastMessageElement.isJsonNull()) {
+            // Compatibility with the previous /chats/list response.
+            lastMessageElement = profile.get("lastMessage");
+        }
+        if (lastMessageElement != null && lastMessageElement.isJsonObject()) {
+            JsonObject lastMessageObject = lastMessageElement.getAsJsonObject();
+            lastMessage = getMessagePreview(lastMessageObject);
+            lastMessageTime = JsonParserUtil.getLong(lastMessageObject, "sentTime");
+        }
+        int unreadCount = Math.max(
+                0,
+                (int) JsonParserUtil.getLong(profile, "unread_count")
+        );
+        boolean pinned = JsonParserUtil.getBoolean(profile, "pinned");
+        long notificationMuted = JsonParserUtil.getLong(profile, "notification_muted");
+        boolean archived = JsonParserUtil.getBoolean(profile, "archieved");
 
         if (chatId.isEmpty()) {
             return null;
@@ -1331,11 +1521,103 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 normalizeAccountId(phoneNumber),
                 profilePhotoUrl,
                 "",
-                "",
+                lastMessage,
+                lastMessageTime,
+                unreadCount,
+                pinned,
+                notificationMuted,
+                archived,
                 isOnline,
                 lastSeen,
                 updatedAt
         );
+    }
+
+    private String getMessagePreview(JsonObject message) {
+        String text = JsonParserUtil.getString(message, "text").trim();
+        if (!text.isEmpty()) {
+            return text;
+        }
+
+        String messageType = JsonParserUtil.getString(message, "messageType");
+        switch (messageType) {
+            case "image":
+                return "Photo";
+            case "video":
+                return "Video";
+            case "audio":
+            case "voice":
+                return "Voice message";
+            case "voice_call":
+                return "Voice call";
+            case "video_call":
+                return "Video call";
+            case "location":
+                return "Location";
+            default:
+                return "Message";
+        }
+    }
+
+    private void updateChatSummary(MessageEntity message) {
+        if (message == null || message.chatId == null || message.chatId.trim().isEmpty()) return;
+        long sentTime = message.sentTime > 0 ? message.sentTime : System.currentTimeMillis();
+        String preview = getMessagePreview(message);
+        int updated = chatDao.updateLastMessage(
+                message.chatId, preview, sentTime, System.currentTimeMillis());
+        if (updated > 0) return;
+        // A newer message may already own the summary when socket events arrive out of order.
+        if (chatDao.findByChatId(message.chatId) != null) return;
+
+        String ownId = currentUserId == null || currentUserId.isEmpty()
+                ? normalizeAccountId(LoginStateManager.getInstance().getUID(appContext))
+                : currentUserId;
+        String senderId = normalizeAccountId(message.senderId);
+        String receiverId = normalizeAccountId(message.receiverId);
+        String otherUserId = ownId.equals(senderId) ? receiverId : senderId;
+        chatDao.upsert(new ChatEntity(
+                message.chatId,
+                otherUserId,
+                otherUserId,
+                "",
+                "",
+                preview,
+                sentTime,
+                0,
+                false,
+                0,
+                false,
+                false,
+                0,
+                System.currentTimeMillis()
+        ));
+    }
+
+    private void applySyncedUnreadCounts(JsonObject chatListSettings) {
+        if (chatListSettings == null) return;
+        for (java.util.Map.Entry<String, JsonElement> entry : chatListSettings.entrySet()) {
+            if (entry.getValue() == null || !entry.getValue().isJsonObject()) continue;
+            int unreadCount = Math.max(0, (int) JsonParserUtil.getLong(
+                    entry.getValue().getAsJsonObject(), "unread_count"));
+            if (entry.getKey().equals(activeChatId)) unreadCount = 0;
+            chatDao.setUnreadCount(entry.getKey(), unreadCount);
+        }
+    }
+
+    private String getMessagePreview(MessageEntity message) {
+        String text = message.text == null ? "" : message.text.trim();
+        if (!text.isEmpty()) return text;
+        String messageType = message.messageType == null ? "" : message.messageType;
+        switch (messageType) {
+            case "image": return "Photo";
+            case "video": return "Video";
+            case "audio":
+            case "voice": return "Voice message";
+            case "voice_call": return "Voice call";
+            case "video_call": return "Video call";
+            case "location": return "Location";
+            default: return "Message";
+        }
     }
 
     private Long getNullableLong(JsonObject object, String key) {

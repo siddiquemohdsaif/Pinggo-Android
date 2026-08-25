@@ -119,6 +119,10 @@ public class AppFunctionManager {
     ChatHandler.getChatList(appApi, phoneNumber, callback);
   }
 
+  public void getChatList(String phoneNumber, int pageSize, String cursor, Callback callback) {
+    ChatHandler.getChatList(appApi, phoneNumber, pageSize, cursor, callback);
+  }
+
   public void getChat(String chatId, String phoneNumber, Callback callback) {
     ChatHandler.getChat(appApi, chatId, phoneNumber, callback);
   }
@@ -129,6 +133,11 @@ public class AppFunctionManager {
 
   public void syncChatMessages(String phoneNumber, long lastSyncTime, Callback callback) {
     ChatHandler.syncMessages(appApi, phoneNumber, lastSyncTime, callback);
+  }
+
+  public void updateChatSettings(String phoneNumber, String chatId, String setting,
+                                 long value, Callback callback) {
+    ChatHandler.updateChatSettings(appApi, phoneNumber, chatId, setting, value, callback);
   }
 
   public void syncPresence(List<String> userIds, Callback callback) {

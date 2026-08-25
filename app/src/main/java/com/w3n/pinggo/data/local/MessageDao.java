@@ -22,6 +22,9 @@ public interface MessageDao {
     @Query("SELECT * FROM messages WHERE clientMessageId = :clientMessageId LIMIT 1")
     MessageEntity findByClientMessageId(String clientMessageId);
 
+    @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE messageId = :messageId)")
+    boolean existsByMessageId(String messageId);
+
     @Query("UPDATE messages SET messageId = :serverMessageId, status = :status, sentTime = :sentTime WHERE clientMessageId = :clientMessageId")
     void applyAck(String clientMessageId, String serverMessageId, String status, long sentTime);
 

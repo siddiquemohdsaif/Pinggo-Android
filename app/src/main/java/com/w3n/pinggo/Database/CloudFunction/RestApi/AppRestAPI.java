@@ -67,6 +67,9 @@ public interface AppRestAPI {
   @POST("chats/sync")
   Call<JsonObject> syncChatMessages(@Body RequestBody body);
 
+  @POST("chats/settings")
+  Call<JsonObject> updateChatSettings(@Body RequestBody body);
+
   @POST("profile/presence")
   Call<JsonObject> syncPresence(@Body RequestBody body);
 

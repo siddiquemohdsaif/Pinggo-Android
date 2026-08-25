@@ -177,6 +177,18 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
     if (!receiverId.isEmpty()) repository.syncPresence(Collections.singletonList(receiverId));
   }
 
+  @Override
+  protected void onStart() {
+    super.onStart();
+    if (repository != null && chatId != null) repository.setActiveChat(chatId);
+  }
+
+  @Override
+  protected void onStop() {
+    if (repository != null && chatId != null) repository.clearActiveChat(chatId);
+    super.onStop();
+  }
+
   public void setFloatingCallInset(int insetPx) {
     if (chatView != null) chatView.setFloatingCallInset(insetPx);
   }

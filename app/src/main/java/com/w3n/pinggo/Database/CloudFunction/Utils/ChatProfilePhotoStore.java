@@ -4,18 +4,19 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import com.w3n.pinggo.data.download.BackgroundFileDownloader;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.net.URL;
-import java.net.URLConnection;
+import java.util.UUID;
 
 public class ChatProfilePhotoStore {
   private static final String PREFS_NAME = "ChatProfilePhotos";
+  private static final String URL_KEY_PREFIX = "url_";
   private static final String FILE_PREFIX = "chat_profile_";
   private static final String FILE_EXTENSION = ".jpg";
   private static final int JPEG_QUALITY = 92;
+  private static final long MAX_PROFILE_PHOTO_BYTES = 25L * 1024L * 1024L;
 
   private ChatProfilePhotoStore() {}
 
@@ -36,28 +37,34 @@ public class ChatProfilePhotoStore {
     if (context == null || isEmpty(phoneNumber) || isEmpty(profilePhotoUrl)) {
       return null;
     }
-    String cachedPath = getLocalPath(context, phoneNumber);
-    if (cachedPath != null) return cachedPath;
+    String normalizedPhoneNumber = normalizePhoneNumber(phoneNumber);
+    String normalizedUrl = normalizeProfilePhotoUrl(profilePhotoUrl);
+    String cachedPath = getLocalPath(context, normalizedPhoneNumber);
+    String cachedUrl = getPrefs(context).getString(
+        URL_KEY_PREFIX + normalizedPhoneNumber, null);
+    if (cachedPath != null && normalizedUrl.equals(cachedUrl)) return cachedPath;
 
+    File temporaryFile = new File(
+        context.getCacheDir(),
+        "profile_" + normalizedPhoneNumber + "_" + UUID.randomUUID() + ".download");
     try {
-      URLConnection connection =
-          new URL(normalizeProfilePhotoUrl(profilePhotoUrl)).openConnection();
-      connection.setConnectTimeout(10_000);
-      connection.setReadTimeout(15_000);
-      try (InputStream inputStream = connection.getInputStream()) {
-        Bitmap bitmap = BitmapFactory.decodeStream(inputStream);
-        if (bitmap == null) {
-          return null;
-        }
-        String localPath = save(context, normalizePhoneNumber(phoneNumber), bitmap);
-        bitmap.recycle();
-        if (localPath != null) {
-          getPrefs(context).edit().putString(normalizePhoneNumber(phoneNumber), localPath).apply();
-        }
-        return localPath;
+      File downloadedFile = BackgroundFileDownloader.downloadToFile(
+          normalizedUrl, temporaryFile, MAX_PROFILE_PHOTO_BYTES);
+      Bitmap bitmap = BitmapFactory.decodeFile(downloadedFile.getAbsolutePath());
+      if (bitmap == null) return null;
+      String localPath = save(context, normalizedPhoneNumber, bitmap);
+      bitmap.recycle();
+      if (localPath != null) {
+        getPrefs(context).edit()
+            .putString(normalizedPhoneNumber, localPath)
+            .putString(URL_KEY_PREFIX + normalizedPhoneNumber, normalizedUrl)
+            .apply();
       }
+      return localPath;
     } catch (IOException ignored) {
       return null;
+    } finally {
+      if (temporaryFile.exists()) temporaryFile.delete();
     }
   }
 

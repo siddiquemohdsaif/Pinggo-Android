@@ -28,11 +28,13 @@ import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.R;
+import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.modals.CallLog;
 import com.w3n.pinggo.modals.Chat;
 
-import java.text.DateFormat;
 import java.util.ArrayList;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -157,6 +159,10 @@ public final class HomeView extends View {
                 .setOrientation(ComponentList.Orientation.VERTICAL).setItemSize(dp(76))
                 .setPaddingPx(dp(12), dp(4), dp(12), dp(88)).setAdapter(chatAdapter)
                 .setClipToBounds(true).setOverscrollEnabled(false)
+                .setOnItemLongClickListener((list, chat, position) -> {
+                    listener.onChatLongPress(chat);
+                    return true;
+                })
                 .setOnItemClickListener((list, chat, position) -> listener.onOpenChat(chat)));
         callList = contentLayer.add(new ComponentList.Builder<CallLog>(getContext(), "calls",
                 new RectF(0, top + dp(56), width, navTop))
@@ -310,10 +316,15 @@ public final class HomeView extends View {
             addRow(item, true);
         }
         @Override public void onBindItem(ComponentList.Item item, Chat chat, int position) {
+            if (position >= visible.size() - 3) {
+                ChatRepository.getInstance(getContext()).loadNextChatListPage();
+            }
             item.find("avatar", Image.class).setBitmap(chatAvatar(chat));
             item.find("name", Text.class).setText(chat.getContactName());
-            item.find("detail", Text.class).setText(presence(chat));
-            item.find("kind", Text.class).setVisible(false);
+            item.find("detail", Text.class).setText(lastMessage(chat));
+            item.find("kind", Text.class).setText(lastMessageTime(chat)).setVisible(true);
+            item.find("unread", Text.class).setText(unreadCount(chat))
+                    .setVisible(chat.getUnreadCount() > 0);
             item.find("divider", Image.class).setVisible(position < visible.size() - 1);
         }
     }
@@ -333,6 +344,7 @@ public final class HomeView extends View {
             item.find("name", Text.class).setText(call.getContactName());
             item.find("detail", Text.class).setText(call.getCalledTime());
             item.find("kind", Text.class).setText(call.isVideoCall() ? "▣" : "☎").setVisible(true);
+            item.find("unread", Text.class).setVisible(false);
             item.find("divider", Image.class).setVisible(position < calls.size() - 1);
         }
     }
@@ -344,15 +356,24 @@ public final class HomeView extends View {
         ZLayer row = item.addLayer("row");
         row.add(image(scope.id("avatar"), avatarBitmap("?"),
                 new RectF(dp(8), dp(10), dp(64), dp(66))).setScaleType(Image.ScaleType.CENTER_CROP));
-        row.add(text(scope.id("name"), "", new RectF(dp(80), dp(7), width - dp(58), dp(40)),
+        row.add(text(scope.id("name"), "", new RectF(dp(80), dp(7),
+                width - dp(chat ? 120 : 58), dp(40)),
                 sp(17), PRIMARY, FontVariation.SEMI_BOLD));
         row.add(text(scope.id("detail"), "", new RectF(dp(80), dp(38), width - dp(58), dp(68)),
                 sp(14), SECONDARY, FontVariation.REGULAR));
         Text kind = row.add(new Text.Builder(getContext(), scope.id("kind"), "",
-                new RectF(width - dp(56), 0, width - dp(8), height)).useDefaultFont()
-                .setTextSizePx(sp(22)).setTextColor(PRIMARY).setAlignment(Text.Alignment.CENTER)
+                new RectF(width - dp(chat ? 112 : 56), dp(chat ? 7 : 0),
+                        width - dp(8), chat ? dp(40) : height)).useDefaultFont()
+                .setTextSizePx(sp(chat ? 12 : 22)).setTextColor(chat ? SECONDARY : PRIMARY)
+                .setAlignment(chat ? Text.Alignment.END : Text.Alignment.CENTER)
                 .setVerticalAlignment(Text.VerticalAlignment.CENTER));
         kind.setVisible(!chat);
+        row.add(new Text.Builder(getContext(), scope.id("unread"), "",
+                new RectF(width - dp(56), dp(40), width - dp(8), dp(68))).useDefaultFont()
+                .setTextSizePx(sp(13)).setTextColor(ACCENT)
+                .setFontVariations(FontVariation.SEMI_BOLD)
+                .setAlignment(Text.Alignment.END)
+                .setVerticalAlignment(Text.VerticalAlignment.CENTER)).setVisible(false);
         row.add(image(scope.id("divider"), dividerBitmap,
                 new RectF(dp(80), height - dp(1), width, height)));
     }
@@ -366,10 +387,28 @@ public final class HomeView extends View {
         return bitmap == null ? avatarBitmap(chat.getContactName()) : bitmap;
     }
 
-    private String presence(Chat chat) {
-        if (chat.isOnline()) return "online";
-        return chat.getLastSeen() <= 0 ? "" : "last seen "
-                + DateFormat.getTimeInstance(DateFormat.SHORT).format(new Date(chat.getLastSeen()));
+    private String lastMessage(Chat chat) {
+        String message = chat.getLastMessage();
+        return message == null || message.trim().isEmpty()
+                ? "Start conversation" : message.trim();
+    }
+
+    private String lastMessageTime(Chat chat) {
+        long timestamp = chat.getLastMessageTime();
+        if (timestamp <= 0) return "";
+        Calendar messageDate = Calendar.getInstance();
+        messageDate.setTimeInMillis(timestamp);
+        Calendar today = Calendar.getInstance();
+        boolean sameDate = messageDate.get(Calendar.ERA) == today.get(Calendar.ERA)
+                && messageDate.get(Calendar.YEAR) == today.get(Calendar.YEAR)
+                && messageDate.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR);
+        String pattern = sameDate ? "hh:mm a" : "dd/MM/yyyy";
+        return new SimpleDateFormat(pattern, Locale.getDefault())
+                .format(new Date(timestamp)).toLowerCase(Locale.getDefault());
+    }
+
+    private String unreadCount(Chat chat) {
+        return chat.getUnreadCount() > 99 ? "99+" : String.valueOf(chat.getUnreadCount());
     }
 
     private Bitmap avatarBitmap(String value) {
@@ -401,6 +440,7 @@ public final class HomeView extends View {
 
     public interface Listener {
         void onOpenChat(Chat chat);
+        void onChatLongPress(Chat chat);
         void onOpenCall(CallLog callLog);
         void onNewChat();
         void onMakeCall();

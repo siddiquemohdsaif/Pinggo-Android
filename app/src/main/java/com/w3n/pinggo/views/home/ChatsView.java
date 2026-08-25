@@ -29,8 +29,9 @@ import com.w3n.pinggo.data.local.ChatEntity;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.modals.Chat;
 
-import java.text.DateFormat;
 import java.util.ArrayList;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -178,8 +179,12 @@ public final class ChatsView extends View {
             row.add(new Image.Builder(getContext(), scope.id("avatar"), avatar("?"),
                     new RectF(dp(8), dp(10), dp(64), dp(66)))
                     .setScaleType(Image.ScaleType.CENTER_CROP));
-            row.add(rowText(scope.id("name"), new RectF(dp(80), dp(7), width, dp(40)),
+            row.add(rowText(scope.id("name"), new RectF(dp(80), dp(7), width - dp(120), dp(40)),
                     sp(17), PRIMARY, FontVariation.SEMI_BOLD));
+            row.add(rowText(scope.id("time"), new RectF(width - dp(112), dp(7), width - dp(8), dp(40)),
+                    sp(12), SECONDARY, FontVariation.REGULAR).setAlignment(Text.Alignment.END));
+            row.add(rowText(scope.id("unread"), new RectF(width - dp(56), dp(40), width - dp(8), dp(68)),
+                    sp(13), ACCENT, FontVariation.SEMI_BOLD).setAlignment(Text.Alignment.END));
             row.add(rowText(scope.id("presence"), new RectF(dp(80), dp(38), width, dp(68)),
                     sp(14), SECONDARY, FontVariation.REGULAR));
             row.add(new Image.Builder(getContext(), scope.id("divider"), dividerBitmap,
@@ -187,9 +192,13 @@ public final class ChatsView extends View {
                     .setScaleType(Image.ScaleType.FIT_XY));
         }
         @Override public void onBindItem(ComponentList.Item item, Chat chat, int position) {
+            if (position >= chats.size() - 3) repository.loadNextChatListPage();
             item.find("avatar", Image.class).setBitmap(chatAvatar(chat));
             item.find("name", Text.class).setText(chat.getContactName());
-            item.find("presence", Text.class).setText(presence(chat));
+            item.find("time", Text.class).setText(lastMessageTime(chat));
+            item.find("unread", Text.class).setText(unreadCount(chat))
+                    .setVisible(chat.getUnreadCount() > 0);
+            item.find("presence", Text.class).setText(lastMessage(chat));
             item.find("divider", Image.class).setVisible(position < chats.size() - 1);
         }
     }
@@ -228,10 +237,28 @@ public final class ChatsView extends View {
         return bitmap;
     }
 
-    private String presence(Chat chat) {
-        if (chat.isOnline()) return "online";
-        return chat.getLastSeen() <= 0 ? "" : "last seen "
-                + DateFormat.getTimeInstance(DateFormat.SHORT).format(new Date(chat.getLastSeen()));
+    private String lastMessage(Chat chat) {
+        String message = chat.getLastMessage();
+        return message == null || message.trim().isEmpty()
+                ? "Start conversation" : message.trim();
+    }
+
+    private String lastMessageTime(Chat chat) {
+        long timestamp = chat.getLastMessageTime();
+        if (timestamp <= 0) return "";
+        Calendar messageDate = Calendar.getInstance();
+        messageDate.setTimeInMillis(timestamp);
+        Calendar today = Calendar.getInstance();
+        boolean sameDate = messageDate.get(Calendar.ERA) == today.get(Calendar.ERA)
+                && messageDate.get(Calendar.YEAR) == today.get(Calendar.YEAR)
+                && messageDate.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR);
+        String pattern = sameDate ? "hh:mm a" : "dd/MM/yyyy";
+        return new SimpleDateFormat(pattern, Locale.getDefault())
+                .format(new Date(timestamp)).toLowerCase(Locale.getDefault());
+    }
+
+    private String unreadCount(Chat chat) {
+        return chat.getUnreadCount() > 99 ? "99+" : String.valueOf(chat.getUnreadCount());
     }
 
     private List<Chat> toChats(List<ChatEntity> entities) {
@@ -245,6 +272,8 @@ public final class ChatsView extends View {
                     ? ChatProfilePhotoStore.getLocalPath(getContext(), entity.otherUserId)
                     : entity.localProfilePhotoPath;
             chats.add(new Chat(entity.chatId, name, entity.profilePhotoUrl, path,
+                    entity.lastMessage, entity.lastMessageTime, entity.unreadCount,
+                    entity.pinned, entity.notificationMuted, entity.archived,
                     entity.isOnline, entity.lastSeen));
         }
         return chats;

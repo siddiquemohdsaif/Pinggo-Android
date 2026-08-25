@@ -15,7 +15,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase;
                 PresenceEntity.class,
                 TransferEntity.class
         },
-        version = 6,
+        version = 9,
         exportSchema = false
 )
 public abstract class PingGoDatabase extends RoomDatabase {
@@ -40,6 +40,23 @@ public abstract class PingGoDatabase extends RoomDatabase {
             db.execSQL("ALTER TABLE `messages` ADD COLUMN `attachmentSha256` TEXT");
         }
     };
+    private static final Migration MIGRATION_6_7 = new Migration(6, 7) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE `chats` ADD COLUMN `lastMessageTime` INTEGER NOT NULL DEFAULT 0");
+        }
+    };
+    private static final Migration MIGRATION_7_8 = new Migration(7, 8) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE `chats` ADD COLUMN `unreadCount` INTEGER NOT NULL DEFAULT 0");
+        }
+    };
+    private static final Migration MIGRATION_8_9 = new Migration(8, 9) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE `chats` ADD COLUMN `pinned` INTEGER NOT NULL DEFAULT 0");
+            db.execSQL("ALTER TABLE `chats` ADD COLUMN `notificationMuted` INTEGER NOT NULL DEFAULT 0");
+            db.execSQL("ALTER TABLE `chats` ADD COLUMN `archived` INTEGER NOT NULL DEFAULT 0");
+        }
+    };
 
     public static PingGoDatabase getInstance(Context context) {
         if (instance != null) {
@@ -52,7 +69,8 @@ public abstract class PingGoDatabase extends RoomDatabase {
                         PingGoDatabase.class,
                         "pinggo.db"
                 )
-                        .addMigrations(MIGRATION_4_5, MIGRATION_5_6)
+                        .addMigrations(MIGRATION_4_5, MIGRATION_5_6,
+                                MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
                         .fallbackToDestructiveMigration()
                         .build();
             }

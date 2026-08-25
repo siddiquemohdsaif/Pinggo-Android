@@ -24,9 +24,18 @@ public class ChatHandler {
     private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
 
     public static void getChatList(AppRestAPI appApi, String phoneNumber, AppFunctionManager.Callback callback) {
+        getChatList(appApi, phoneNumber, 20, null, callback);
+    }
+
+    public static void getChatList(AppRestAPI appApi, String phoneNumber, int pageSize,
+                                   String cursor, AppFunctionManager.Callback callback) {
         JSONObject jsonObject = new JSONObject();
         try {
             jsonObject.put("phoneNumber", normalizePhoneNumber(phoneNumber));
+            jsonObject.put("pageSize", pageSize);
+            if (cursor != null && !cursor.trim().isEmpty()) {
+                jsonObject.put("cursor", cursor);
+            }
         } catch (JSONException e) {
             handleJsonError(e, callback);
             return;
@@ -77,6 +86,22 @@ public class ChatHandler {
         }
 
         enqueueChatCall(appApi.syncChatMessages(createJsonBody(jsonObject)), callback);
+    }
+
+    public static void updateChatSettings(AppRestAPI appApi, String phoneNumber, String chatId,
+                                          String setting, long value,
+                                          AppFunctionManager.Callback callback) {
+        JSONObject jsonObject = new JSONObject();
+        try {
+            jsonObject.put("phoneNumber", normalizePhoneNumber(phoneNumber));
+            jsonObject.put("chatId", chatId == null ? "" : chatId.trim());
+            jsonObject.put("setting", setting == null ? "" : setting.trim());
+            jsonObject.put("value", value);
+        } catch (JSONException e) {
+            handleJsonError(e, callback);
+            return;
+        }
+        enqueueChatCall(appApi.updateChatSettings(createJsonBody(jsonObject)), callback);
     }
 
     public static void syncPresence(AppRestAPI appApi, List<String> userIds,
