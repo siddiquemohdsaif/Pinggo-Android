@@ -19,6 +19,9 @@ import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.R;
 
+import java.util.EnumMap;
+import java.util.Map;
+
 /** Three-tab bottom navigation matching the final Frame 4250 design. */
 public final class BottomNavigationView extends View {
     private static final float FIGMA_WIDTH = 1080f;
@@ -43,6 +46,11 @@ public final class BottomNavigationView extends View {
     private final Bitmap callInactive = resourceBitmap(R.drawable.bottom_nav_calls_inactive);
     private final Bitmap meetActive = resourceBitmap(R.drawable.bottom_nav_meet_active);
     private final Bitmap meetInactive = resourceBitmap(R.drawable.bottom_nav_meet_inactive);
+    private final Map<Tab, Image> pills = new EnumMap<>(Tab.class);
+    private final Map<Tab, Image> icons = new EnumMap<>(Tab.class);
+    private final Map<Tab, Text> labels = new EnumMap<>(Tab.class);
+    private Image chatBadge;
+    private Text chatBadgeText;
     private Tab selectedTab = Tab.CHATS;
     private int totalUnread;
 
@@ -67,20 +75,26 @@ public final class BottomNavigationView extends View {
 
     @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
         layer.clear();
+        pills.clear();
+        icons.clear();
+        labels.clear();
+        chatBadge = null;
+        chatBadgeText = null;
         float scale = figmaConfig.getScale(width);
         float barHeight = Math.min(FIGMA_HEIGHT * scale, height);
         layer.add(new Image.Builder(getContext(), "background", background,
                 new RectF(0, 0, width, barHeight)).setScaleType(Image.ScaleType.FIT_XY));
         float tabWidth = width / 3f;
-        addTab("chats", 0, tabWidth, 23f, chatActive, chatInactive, R.string.chats,
+        addTab(Tab.CHATS, "chats", 0, tabWidth, 23f, chatActive, chatInactive, R.string.chats,
                 selectedTab == Tab.CHATS, id -> listener.onChatsSelected());
-        addTab("calls", tabWidth, tabWidth * 2, 0f, callActive, callInactive, R.string.calls,
+        addTab(Tab.CALLS, "calls", tabWidth, tabWidth * 2, 0f, callActive, callInactive, R.string.calls,
                 selectedTab == Tab.CALLS, id -> listener.onCallsSelected());
-        addTab("meet", tabWidth * 2, width, -21f, meetActive, meetInactive, R.string.meet,
+        addTab(Tab.MEET, "meet", tabWidth * 2, width, -21f, meetActive, meetInactive, R.string.meet,
                 selectedTab == Tab.MEET, id -> listener.onMeetSelected());
+        updateSelection();
     }
 
-    private void addTab(String id, float left, float right, float horizontalOffset,
+    private void addTab(Tab tab, String id, float left, float right, float horizontalOffset,
                         Bitmap activeIcon,
                         Bitmap inactiveIcon, int labelResource, boolean active,
                         Button.OnClickListener click) {
@@ -89,25 +103,24 @@ public final class BottomNavigationView extends View {
         float positionedLeft = left + offset;
         float positionedRight = right + offset;
         float center = (positionedLeft + positionedRight) / 2f;
-        if (active) {
-            layer.add(new Image.Builder(getContext(), id + "_pill", selected,
-                    new RectF(center - 76f * scale, 32f * scale,
-                            center + 76f * scale, 113f * scale))
-                    .setScaleType(Image.ScaleType.FIT_XY));
-        }
+        Image pill = layer.add(new Image.Builder(getContext(), id + "_pill", selected,
+                new RectF(center - 76f * scale, 32f * scale,
+                        center + 76f * scale, 113f * scale))
+                .setScaleType(Image.ScaleType.FIT_XY).setVisible(active));
+        pills.put(tab, pill);
         Bitmap icon = active ? activeIcon : inactiveIcon;
-        layer.add(new Image.Builder(getContext(), id + "_icon", icon,
+        icons.put(tab, layer.add(new Image.Builder(getContext(), id + "_icon", icon,
                 new RectF(center - 32f * scale, 40f * scale,
                         center + 32f * scale, 104f * scale))
-                .setScaleType(Image.ScaleType.FIT_CENTER));
-        layer.add(new Text.Builder(getContext(), id + "_label",
+                .setScaleType(Image.ScaleType.FIT_CENTER)));
+        labels.put(tab, layer.add(new Text.Builder(getContext(), id + "_label",
                 getResources().getString(labelResource),
                 new RectF(positionedLeft, 121f * scale, positionedRight, 185f * scale))
                 .setFont(NativeFonts.INTER)
                 .setFontVariations(FontVariation.MEDIUM).setTextSizePx(34f * scale)
                 .setTextColor(active ? ACCENT : SECONDARY).setAlignment(Text.Alignment.CENTER)
-                .setVerticalAlignment(Text.VerticalAlignment.CENTER));
-        if (id.equals("chats") && totalUnread > 0) addChatBadge(center);
+                .setVerticalAlignment(Text.VerticalAlignment.CENTER)));
+        if (tab == Tab.CHATS) addChatBadge(center);
         // Keep the invisible interaction region within its original screen third.
         // Native Button converts these bounds to Position margins and rejects a
         // negative left margin (the Chats visual offset is -23 Figma pixels).
@@ -122,22 +135,45 @@ public final class BottomNavigationView extends View {
 
     private void addChatBadge(float center) {
         float scale = figmaConfig.getScale(getWidth());
-        layer.add(new Image.Builder(getContext(), "chat_badge", badge,
+        chatBadge = layer.add(new Image.Builder(getContext(), "chat_badge", badge,
                 new RectF(center + 28f * scale, 23f * scale,
                         center + 82f * scale, 61f * scale))
-                .setScaleType(Image.ScaleType.FIT_XY));
+                .setScaleType(Image.ScaleType.FIT_XY).setVisible(totalUnread > 0));
         String label = totalUnread > 99 ? "99+" : String.valueOf(totalUnread);
-        layer.add(new Text.Builder(getContext(), "chat_badge_text", label,
+        chatBadgeText = layer.add(new Text.Builder(getContext(), "chat_badge_text", label,
                 new RectF(center + 28f * scale, 23f * scale,
                         center + 82f * scale, 61f * scale))
                 .setFont(NativeFonts.INTER).setFontVariations(FontVariation.REGULAR)
                 .setTextSizePx(26f * scale).setTextColor(Color.WHITE).setAlignment(Text.Alignment.CENTER)
                 .setVerticalAlignment(Text.VerticalAlignment.CENTER));
+        chatBadgeText.setVisible(totalUnread > 0);
     }
 
     private void updateSelection() {
-        if (getWidth() > 0) onSizeChanged(getWidth(), getHeight(), getWidth(), getHeight());
+        for (Tab tab : Tab.values()) {
+            boolean active = tab == selectedTab;
+            Image pill = pills.get(tab);
+            Image icon = icons.get(tab);
+            Text label = labels.get(tab);
+            if (pill != null) pill.setVisible(active);
+            if (icon != null) icon.setBitmap(iconFor(tab, active));
+            if (label != null) label.setTextColor(active ? ACCENT : SECONDARY);
+        }
+        if (chatBadge != null) chatBadge.setVisible(totalUnread > 0);
+        if (chatBadgeText != null) {
+            chatBadgeText.setText(totalUnread > 99 ? "99+" : String.valueOf(totalUnread))
+                    .setVisible(totalUnread > 0);
+        }
         invalidate();
+    }
+
+    private Bitmap iconFor(Tab tab, boolean active) {
+        switch (tab) {
+            case CALLS: return active ? callActive : callInactive;
+            case MEET: return active ? meetActive : meetInactive;
+            case CHATS:
+            default: return active ? chatActive : chatInactive;
+        }
     }
 
     @Override protected void onDraw(Canvas canvas) { layers.draw(canvas); }

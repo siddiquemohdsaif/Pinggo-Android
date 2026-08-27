@@ -1,10 +1,13 @@
 package com.w3n.pinggo.data.repository;
 
 import android.content.Context;
+import android.content.pm.ApplicationInfo;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
+import android.util.Log;
 
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
@@ -42,6 +45,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -58,6 +62,7 @@ import retrofit2.Callback;
 import retrofit2.Response;
 
 public class ChatRepository implements ChatWebSocketClient.Listener {
+    private static final String PERF_TAG = "ChatsRepoPerf";
     private static final long ATTACHMENT_CHUNK_SIZE = 3L * 1024L * 1024L;
     private static final int CHAT_LIST_PAGE_SIZE = 20;
     public interface EventListener {
@@ -996,6 +1001,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     private void requestChatListPage(String phoneNumber, String cursor, int generation) {
+        final long requestStarted = SystemClock.elapsedRealtime();
         final boolean pagination = cursor != null && !cursor.isEmpty();
         synchronized (this) {
             if (chatListPageLoading || generation != chatListGeneration) return;
@@ -1017,6 +1023,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     return;
                 }
                 JsonObject response = (JsonObject) object;
+                if (isDebugBuild()) {
+                    Log.d(PERF_TAG, "pageNetwork="
+                            + (SystemClock.elapsedRealtime() - requestStarted)
+                            + "ms pagination=" + pagination);
+                }
                 if ((cursor == null || cursor.isEmpty())
                         && response.has("total_unread")
                         && !response.get("total_unread").isJsonNull()) {
@@ -1048,6 +1059,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     }
                 }
                 ioExecutor.execute(() -> {
+                    long databaseStarted = SystemClock.elapsedRealtime();
                     for (ChatEntity chat : chats) {
                         ChatEntity existing = chatDao.findByChatId(chat.chatId);
                         if (chat.chatId.equals(activeChatId)) {
@@ -1058,6 +1070,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                         }
                     }
                     chatDao.upsertAll(chats);
+                    if (isDebugBuild()) {
+                        Log.d(PERF_TAG, "pageRoomWrite="
+                                + (SystemClock.elapsedRealtime() - databaseStarted)
+                                + "ms chats=" + chats.size() + " pagination=" + pagination);
+                    }
                     prefetchChatProfilePhotos(chats);
                     finishChatListPage(generation, returnedCursor, hasMore);
                 });
@@ -1098,6 +1115,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     private void prefetchChatProfilePhotos(List<ChatEntity> chats) {
         if (chats == null || chats.isEmpty()) return;
+        List<ChatEntity> pending = new ArrayList<>();
         for (ChatEntity chat : chats) {
             if (chat == null || chat.chatId == null || chat.chatId.isEmpty()
                     || chat.otherUserId == null || chat.otherUserId.isEmpty()
@@ -1105,6 +1123,13 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     || !profilePhotoDownloads.add(chat.chatId)) {
                 continue;
             }
+            pending.add(chat);
+        }
+        if (pending.isEmpty()) return;
+        List<ChatEntity> completed = Collections.synchronizedList(new ArrayList<>());
+        AtomicInteger remaining = new AtomicInteger(pending.size());
+        long batchStarted = SystemClock.elapsedRealtime();
+        for (ChatEntity chat : pending) {
             profilePhotoExecutor.execute(() -> {
                 try {
                     String localPath = ChatProfilePhotoStore.downloadAndStore(
@@ -1113,15 +1138,25 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                             chat.profilePhotoUrl
                     );
                     if (localPath != null) {
-                        chatDao.updateLocalProfilePhotoPath(
-                                chat.chatId,
-                                chat.profilePhotoUrl,
-                                localPath,
-                                System.currentTimeMillis()
-                        );
+                        chat.localProfilePhotoPath = localPath;
+                        completed.add(chat);
                     }
                 } finally {
                     profilePhotoDownloads.remove(chat.chatId);
+                    if (remaining.decrementAndGet() == 0 && !completed.isEmpty()) {
+                        ioExecutor.execute(() -> {
+                            long roomStarted = SystemClock.elapsedRealtime();
+                            chatDao.updateLocalProfilePhotoPaths(
+                                    new ArrayList<>(completed), System.currentTimeMillis());
+                            if (isDebugBuild()) {
+                                Log.d(PERF_TAG, "photoBatch total="
+                                        + (SystemClock.elapsedRealtime() - batchStarted)
+                                        + "ms room=" + (SystemClock.elapsedRealtime() - roomStarted)
+                                        + "ms requested=" + pending.size()
+                                        + " updated=" + completed.size());
+                            }
+                        });
+                    }
                 }
             });
         }
@@ -1735,6 +1770,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             return normalized.substring(1);
         }
         return normalized;
+    }
+
+    private boolean isDebugBuild() {
+        return (appContext.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
     }
 
 }

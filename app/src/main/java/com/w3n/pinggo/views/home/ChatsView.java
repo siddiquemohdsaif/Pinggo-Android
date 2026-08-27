@@ -2,6 +2,7 @@ package com.w3n.pinggo.views.home;
 
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
@@ -14,6 +15,11 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
+import android.os.Trace;
+import android.util.Log;
+import android.util.LruCache;
+import android.view.Choreographer;
 
 import androidx.lifecycle.Observer;
 
@@ -45,9 +51,13 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.LinkedHashSet;
 import java.util.Set;
+import java.util.Collections;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /** Scrollable chat list implemented with native-views-release.aar components. */
 public final class ChatsView extends View {
+    private static final String PERF_TAG = "ChatsViewPerf";
     private static final float FIGMA_WIDTH = 1080f;
     private static final int PRIMARY = 0xFF000E1A;
     private static final int SECONDARY = 0xFF687382;
@@ -116,6 +126,37 @@ public final class ChatsView extends View {
     private final Handler typingHandler = new Handler(Looper.getMainLooper());
     private final Map<String, Long> typingBaselines = new HashMap<>();
     private final Map<String, Runnable> typingTimeouts = new HashMap<>();
+    private final ExecutorService avatarExecutor = Executors.newFixedThreadPool(2);
+    private final Set<String> avatarLoads = Collections.synchronizedSet(new LinkedHashSet<>());
+    // Do not recycle on eviction: a visible native Image may still hold the bitmap.
+    private final LruCache<String, Bitmap> avatarCache = new LruCache<>(48);
+    private final Paint ellipsizePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final SimpleDateFormat timeFormatter =
+            new SimpleDateFormat("hh:mm a", Locale.getDefault());
+    private final SimpleDateFormat dateFormatter =
+            new SimpleDateFormat("dd/MM/yyyy", Locale.getDefault());
+    private final Calendar messageCalendar = Calendar.getInstance();
+    private final Calendar todayCalendar = Calendar.getInstance();
+    private final Date reusableDate = new Date();
+    private boolean frameProfilerRunning;
+    private long previousFrameNanos;
+    private final Choreographer.FrameCallback frameProfiler =
+            new Choreographer.FrameCallback() {
+        @Override public void doFrame(long frameTimeNanos) {
+            if (!frameProfilerRunning) return;
+            if (previousFrameNanos != 0L) {
+                long frameMs = (frameTimeNanos - previousFrameNanos) / 1_000_000L;
+                if (frameMs >= 24L) {
+                    Log.w(PERF_TAG, "slowFrame=" + frameMs + "ms firstVisible="
+                            + (list == null ? -1 : list.getFirstVisiblePosition())
+                            + " lastVisible=" + (list == null ? -1 : list.getLastVisiblePosition())
+                            + " items=" + adapter.getItemCount());
+                }
+            }
+            previousFrameNanos = frameTimeNanos;
+            Choreographer.getInstance().postFrameCallback(this);
+        }
+    };
 
     public ChatsView(Context context, OnChatClickListener clickListener) {
         super(context);
@@ -141,6 +182,7 @@ public final class ChatsView extends View {
         adapter.submit(chats, adapter.query);
         showStatus(adapter.getItemCount() == 0 ? getResources().getString(
                 R.string.start_new_conversation) : "");
+        post(this::loadNextPageIfNeeded);
     }
 
     public void showLoading() { showStatus("Loading chats..."); }
@@ -193,10 +235,17 @@ public final class ChatsView extends View {
 
     @Override protected void onAttachedToWindow() {
         super.onAttachedToWindow();
+        if (isDebugBuild() && !frameProfilerRunning) {
+            frameProfilerRunning = true;
+            previousFrameNanos = 0L;
+            Choreographer.getInstance().postFrameCallback(frameProfiler);
+        }
         if (loaded && !currentPhoneNumber().isEmpty()) startObserving();
     }
 
     @Override protected void onDetachedFromWindow() {
+        frameProfilerRunning = false;
+        Choreographer.getInstance().removeFrameCallback(frameProfiler);
         if (observing) {
             repository.observeChats().removeObserver(observer);
             repository.observeChatListPaginationLoading().removeObserver(paginationObserver);
@@ -367,7 +416,20 @@ public final class ChatsView extends View {
 
     @Override protected void onDraw(Canvas canvas) { super.onDraw(canvas); layers.draw(canvas); }
     @Override public boolean onTouchEvent(MotionEvent event) {
-        return layers.onTouchEvent(event) || super.onTouchEvent(event);
+        boolean handled = layers.onTouchEvent(event);
+        if (handled) post(this::loadNextPageIfNeeded);
+        return handled || super.onTouchEvent(event);
+    }
+
+    private void loadNextPageIfNeeded() {
+        if (list == null || adapter.getItemCount() == 0) return;
+        if (list.getLastVisiblePosition() >= adapter.getItemCount() - 3) {
+            if (isDebugBuild()) {
+                Log.d(PERF_TAG, "paginationCheck lastVisible=" + list.getLastVisiblePosition()
+                        + " items=" + adapter.getItemCount());
+            }
+            repository.loadNextChatListPage();
+        }
     }
 
     public void release() {
@@ -379,6 +441,9 @@ public final class ChatsView extends View {
             repository.observeChatListPaginationLoading().removeObserver(paginationObserver);
         }
         observing = false;
+        avatarExecutor.shutdownNow();
+        avatarLoads.clear();
+        avatarCache.evictAll();
         layers.release();
         recycle(dividerBitmap, actionBitmap, emptyTransparentBitmap, floatingActionBitmap,
                 emptyIllustrationBitmap,
@@ -425,6 +490,12 @@ public final class ChatsView extends View {
                 if (chat.getChatId().equals(chatId)) return chat.getLastMessageTime();
             }
             return 0L;
+        }
+        int indexOfChat(String chatId) {
+            for (int index = 0; index < chats.size(); index++) {
+                if (chats.get(index).getChatId().equals(chatId)) return index;
+            }
+            return -1;
         }
         @Override public int getItemCount() { return chats.size(); }
         @Override public Chat getItem(int position) { return chats.get(position); }
@@ -528,8 +599,9 @@ public final class ChatsView extends View {
                     .setScaleType(Image.ScaleType.FIT_XY));
         }
         @Override public void onBindItem(ComponentList.Item item, Chat chat, int position) {
-            if (position >= chats.size() - 3) repository.loadNextChatListPage();
-            item.find("avatar", Image.class).setBitmap(chatAvatar(chat));
+            long bindStarted = SystemClock.elapsedRealtimeNanos();
+            Trace.beginSection("ChatsView.bindRow");
+            bindAvatar(item, chat);
             boolean selected = selectedChatIds.contains(chat.getChatId());
             item.find("selection_background", Image.class).setVisible(selected);
             item.find("selection_check", Image.class).setVisible(selected);
@@ -538,24 +610,32 @@ public final class ChatsView extends View {
                     630f * scale, 42f * scale));
             item.find("time", Text.class).setText(lastMessageTime(chat));
             boolean unread = chat.getUnreadCount() > 0;
-            applyPreviewColor(item, unread ? UNREAD_PREVIEW : SECONDARY);
+            int previewColor = unread ? UNREAD_PREVIEW : SECONDARY;
             boolean hasState = chat.isPinned() || chat.isMuted();
-            item.find("unread_badge", Image.class).setVisible(unread && !hasState);
-            item.find("unread_badge_with_state", Image.class).setVisible(unread && hasState);
-            item.find("unread", Text.class).setText(unreadCount(chat))
-                    .setVisible(unread && !hasState);
-            item.find("unread_with_state", Text.class).setText(unreadCount(chat))
-                    .setVisible(unread && hasState);
-            Bitmap stateBitmap = chat.isPinned() ? pinnedBitmap : mutedBitmap;
-            item.find("state", Image.class).setBitmap(stateBitmap)
-                    .setVisible(hasState && !unread);
-            item.find("state_with_unread", Image.class).setBitmap(stateBitmap)
-                    .setVisible(hasState && unread);
+            item.find("unread_badge", Image.class).setVisible(false);
+            item.find("unread_badge_with_state", Image.class).setVisible(false);
+            item.find("unread", Text.class).setVisible(false);
+            item.find("unread_with_state", Text.class).setVisible(false);
+            item.find("state", Image.class).setVisible(false);
+            item.find("state_with_unread", Image.class).setVisible(false);
+            if (unread) {
+                String badgeId = hasState ? "unread_badge_with_state" : "unread_badge";
+                String textId = hasState ? "unread_with_state" : "unread";
+                item.find(badgeId, Image.class).setVisible(true);
+                item.find(textId, Text.class).setText(unreadCount(chat)).setVisible(true);
+            }
+            if (hasState) {
+                String stateId = unread ? "state_with_unread" : "state";
+                item.find(stateId, Image.class)
+                        .setBitmap(chat.isPinned() ? pinnedBitmap : mutedBitmap)
+                        .setVisible(true);
+            }
+            hideMessageComponents(item);
             if (typingBaselines.containsKey(chat.getChatId())) {
-                hideMessageComponents(item);
                 item.find("received_message", Text.class).setText("typing...")
                         .setTextColor(0xFF009FC8).setVisible(true);
                 item.find("divider", Image.class).setVisible(position < chats.size() - 1);
+                finishBindProfile(bindStarted, position, chat.getChatId());
                 return;
             }
             boolean hasMessage = chat.getLastMessage() != null && !chat.getLastMessage().trim().isEmpty();
@@ -567,49 +647,53 @@ public final class ChatsView extends View {
             boolean voiceCall = "voice_call".equals(type);
             boolean videoCall = "video_call".equals(type);
             boolean call = voiceCall || videoCall;
-            Bitmap receipt = chat.getLastMessageReadTime() != null ? readBitmap
-                    : chat.getLastMessageDeliveredTime() != null ? deliveredBitmap : sentBitmap;
-            item.find("message_status", Image.class).setBitmap(receipt)
-                    .setVisible(hasMessage && !received && !call && chat.getLastMessageTime() > 0);
-            item.find("message", Text.class).setText(ellipsize(lastMessage(chat),
-                    590f * scale, 38f * scale))
-                    .setVisible(!received && !video && !squareMedia && !call);
-            item.find("received_message", Text.class).setText(ellipsize(lastMessage(chat),
-                    650f * scale, 38f * scale))
-                    .setVisible(received && !video && !squareMedia && !call);
-            Bitmap squareIcon = "image".equals(type) ? pictureBitmap
-                    : "location".equals(type) ? locationBitmap : documentBitmap;
-            String mediaName = chat.getLastMessageAttachmentName();
-            if (mediaName == null || mediaName.trim().isEmpty()) mediaName = lastMessage(chat);
-            item.find("sent_square_media", Image.class).setBitmap(squareIcon)
-                    .setVisible(!received && squareMedia);
-            item.find("received_square_media", Image.class).setBitmap(squareIcon)
-                    .setVisible(received && squareMedia);
-            item.find("sent_video_media", Image.class).setVisible(!received && video);
-            item.find("received_video_media", Image.class).setVisible(received && video);
-            item.find("sent_square_text", Text.class).setText(ellipsize(mediaName,
-                    543f * scale, 38f * scale)).setVisible(!received && squareMedia);
-            item.find("sent_video_text", Text.class).setText(ellipsize(mediaName,
-                    539f * scale, 38f * scale)).setVisible(!received && video);
-            item.find("received_square_text", Text.class).setText(ellipsize(mediaName,
-                    604f * scale, 38f * scale)).setVisible(received && squareMedia);
-            item.find("received_video_text", Text.class).setText(ellipsize(mediaName,
-                    600f * scale, 38f * scale)).setVisible(received && video);
-            boolean missed = lastMessage(chat).toLowerCase(Locale.US).contains("missed");
-            boolean didntConnect = lastMessage(chat).toLowerCase(Locale.US)
-                    .contains("didn't connect");
-            Bitmap voiceCallIcon = missed ? phoneMissedBitmap : didntConnect ? phoneIncomingBitmap
-                    : received ? phoneIncomingBitmap : phoneOutgoingBitmap;
-            Bitmap videoCallIcon = missed ? videoMissedBitmap : didntConnect ? videoIncomingBitmap
-                    : received ? videoIncomingBitmap : videoOutgoingBitmap;
-            item.find("voice_call_icon", Image.class).setBitmap(voiceCallIcon).setVisible(voiceCall);
-            item.find("video_call_icon", Image.class).setBitmap(videoCallIcon).setVisible(videoCall);
-            String callText = formatCallPreview(lastMessage(chat), videoCall);
-            item.find("voice_call_text", Text.class).setText(ellipsize(callText,
-                    604f * scale, 38f * scale)).setVisible(voiceCall);
-            item.find("video_call_text", Text.class).setText(ellipsize(callText,
-                    600f * scale, 38f * scale)).setVisible(videoCall);
+            String preview = lastMessage(chat);
+            if (hasMessage && !received && !call && chat.getLastMessageTime() > 0) {
+                Bitmap receipt = chat.getLastMessageReadTime() != null ? readBitmap
+                        : chat.getLastMessageDeliveredTime() != null ? deliveredBitmap : sentBitmap;
+                item.find("message_status", Image.class).setBitmap(receipt).setVisible(true);
+            }
+            if (call) {
+                boolean missed = preview.toLowerCase(Locale.US).contains("missed");
+                boolean didntConnect = preview.toLowerCase(Locale.US).contains("didn't connect");
+                String iconId = voiceCall ? "voice_call_icon" : "video_call_icon";
+                String textId = voiceCall ? "voice_call_text" : "video_call_text";
+                Bitmap icon = voiceCall
+                        ? (missed ? phoneMissedBitmap : didntConnect ? phoneIncomingBitmap
+                        : received ? phoneIncomingBitmap : phoneOutgoingBitmap)
+                        : (missed ? videoMissedBitmap : didntConnect ? videoIncomingBitmap
+                        : received ? videoIncomingBitmap : videoOutgoingBitmap);
+                item.find(iconId, Image.class).setBitmap(icon).setVisible(true);
+                item.find(textId, Text.class)
+                        .setText(ellipsize(formatCallPreview(preview, videoCall),
+                                voiceCall ? 604f * scale : 600f * scale, 38f * scale))
+                        .setTextColor(previewColor).setVisible(true);
+            } else if (video || squareMedia) {
+                String mediaName = chat.getLastMessageAttachmentName();
+                if (mediaName == null || mediaName.trim().isEmpty()) mediaName = preview;
+                String direction = received ? "received_" : "sent_";
+                String kind = video ? "video" : "square";
+                String iconId = direction + kind + "_media";
+                String textId = direction + kind + "_text";
+                if (squareMedia) {
+                    Bitmap icon = "image".equals(type) ? pictureBitmap
+                            : "location".equals(type) ? locationBitmap : documentBitmap;
+                    item.find(iconId, Image.class).setBitmap(icon);
+                }
+                item.find(iconId, Image.class).setVisible(true);
+                float available = received ? (video ? 600f : 604f) : (video ? 539f : 543f);
+                item.find(textId, Text.class).setText(ellipsize(mediaName,
+                        available * scale, 38f * scale))
+                        .setTextColor(previewColor).setVisible(true);
+            } else {
+                String textId = received ? "received_message" : "message";
+                float available = received ? 650f : 590f;
+                item.find(textId, Text.class).setText(ellipsize(preview,
+                        available * scale, 38f * scale))
+                        .setTextColor(previewColor).setVisible(true);
+            }
             item.find("divider", Image.class).setVisible(position < chats.size() - 1);
+            finishBindProfile(bindStarted, position, chat.getChatId());
         }
 
         private void hideMessageComponents(ComponentList.Item item) {
@@ -630,16 +714,6 @@ public final class ChatsView extends View {
             item.find("video_call_text", Text.class).setVisible(false);
         }
 
-        private void applyPreviewColor(ComponentList.Item item, int color) {
-            item.find("message", Text.class).setTextColor(color);
-            item.find("received_message", Text.class).setTextColor(color);
-            item.find("sent_square_text", Text.class).setTextColor(color);
-            item.find("sent_video_text", Text.class).setTextColor(color);
-            item.find("received_square_text", Text.class).setTextColor(color);
-            item.find("received_video_text", Text.class).setTextColor(color);
-            item.find("voice_call_text", Text.class).setTextColor(color);
-            item.find("video_call_text", Text.class).setTextColor(color);
-        }
     }
 
     private Text.Builder rowText(String id, RectF bounds, float size, int color,
@@ -652,19 +726,18 @@ public final class ChatsView extends View {
 
     private String ellipsize(String value, float maxWidth, float textSize) {
         String text = value == null ? "" : value.replace('\n', ' ').trim();
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        paint.setTextSize(textSize);
+        ellipsizePaint.setTextSize(textSize);
         // Native Text renders Inter with wider metrics than Android's default Paint.
         // Reserve additional width so the pre-truncated value cannot wrap when bound.
         float safeWidth = maxWidth * 0.72f;
-        if (paint.measureText(text) <= safeWidth) return text;
+        if (ellipsizePaint.measureText(text) <= safeWidth) return text;
         String suffix = "...";
-        float available = Math.max(0f, safeWidth - paint.measureText(suffix));
+        float available = Math.max(0f, safeWidth - ellipsizePaint.measureText(suffix));
         int low = 0;
         int high = text.length();
         while (low < high) {
             int middle = (low + high + 1) / 2;
-            if (paint.measureText(text, 0, middle) <= available) low = middle;
+            if (ellipsizePaint.measureText(text, 0, middle) <= available) low = middle;
             else high = middle - 1;
         }
         return text.substring(0, low).trim() + suffix;
@@ -681,17 +754,77 @@ public final class ChatsView extends View {
         return label + " (" + text + ")";
     }
 
-    private Bitmap chatAvatar(Chat chat) {
+    private void bindAvatar(ComponentList.Item item, Chat chat) {
+        long started = SystemClock.elapsedRealtimeNanos();
         String path = chat.getLocalProfilePhotoPath();
         if (path == null || path.trim().isEmpty()) {
             path = ChatProfilePhotoStore.getLocalPath(getContext(), chat.getPhoneNumber());
         }
-        Bitmap bitmap = BitmapFactory.decodeFile(path);
-        return bitmap == null ? avatar(chat.getContactName()) : circleCrop(bitmap);
+        int size = avatarPixelSize();
+        final String cacheKey = (path == null ? "" : path) + "@" + size;
+        Bitmap cached = avatarCache.get(cacheKey);
+        if (cached != null && !cached.isRecycled()) {
+            item.find("avatar", Image.class).setBitmap(cached);
+            logAvatarBind(started, "cache", chat.getChatId());
+            return;
+        }
+        String placeholderKey = "placeholder:" + chat.getContactName() + "@" + size;
+        Bitmap placeholder = avatarCache.get(placeholderKey);
+        if (placeholder == null || placeholder.isRecycled()) {
+            placeholder = avatar(chat.getContactName());
+            avatarCache.put(placeholderKey, placeholder);
+        }
+        item.find("avatar", Image.class).setBitmap(placeholder);
+        if (path == null || path.trim().isEmpty() || !avatarLoads.add(cacheKey)) {
+            logAvatarBind(started, "placeholder", chat.getChatId());
+            return;
+        }
+        final String imagePath = path;
+        final String chatId = chat.getChatId();
+        avatarExecutor.execute(() -> {
+            long decodeStarted = SystemClock.elapsedRealtimeNanos();
+            Trace.beginSection("ChatsView.decodeAvatar");
+            Bitmap source = BitmapFactory.decodeFile(imagePath);
+            Bitmap cropped = source == null ? null : circleCrop(source, size);
+            if (source != null && source != cropped && !source.isRecycled()) source.recycle();
+            if (cropped != null) avatarCache.put(cacheKey, cropped);
+            avatarLoads.remove(cacheKey);
+            Trace.endSection();
+            long decodeMs = (SystemClock.elapsedRealtimeNanos() - decodeStarted) / 1_000_000L;
+            if (isDebugBuild()) {
+                Log.d(PERF_TAG, "avatarDecode=" + decodeMs + "ms success="
+                        + (cropped != null) + " chat=" + chatId);
+            }
+            if (cropped != null) post(() -> {
+                int currentPosition = adapter.indexOfChat(chatId);
+                if (currentPosition >= 0) adapter.notifyItemChanged(currentPosition);
+            });
+        });
+        logAvatarBind(started, "queued", chat.getChatId());
     }
 
-    private Bitmap circleCrop(Bitmap source) {
-        int size = Math.max(1, Math.round(132f * figmaConfig.getScale(getWidth())));
+    private void logAvatarBind(long started, String source, String chatId) {
+        long elapsedMicros = (SystemClock.elapsedRealtimeNanos() - started) / 1_000L;
+        if (isDebugBuild() && elapsedMicros >= 500L) {
+            Log.d(PERF_TAG, "avatarBind=" + elapsedMicros + "us source=" + source
+                    + " chat=" + chatId);
+        }
+    }
+
+    private void finishBindProfile(long started, int position, String chatId) {
+        Trace.endSection();
+        long elapsedMicros = (SystemClock.elapsedRealtimeNanos() - started) / 1_000L;
+        if (isDebugBuild() && elapsedMicros >= 1_000L) {
+            Log.d(PERF_TAG, "rowBind=" + elapsedMicros + "us position=" + position
+                    + " chat=" + chatId);
+        }
+    }
+
+    private int avatarPixelSize() {
+        return Math.max(1, Math.round(132f * figmaConfig.getScale(getWidth())));
+    }
+
+    private Bitmap circleCrop(Bitmap source, int size) {
         Bitmap output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(output);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -734,15 +867,14 @@ public final class ChatsView extends View {
     private String lastMessageTime(Chat chat) {
         long timestamp = chat.getLastMessageTime();
         if (timestamp <= 0) return "";
-        Calendar messageDate = Calendar.getInstance();
-        messageDate.setTimeInMillis(timestamp);
-        Calendar today = Calendar.getInstance();
-        boolean sameDate = messageDate.get(Calendar.ERA) == today.get(Calendar.ERA)
-                && messageDate.get(Calendar.YEAR) == today.get(Calendar.YEAR)
-                && messageDate.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR);
-        String pattern = sameDate ? "hh:mm a" : "dd/MM/yyyy";
-        return new SimpleDateFormat(pattern, Locale.getDefault())
-                .format(new Date(timestamp)).toLowerCase(Locale.getDefault());
+        messageCalendar.setTimeInMillis(timestamp);
+        todayCalendar.setTimeInMillis(System.currentTimeMillis());
+        boolean sameDate = messageCalendar.get(Calendar.ERA) == todayCalendar.get(Calendar.ERA)
+                && messageCalendar.get(Calendar.YEAR) == todayCalendar.get(Calendar.YEAR)
+                && messageCalendar.get(Calendar.DAY_OF_YEAR) == todayCalendar.get(Calendar.DAY_OF_YEAR);
+        reusableDate.setTime(timestamp);
+        return (sameDate ? timeFormatter : dateFormatter).format(reusableDate)
+                .toLowerCase(Locale.getDefault());
     }
 
     private String unreadCount(Chat chat) {
@@ -787,6 +919,9 @@ public final class ChatsView extends View {
 
     private float dp(float value) { return value * getResources().getDisplayMetrics().density; }
     private float sp(float value) { return value * getResources().getDisplayMetrics().scaledDensity; }
+    private boolean isDebugBuild() {
+        return (getContext().getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+    }
     private static Bitmap colorBitmap(int color) {
         Bitmap bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
         bitmap.eraseColor(color);

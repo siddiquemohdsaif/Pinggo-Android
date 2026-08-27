@@ -144,14 +144,16 @@ public final class HomeView extends ViewGroup {
         int height = MeasureSpec.getSize(heightMeasureSpec);
         setMeasuredDimension(resolveSize(width, widthMeasureSpec), resolveSize(height, heightMeasureSpec));
         int navHeight = bottomNavigationView.contentHeightForWidth(getMeasuredWidth()) + bottomInset;
-        int childTop = showingChats ? chatsContentTop(getMeasuredWidth())
-                : Math.round(topInset + dp(68));
-        int contentHeight = Math.max(0, getMeasuredHeight() - navHeight - childTop);
+        int chatsTop = chatsContentTop(getMeasuredWidth());
+        int secondaryTop = Math.round(topInset + dp(68));
         int exactWidth = MeasureSpec.makeMeasureSpec(getMeasuredWidth(), MeasureSpec.EXACTLY);
-        int exactContentHeight = MeasureSpec.makeMeasureSpec(contentHeight, MeasureSpec.EXACTLY);
-        chatsView.measure(exactWidth, exactContentHeight);
-        callsView.measure(exactWidth, exactContentHeight);
-        meetsView.measure(exactWidth, exactContentHeight);
+        chatsView.measure(exactWidth, MeasureSpec.makeMeasureSpec(
+                Math.max(0, getMeasuredHeight() - navHeight - chatsTop), MeasureSpec.EXACTLY));
+        int secondaryHeight = Math.max(0, getMeasuredHeight() - navHeight - secondaryTop);
+        int exactSecondaryHeight = MeasureSpec.makeMeasureSpec(
+                secondaryHeight, MeasureSpec.EXACTLY);
+        callsView.measure(exactWidth, exactSecondaryHeight);
+        meetsView.measure(exactWidth, exactSecondaryHeight);
         bottomNavigationView.measure(exactWidth, MeasureSpec.makeMeasureSpec(navHeight, MeasureSpec.EXACTLY));
     }
 
@@ -159,11 +161,12 @@ public final class HomeView extends ViewGroup {
         int width = right - left;
         int height = bottom - top;
         int navHeight = bottomNavigationView.contentHeightForWidth(width) + bottomInset;
-        int childTop = showingChats ? chatsContentTop(width) : Math.round(topInset + dp(68));
+        int chatsTop = chatsContentTop(width);
+        int secondaryTop = Math.round(topInset + dp(68));
         int navTop = height - navHeight;
-        chatsView.layout(0, childTop, width, navTop);
-        callsView.layout(0, childTop, width, navTop);
-        meetsView.layout(0, childTop, width, navTop);
+        chatsView.layout(0, chatsTop, width, navTop);
+        callsView.layout(0, secondaryTop, width, navTop);
+        meetsView.layout(0, secondaryTop, width, navTop);
         bottomNavigationView.layout(0, navTop, width, height);
     }
 
@@ -269,7 +272,7 @@ public final class HomeView extends ViewGroup {
         action.setLabel(getString(R.string.new_chat));
         action.setVisible(false);
         updateChatState();
-        requestLayout();
+        invalidate();
     }
 
     private void buildSelectionHeader(float width, float top, float scale) {
@@ -334,7 +337,7 @@ public final class HomeView extends ViewGroup {
         action.setLabel(getString(R.string.make_call));
         action.setVisible(true);
         updateCallState();
-        requestLayout();
+        invalidate();
     }
 
     private void showMeet() {
@@ -354,7 +357,6 @@ public final class HomeView extends ViewGroup {
         callsView.setVisibility(GONE);
         meetsView.setVisibility(VISIBLE);
         bottomNavigationView.setSelectedTab(BottomNavigationView.Tab.MEET);
-        requestLayout();
         invalidate();
     }
 

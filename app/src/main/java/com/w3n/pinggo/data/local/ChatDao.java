@@ -5,6 +5,7 @@ import androidx.room.Dao;
 import androidx.room.Insert;
 import androidx.room.OnConflictStrategy;
 import androidx.room.Query;
+import androidx.room.Transaction;
 
 import java.util.List;
 
@@ -50,6 +51,17 @@ public interface ChatDao {
             + "WHERE chatId = :chatId AND profilePhotoUrl = :profilePhotoUrl")
     int updateLocalProfilePhotoPath(String chatId, String profilePhotoUrl,
                                     String localPath, long updatedAt);
+
+    @Transaction
+    default void updateLocalProfilePhotoPaths(List<ChatEntity> chats, long updatedAt) {
+        if (chats == null) return;
+        for (ChatEntity chat : chats) {
+            if (chat != null && chat.localProfilePhotoPath != null) {
+                updateLocalProfilePhotoPath(chat.chatId, chat.profilePhotoUrl,
+                        chat.localProfilePhotoPath, updatedAt);
+            }
+        }
+    }
 
     @Query("SELECT * FROM chats ORDER BY pinned DESC, lastMessageTime DESC, updatedAt DESC")
     LiveData<List<ChatEntity>> observeChats();
