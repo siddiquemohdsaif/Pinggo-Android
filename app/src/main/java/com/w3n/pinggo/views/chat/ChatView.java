@@ -2,11 +2,13 @@ package com.w3n.pinggo.views.chat;
 
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.BitmapShader;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.graphics.Shader;
 import android.text.InputType;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -22,7 +24,9 @@ import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.textfield.TextField;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
+import com.w3n.pinggo.R;
 import com.w3n.pinggo.data.local.MessageEntity;
+import androidx.core.content.ContextCompat;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -39,11 +43,23 @@ public final class ChatView extends View {
   private final Listener listener;
   private final MessageAdapter adapter = new MessageAdapter();
   private final Bitmap white = color(Color.WHITE),
+      transparent = color(Color.TRANSPARENT),
       divider = color(0xFFE5EAF0),
       accent = color(ACCENT),
       attachmentOption = color(0xFFEAF7FA),
       incoming = color(0xFFE9EEF3),
-      outgoing = color(ACCENT);
+      outgoing = color(ACCENT),
+      conversationBackground = resourceBitmap(R.drawable.conversation_background),
+      headerBackground = resourceBitmap(R.drawable.conversation_header_background),
+      composerBackground = resourceBitmap(R.drawable.conversation_composer_background),
+      microphoneIcon = resourceBitmap(R.drawable.conversation_microphone),
+      emojiIcon = resourceBitmap(R.drawable.conversation_emoji),
+      attachmentIcon = resourceBitmap(R.drawable.conversation_attachment),
+      cameraIcon = resourceBitmap(R.drawable.conversation_camera),
+      backIcon = drawableBitmap(R.drawable.ic_arrow_back),
+      voiceCallIcon = resourceBitmap(R.drawable.bottom_nav_calls_inactive),
+      videoCallIcon = resourceBitmap(R.drawable.bottom_nav_meet_inactive),
+      moreIcon = resourceBitmap(R.drawable.home_overflow_dots);
   private final String chatName, currentUser;
   private final Bitmap profile;
   private ComponentList<MessageEntity> list;
@@ -55,6 +71,7 @@ public final class ChatView extends View {
   private boolean imeVisible, attachmentPanelVisible;
   private String draft = "", replyPreview = "";
   private String attachmentPreviewType = "", attachmentPreviewName = "";
+  private String statusValue = "Loading messages...";
   private float headerBottom, baseListBottom;
 
   public ChatView(Context c, String name, String currentUser, String photoPath, Listener l) {
@@ -66,7 +83,12 @@ public final class ChatView extends View {
         photoPath == null || photoPath.trim().isEmpty()
             ? null
             : BitmapFactory.decodeFile(photoPath);
-    profile = b == null ? avatar(name) : b;
+    if (b == null) {
+      profile = avatar(name);
+    } else {
+      profile = circleCrop(b);
+      b.recycle();
+    }
     setBackgroundColor(0xFFF7F9FB);
     setClickable(true);
     setFocusableInTouchMode(true);
@@ -99,8 +121,9 @@ public final class ChatView extends View {
   }
 
   public void showStatus(String value) {
+    statusValue = value == null ? "" : value;
     adapter.submit(new ArrayList<>());
-    if (status != null) status.setText(value).setVisible(true);
+    if (status != null) status.setText(statusValue).setVisible(!statusValue.isEmpty());
     if (list != null) list.setVisible(false);
     invalidate();
   }
@@ -108,7 +131,8 @@ public final class ChatView extends View {
   public void submitMessages(List<MessageEntity> values) {
     adapter.submit(values);
     boolean empty = adapter.getItemCount() == 0;
-    if (status != null) status.setText("No messages found.").setVisible(empty);
+    statusValue = "";
+    if (status != null) status.setText("").setVisible(false);
     if (list != null) {
       list.setVisible(!empty).setEnabled(!empty);
       if (!empty) list.scrollToPosition(adapter.getItemCount() - 1);
@@ -188,80 +212,94 @@ public final class ChatView extends View {
     overlay.clear();
     float attachmentPanelHeight = attachmentPanelVisible ? dp(112) : 0;
     float w = getWidth(),
+        scale = w / 1080f,
         top = topInset + floatingCallInset,
         screenBottom = getHeight() - bottomInset,
-        composerBottom = screenBottom - attachmentPanelHeight,
-        composerTop = composerBottom - dp(68),
-        nextHeaderBottom = top + dp(70);
+        attachmentPanelTop = screenBottom - attachmentPanelHeight,
+        composerBottom = attachmentPanelTop - 50f * scale,
+        composerTop = composerBottom - 114f * scale,
+        microphoneBottom = attachmentPanelTop - 50f * scale,
+        microphoneTop = microphoneBottom - 114f * scale,
+        nextHeaderBottom = top + 170f * scale;
     headerBottom = nextHeaderBottom;
     bg.add(
-        new Image.Builder(getContext(), "bg", white, new RectF(0, 0, w, getHeight()))
+        new Image.Builder(
+                getContext(), "conversation_background", conversationBackground,
+                new RectF(0, headerBottom, w, getHeight()))
             .setScaleType(Image.ScaleType.FIT_XY));
-    button(
+    bg.add(
+        new Image.Builder(getContext(), "status_bar_background", white, new RectF(0, 0, w, top))
+            .setScaleType(Image.ScaleType.FIT_XY));
+    bg.add(
+        new Image.Builder(
+                getContext(), "header_background", headerBackground,
+                new RectF(0, top, w, headerBottom))
+            .setScaleType(Image.ScaleType.FIT_XY));
+    iconButton(
         content,
         "back",
-        white,
-        "‹",
-        new RectF(dp(6), top + dp(10), dp(52), top + dp(58)),
-        PRIMARY,
+        backIcon,
+        new RectF(51f * scale, top + 60f * scale,
+            102f * scale, top + 111f * scale),
+        new RectF(25f * scale, top + 34f * scale,
+            128f * scale, top + 137f * scale),
         id -> listener.onBack());
     content.add(
         new Image.Builder(
                 getContext(),
                 "profile",
                 profile,
-                new RectF(dp(58), top + dp(10), dp(106), top + dp(58)))
+                new RectF(152f * scale, top + 34f * scale,
+                    254f * scale, top + 136f * scale))
             .setScaleType(Image.ScaleType.CENTER_CROP));
     text(
         content,
         "name",
         chatName,
-        new RectF(dp(116), top + dp(7), w - dp(158), top + dp(38)),
-        sp(17),
+        new RectF(285f * scale, top + 42f * scale,
+            742f * scale, top + 91f * scale),
+        38f * scale,
         PRIMARY,
-        FontVariation.SEMI_BOLD,
+        FontVariation.MEDIUM,
         Text.Alignment.START);
     presence =
         text(
             content,
             "presence",
             "connecting...",
-            new RectF(dp(116), top + dp(34), w - dp(158), top + dp(61)),
-            sp(13),
+            new RectF(285f * scale, top + 95f * scale,
+                742f * scale, top + 139f * scale),
+            31f * scale,
             SECONDARY,
             FontVariation.REGULAR,
             Text.Alignment.START);
-    button(
+    iconButton(
         content,
         "video_call",
-        white,
-        "▣",
-        new RectF(w - dp(150), top + dp(10), w - dp(106), top + dp(58)),
-        ACCENT,
+        videoCallIcon,
+        new RectF(869f * scale, top + 55f * scale,
+            926f * scale, top + 112f * scale),
+        new RectF(844f * scale, top + 30f * scale,
+            951f * scale, top + 137f * scale),
         id -> listener.onVideoCall());
-    button(
+    iconButton(
         content,
         "voice_call",
-        white,
-        "☎",
-        new RectF(w - dp(102), top + dp(10), w - dp(58), top + dp(58)),
-        ACCENT,
+        voiceCallIcon,
+        new RectF(750f * scale, top + 55f * scale,
+            807f * scale, top + 112f * scale),
+        new RectF(725f * scale, top + 30f * scale,
+            832f * scale, top + 137f * scale),
         id -> listener.onVoiceCall());
-    button(
+    iconButton(
         content,
         "more",
-        white,
-        "⋮",
-        new RectF(w - dp(54), top + dp(10), w - dp(6), top + dp(58)),
-        PRIMARY,
+        moreIcon,
+        new RectF(1000f * scale, top + 55f * scale,
+            1032f * scale, top + 112f * scale),
+        new RectF(972f * scale, top + 27f * scale,
+            1060f * scale, top + 140f * scale),
         id -> listener.onMore());
-    content.add(
-        new Image.Builder(
-                getContext(),
-                "head_line",
-                divider,
-                new RectF(0, headerBottom - dp(1), w, headerBottom))
-            .setScaleType(Image.ScaleType.FIT_XY));
     float replyHeight = replyPreview.isEmpty() ? 0 : dp(42);
     float previewHeight = attachmentPreviewType.isEmpty() ? 0 : dp(72);
     float listBottom = composerTop - replyHeight - previewHeight;
@@ -293,7 +331,7 @@ public final class ChatView extends View {
         text(
             content,
             "status",
-            "Loading messages...",
+            statusValue,
             new RectF(dp(20), headerBottom + dp(20), w - dp(20), headerBottom + dp(120)),
             sp(16),
             SECONDARY,
@@ -347,12 +385,19 @@ public final class ChatView extends View {
           Color.WHITE,
           id -> listener.onSend());
     }
+    overlay.add(
+        new Image.Builder(
+                getContext(), "composer_background", composerBackground,
+                new RectF(33f * scale, composerTop,
+                    901f * scale, composerBottom))
+            .setScaleType(Image.ScaleType.FIT_XY));
     input =
         overlay.add(
             new TextField.Builder(
                     getContext(),
                     "composer",
-                    new RectF(dp(64), composerTop + dp(8), w - dp(72), composerBottom - dp(8)))
+                    new RectF(155f * scale, composerTop + 8f * scale,
+                        696f * scale, composerBottom - 8f * scale))
                 .setText(draft)
                 .setHint("Message")
                 .setMaxLength(4000)
@@ -364,54 +409,69 @@ public final class ChatView extends View {
                 .setTextColor(PRIMARY)
                 .setHintColor(SECONDARY)
                 .setCursorColor(ACCENT)
-                .setBackgroundColor(0xFFF7F9FB, 0xFFF7F9FB)
-                .setStrokeColor(0xFFE5EAF0, ACCENT)
-                .setStrokeWidthPx(dp(1))
-                .setCornerRadiusPx(dp(18))
-                .setPaddingPx(dp(14), dp(10))
+                .setBackgroundColor(Color.TRANSPARENT, Color.TRANSPARENT)
+                .setStrokeColor(Color.TRANSPARENT, Color.TRANSPARENT)
+                .setStrokeWidthPx(0)
+                .setCornerRadiusPx(0)
+                .setPaddingPx(0, dp(8))
                 .setOnTextChangedListener(
                     (id, value) -> {
                       draft = value;
                       listener.onTypingChanged(value);
                     }));
-    button(
+    iconButton(
+        overlay,
+        "emoji",
+        emojiIcon,
+        new RectF(71f * scale, composerTop + 30f * scale,
+            126f * scale, composerTop + 85f * scale),
+        new RectF(49f * scale, composerTop + 8f * scale,
+            148f * scale, composerBottom - 8f * scale),
+        id -> {
+          if (input != null) input.requestFocus();
+        });
+    iconButton(
         overlay,
         "attachment",
-        attachmentPanelVisible ? accent : white,
-        attachmentPanelVisible ? "×" : "+",
-        new RectF(dp(8), composerTop + dp(8), dp(60), composerBottom - dp(8)),
-        attachmentPanelVisible ? Color.WHITE : ACCENT,
+        attachmentIcon,
+        new RectF(708f * scale, composerTop + 30f * scale,
+            763f * scale, composerTop + 85f * scale),
+        new RectF(686f * scale, composerTop + 8f * scale,
+            785f * scale, composerBottom - 8f * scale),
         id -> toggleAttachmentPanel());
+    iconButton(
+        overlay,
+        "camera",
+        cameraIcon,
+        new RectF(808f * scale, composerTop + 30f * scale,
+            863f * scale, composerTop + 85f * scale),
+        new RectF(786f * scale, composerTop + 8f * scale,
+            885f * scale, composerBottom - 8f * scale),
+        id -> selectAttachment("Image"));
     send =
-        button(
+        iconButton(
             overlay,
             "send",
-            accent,
-            "➤",
-            new RectF(w - dp(64), composerTop + dp(8), w - dp(8), composerBottom - dp(8)),
-            Color.WHITE,
+            microphoneIcon,
+            new RectF(931f * scale, microphoneTop,
+                1045f * scale, microphoneBottom),
+            new RectF(909f * scale, microphoneTop - 22f * scale,
+                1067f * scale, microphoneBottom + 22f * scale),
             id -> listener.onSend());
-    overlay.add(
-        new Image.Builder(
-                getContext(),
-                "composer_line",
-                divider,
-                new RectF(0, composerTop - dp(1), w, composerTop))
-            .setScaleType(Image.ScaleType.FIT_XY));
     if (attachmentPanelVisible) {
       overlay.add(
           new Image.Builder(
                   getContext(),
                   "attachment_panel_bg",
                   white,
-                  new RectF(0, composerBottom, w, screenBottom))
+                  new RectF(0, attachmentPanelTop, w, screenBottom))
               .setScaleType(Image.ScaleType.FIT_XY));
       overlay.add(
           new Image.Builder(
                   getContext(),
                   "attachment_panel_line",
                   divider,
-                  new RectF(0, composerBottom, w, composerBottom + dp(1)))
+                  new RectF(0, attachmentPanelTop, w, attachmentPanelTop + dp(1)))
               .setScaleType(Image.ScaleType.FIT_XY));
       String[] attachmentTypes = {"Image", "Video", "File", "Location"};
       float gap = dp(8), side = dp(10), optionWidth = (w - side * 2 - gap * 3) / 4f;
@@ -423,14 +483,14 @@ public final class ChatView extends View {
             "attachment_" + type.toLowerCase(Locale.US),
             attachmentOption,
             type,
-            new RectF(left, composerBottom + dp(16), left + optionWidth, screenBottom - dp(16)),
+            new RectF(left, attachmentPanelTop + dp(16), left + optionWidth, screenBottom - dp(16)),
             ACCENT,
             id -> selectAttachment(type));
       }
     }
     boolean empty = adapter.getItemCount() == 0;
     list.setVisible(!empty);
-    status.setVisible(empty);
+    status.setVisible(empty && !statusValue.isEmpty());
     if (!empty) list.scrollToPosition(adapter.getItemCount() - 1);
     applyKeyboardInsets();
     invalidate();
@@ -612,6 +672,21 @@ public final class ChatView extends View {
             .setOnClickListener(click));
   }
 
+  private Button iconButton(
+      ZLayer layer, String id, Bitmap icon, RectF iconBounds, RectF touchBounds,
+      Button.OnClickListener click) {
+    layer.add(
+        new Image.Builder(getContext(), id + "_icon", icon, iconBounds)
+            .setScaleType(Image.ScaleType.FIT_CENTER));
+    return layer.add(
+        new Button.Builder(getContext(), id + "_touch", transparent, "", touchBounds)
+            .setImageScaleType(Image.ScaleType.FIT_XY)
+            .setCornerRadiusPx(0)
+            .setRippleEnabled(true)
+            .setRippleColor(0x16019CC4)
+            .setOnClickListener(click));
+  }
+
   @Override
   protected void onDraw(Canvas c) {
     super.onDraw(c);
@@ -641,7 +716,10 @@ public final class ChatView extends View {
 
   public void release() {
     layers.release();
-    recycle(white, divider, accent, attachmentOption, incoming, outgoing);
+    recycle(
+        white, transparent, divider, accent, attachmentOption, incoming, outgoing, profile,
+        conversationBackground, headerBackground, composerBackground, microphoneIcon, emojiIcon,
+        attachmentIcon, cameraIcon, backIcon, voiceCallIcon, videoCallIcon, moreIcon);
   }
 
   private Bitmap avatar(String value) {
@@ -659,6 +737,24 @@ public final class ChatView extends View {
     Paint.FontMetrics m = p.getFontMetrics();
     c.drawText(x, s / 2f, s / 2f - (m.ascent + m.descent) / 2, p);
     return b;
+  }
+
+  private Bitmap circleCrop(Bitmap source) {
+    int size = Math.min(source.getWidth(), source.getHeight());
+    Bitmap result = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+    Canvas canvas = new Canvas(result);
+    Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    BitmapShader shader = new BitmapShader(source, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+    float scale = Math.max(size / (float) source.getWidth(), size / (float) source.getHeight());
+    android.graphics.Matrix matrix = new android.graphics.Matrix();
+    matrix.setScale(scale, scale);
+    matrix.postTranslate(
+        (size - source.getWidth() * scale) / 2f,
+        (size - source.getHeight() * scale) / 2f);
+    shader.setLocalMatrix(matrix);
+    paint.setShader(shader);
+    canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint);
+    return result;
   }
 
   private static String normalize(String v) {
@@ -680,6 +776,22 @@ public final class ChatView extends View {
     Bitmap b = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
     b.eraseColor(c);
     return b;
+  }
+
+  private Bitmap resourceBitmap(int resource) {
+    return BitmapFactory.decodeResource(getResources(), resource);
+  }
+
+  private Bitmap drawableBitmap(int resource) {
+    android.graphics.drawable.Drawable drawable = ContextCompat.getDrawable(getContext(), resource);
+    if (drawable == null) return transparent;
+    int width = Math.max(1, drawable.getIntrinsicWidth());
+    int height = Math.max(1, drawable.getIntrinsicHeight());
+    Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+    Canvas canvas = new Canvas(bitmap);
+    drawable.setBounds(0, 0, width, height);
+    drawable.draw(canvas);
+    return bitmap;
   }
 
   private static void recycle(Bitmap... bs) {
