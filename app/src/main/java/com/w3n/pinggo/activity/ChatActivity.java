@@ -77,8 +77,16 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
   private LocationListener locationListener;
   private PresenceEntity latestPresence;
   private List<MessageEntity> latestMessages = Collections.emptyList();
+  private final Runnable refreshTyping = new Runnable() {
+    @Override public void run() {
+      if (!typingStarted || repository == null || receiverId.isEmpty()) return;
+      repository.sendTyping(chatId, receiverId, true);
+      typingHandler.postDelayed(this, 25_000L);
+    }
+  };
   private final Runnable stopTyping =
       () -> {
+        typingHandler.removeCallbacks(refreshTyping);
         if (typingStarted && repository != null && !receiverId.isEmpty()) {
           repository.sendTyping(chatId, receiverId, false);
           typingStarted = false;
@@ -490,6 +498,8 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
       if (!typingStarted) {
         repository.sendTyping(chatId, receiverId, true);
         typingStarted = true;
+        typingHandler.removeCallbacks(refreshTyping);
+        typingHandler.postDelayed(refreshTyping, 25_000L);
       }
       typingHandler.postDelayed(stopTyping, 2000);
     } else stopTyping.run();

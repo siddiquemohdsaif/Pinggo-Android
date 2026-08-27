@@ -17,12 +17,25 @@ public interface ChatDao {
     void upsertAll(List<ChatEntity> chats);
 
     @Query("UPDATE chats SET lastMessage = :preview, lastMessageTime = :sentTime, "
+            + "lastMessageSenderId = :senderId, lastMessageDeliveredTime = :deliveredTime, "
+            + "lastMessageReadTime = :readTime, "
+            + "lastMessageType = :messageType, lastMessageAttachmentName = :attachmentName, "
             + "updatedAt = :updatedAt WHERE chatId = :chatId "
             + "AND lastMessageTime <= :sentTime")
-    int updateLastMessage(String chatId, String preview, long sentTime, long updatedAt);
+    int updateLastMessage(String chatId, String preview, long sentTime, String senderId,
+                          Long deliveredTime, Long readTime, String messageType,
+                          String attachmentName, long updatedAt);
+
+    @Query("UPDATE chats SET lastMessageDeliveredTime = :deliveredTime, "
+            + "lastMessageReadTime = :readTime WHERE chatId = :chatId "
+            + "AND lastMessageTime = :sentTime")
+    void updateLastMessageReceipt(String chatId, long sentTime, Long deliveredTime, Long readTime);
 
     @Query("SELECT * FROM chats WHERE chatId = :chatId LIMIT 1")
     ChatEntity findByChatId(String chatId);
+
+    @Query("DELETE FROM chats WHERE chatId = :chatId")
+    void deleteByChatId(String chatId);
 
     @Query("UPDATE chats SET unreadCount = unreadCount + 1 WHERE chatId = :chatId")
     void incrementUnreadCount(String chatId);

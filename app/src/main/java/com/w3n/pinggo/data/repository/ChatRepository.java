@@ -63,6 +63,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         void onTyping(String chatId, String userId, boolean typing);
 
         void onSocketError(String error);
+
+        default void onTotalUnread(int totalUnread) { }
     }
 
     public interface CallEventListener {
@@ -105,6 +107,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     private boolean chatListHasMore;
     private boolean chatListPageLoading;
     private int chatListGeneration;
+    private int latestTotalUnread = -1;
     private CallEventListener callEventListener;
     private IncomingCallListener incomingCallListener;
     private String currentUserId;
@@ -144,6 +147,14 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     public void setEventListener(EventListener eventListener) {
         this.eventListener = eventListener;
+        if (eventListener != null && latestTotalUnread >= 0) {
+            int totalUnread = latestTotalUnread;
+            mainHandler.post(() -> {
+                if (this.eventListener == eventListener) {
+                    eventListener.onTotalUnread(totalUnread);
+                }
+            });
+        }
     }
 
     public void setCallEventListener(CallEventListener listener) {
@@ -173,6 +184,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 LoginStateManager.getInstance().getUID(appContext));
         appFunctionManager.updateChatSettings(
                 phoneNumber, chatId, setting, value, callback);
+    }
+
+    public void deleteLocalChat(String chatId) {
+        if (chatId == null || chatId.trim().isEmpty()) return;
+        ioExecutor.execute(() -> chatDao.deleteByChatId(chatId));
     }
 
     public void setActiveChat(String chatId) {
@@ -991,6 +1007,12 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     return;
                 }
                 JsonObject response = (JsonObject) object;
+                if ((cursor == null || cursor.isEmpty())
+                        && response.has("total_unread")
+                        && !response.get("total_unread").isJsonNull()) {
+                    notifyTotalUnread(Math.max(0,
+                            (int) JsonParserUtil.getLong(response, "total_unread")));
+                }
                 JsonArray userProfiles = response.getAsJsonArray("userProfiles");
                 if (userProfiles == null) {
                     finishChatListPage(generation, null, false);
@@ -1049,6 +1071,15 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     private synchronized void releaseChatListPage(int generation) {
         if (generation == chatListGeneration) chatListPageLoading = false;
+    }
+
+    private void notifyTotalUnread(int totalUnread) {
+        latestTotalUnread = totalUnread;
+        EventListener listener = eventListener;
+        if (listener == null) return;
+        mainHandler.post(() -> {
+            if (eventListener == listener) listener.onTotalUnread(totalUnread);
+        });
     }
 
     private void prefetchChatProfilePhotos(List<ChatEntity> chats) {
@@ -1178,6 +1209,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     @Override
     public void onEvent(JsonObject event) {
         String type = JsonParserUtil.getString(event, "type");
+        if (event.has("total_unread") && !event.get("total_unread").isJsonNull()) {
+            notifyTotalUnread(Math.max(0,
+                    (int) JsonParserUtil.getLong(event, "total_unread")));
+        }
         if ("call_invite".equals(type) && incomingCallListener != null) {
             mainHandler.post(() -> incomingCallListener.onIncomingCall(event));
         }
@@ -1337,7 +1372,14 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             messageIds.add(id.getAsString());
         }
         long deliveredTime = JsonParserUtil.getLong(event, "deliveredTime");
-        ioExecutor.execute(() -> messageDao.markDelivered(messageIds, MessageStatus.DELIVERED, deliveredTime));
+        ioExecutor.execute(() -> {
+            messageDao.markDelivered(messageIds, MessageStatus.DELIVERED, deliveredTime);
+            for (String messageId : messageIds) {
+                MessageEntity message = messageDao.findByMessageId(messageId);
+                if (message != null) chatDao.updateLastMessageReceipt(message.chatId,
+                        message.sentTime, deliveredTime, message.readTime);
+            }
+        });
     }
 
     private void handleMessageSeen(JsonObject event) {
@@ -1350,7 +1392,14 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             messageIds.add(id.getAsString());
         }
         long readTime = JsonParserUtil.getLong(event, "readTime");
-        ioExecutor.execute(() -> messageDao.markSeen(messageIds, MessageStatus.SEEN, readTime));
+        ioExecutor.execute(() -> {
+            messageDao.markSeen(messageIds, MessageStatus.SEEN, readTime);
+            for (String messageId : messageIds) {
+                MessageEntity message = messageDao.findByMessageId(messageId);
+                if (message != null) chatDao.updateLastMessageReceipt(message.chatId,
+                        message.sentTime, message.deliveredTime, readTime);
+            }
+        });
     }
 
     private void handleMessageEdited(JsonObject event) {
@@ -1493,6 +1542,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         long lastSeen = JsonParserUtil.getLong(profile,"lastSeen");
         String lastMessage = "";
         long lastMessageTime = 0;
+        String lastMessageSenderId = "";
+        Long lastMessageDeliveredTime = null;
+        Long lastMessageReadTime = null;
+        String lastMessageType = "text";
+        String lastMessageAttachmentName = "";
         JsonElement lastMessageElement = profile.get("last_message");
         if (lastMessageElement == null || lastMessageElement.isJsonNull()) {
             // Compatibility with the previous /chats/list response.
@@ -1502,6 +1556,17 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             JsonObject lastMessageObject = lastMessageElement.getAsJsonObject();
             lastMessage = getMessagePreview(lastMessageObject);
             lastMessageTime = JsonParserUtil.getLong(lastMessageObject, "sentTime");
+            lastMessageSenderId = normalizeAccountId(
+                    JsonParserUtil.getString(lastMessageObject, "senderId"));
+            lastMessageDeliveredTime = getNullableLong(lastMessageObject, "deliveredTime");
+            lastMessageReadTime = getNullableLong(lastMessageObject, "readTime");
+            lastMessageType = JsonParserUtil.getString(lastMessageObject, "messageType");
+            if (lastMessageType.isEmpty()) lastMessageType = "text";
+            if (lastMessageObject.has("attachment")
+                    && lastMessageObject.get("attachment").isJsonObject()) {
+                lastMessageAttachmentName = JsonParserUtil.getString(
+                        lastMessageObject.getAsJsonObject("attachment"), "name");
+            }
         }
         int unreadCount = Math.max(
                 0,
@@ -1523,6 +1588,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 "",
                 lastMessage,
                 lastMessageTime,
+                lastMessageSenderId,
+                lastMessageDeliveredTime,
+                lastMessageReadTime,
+                lastMessageType,
+                lastMessageAttachmentName,
                 unreadCount,
                 pinned,
                 notificationMuted,
@@ -1563,8 +1633,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         if (message == null || message.chatId == null || message.chatId.trim().isEmpty()) return;
         long sentTime = message.sentTime > 0 ? message.sentTime : System.currentTimeMillis();
         String preview = getMessagePreview(message);
-        int updated = chatDao.updateLastMessage(
-                message.chatId, preview, sentTime, System.currentTimeMillis());
+        int updated = chatDao.updateLastMessage(message.chatId, preview, sentTime,
+                normalizeAccountId(message.senderId), message.deliveredTime, message.readTime,
+                message.messageType, message.attachmentName,
+                System.currentTimeMillis());
         if (updated > 0) return;
         // A newer message may already own the summary when socket events arrive out of order.
         if (chatDao.findByChatId(message.chatId) != null) return;
@@ -1583,6 +1655,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 "",
                 preview,
                 sentTime,
+                senderId,
+                message.deliveredTime,
+                message.readTime,
+                message.messageType,
+                message.attachmentName,
                 0,
                 false,
                 0,

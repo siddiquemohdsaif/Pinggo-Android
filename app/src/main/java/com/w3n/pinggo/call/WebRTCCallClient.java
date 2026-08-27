@@ -196,7 +196,7 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
         + " eventCallId=" + JsonParserUtil.getString(event, "callId"));
     if ("call_socket_disconnected".equals(type)) {
       listener.onSignalingConnectionChanged(false);
-      notifyState("Reconnecting…");
+      listener.onEnded("signaling_disconnected");
       return;
     }
     if ("call_socket_reconnected".equals(type)) {

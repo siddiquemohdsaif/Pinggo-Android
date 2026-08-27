@@ -215,8 +215,12 @@ public final class VideoCallController {
   }
 
   private void onPreAcceptEvent(JsonObject event) {
-    if (terminated || !callId.equals(JsonParserUtil.getString(event, "callId"))) return;
     String type = JsonParserUtil.getString(event, "type");
+    if ("call_socket_disconnected".equals(type)) {
+      handler.post(() -> terminate(TerminationReason.SIGNALING_FAILURE, false));
+      return;
+    }
+    if (terminated || !callId.equals(JsonParserUtil.getString(event, "callId"))) return;
     if ("call_end".equals(type) || "call_no_answer".equals(type)) handler.post(() ->
         terminate("call_no_answer".equals(type) ? TerminationReason.NO_ANSWER :
             TerminationReason.REMOTE_HANGUP, false));
@@ -236,6 +240,7 @@ public final class VideoCallController {
     return String.format(Locale.US, "%02d:%02d", seconds / 60, seconds % 60);
   }
   private static TerminationReason reasonToTermination(String value) {
+    if ("signaling_disconnected".equals(value)) return TerminationReason.SIGNALING_FAILURE;
     if ("reject".equals(value) || "busy".equals(value)) return TerminationReason.REJECTED;
     if ("no_answer".equals(value)) return TerminationReason.NO_ANSWER;
     return TerminationReason.REMOTE_HANGUP;

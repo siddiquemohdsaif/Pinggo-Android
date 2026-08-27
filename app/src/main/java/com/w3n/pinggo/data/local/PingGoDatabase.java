@@ -15,7 +15,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase;
                 PresenceEntity.class,
                 TransferEntity.class
         },
-        version = 9,
+        version = 12,
         exportSchema = false
 )
 public abstract class PingGoDatabase extends RoomDatabase {
@@ -57,6 +57,23 @@ public abstract class PingGoDatabase extends RoomDatabase {
             db.execSQL("ALTER TABLE `chats` ADD COLUMN `archived` INTEGER NOT NULL DEFAULT 0");
         }
     };
+    private static final Migration MIGRATION_9_10 = new Migration(9, 10) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE `chats` ADD COLUMN `lastMessageSenderId` TEXT");
+        }
+    };
+    private static final Migration MIGRATION_10_11 = new Migration(10, 11) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE `chats` ADD COLUMN `lastMessageDeliveredTime` INTEGER");
+            db.execSQL("ALTER TABLE `chats` ADD COLUMN `lastMessageReadTime` INTEGER");
+        }
+    };
+    private static final Migration MIGRATION_11_12 = new Migration(11, 12) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE `chats` ADD COLUMN `lastMessageType` TEXT");
+            db.execSQL("ALTER TABLE `chats` ADD COLUMN `lastMessageAttachmentName` TEXT");
+        }
+    };
 
     public static PingGoDatabase getInstance(Context context) {
         if (instance != null) {
@@ -70,7 +87,8 @@ public abstract class PingGoDatabase extends RoomDatabase {
                         "pinggo.db"
                 )
                         .addMigrations(MIGRATION_4_5, MIGRATION_5_6,
-                                MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                                MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+                                MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
                         .fallbackToDestructiveMigration()
                         .build();
             }

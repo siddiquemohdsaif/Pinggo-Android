@@ -210,9 +210,14 @@ public class VoiceCallActivity extends AppCompatActivity
   }
   @Override public void onCallEvent(JsonObject event) {
     if (incomingAccepted) return;
+    String type = com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil.getString(event, "type");
+    if ("call_socket_disconnected".equals(type)) {
+      Toast.makeText(this, "Call connection lost.", Toast.LENGTH_SHORT).show();
+      finish();
+      return;
+    }
     String callId = com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil.getString(event, "callId");
     if (!getIntent().getStringExtra(EXTRA_CALL_ID).equals(callId)) return;
-    String type = com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil.getString(event, "type");
     if ("call_end".equals(type) || "call_no_answer".equals(type)) {
       Toast.makeText(this, "Call ended.", Toast.LENGTH_SHORT).show();
       finish();

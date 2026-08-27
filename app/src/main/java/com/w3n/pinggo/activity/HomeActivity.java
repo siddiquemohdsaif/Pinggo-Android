@@ -9,6 +9,7 @@ import android.widget.FrameLayout;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
+import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
@@ -26,7 +27,7 @@ import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.modals.CallLog;
 import com.w3n.pinggo.modals.Chat;
 import com.w3n.pinggo.views.common.ExitAppController;
-import com.w3n.pinggo.views.home.ChatActionsDialogView;
+import com.w3n.pinggo.views.home.HomeMenuDialogView;
 import com.w3n.pinggo.views.home.HomeView;
 
 import java.util.ArrayList;
@@ -35,7 +36,7 @@ import java.util.List;
 /** Hosts the AAR-native home surface and owns lifecycle, data, and navigation. */
 public class HomeActivity extends AppCompatActivity implements HomeView.Listener {
     private HomeView homeView;
-    private ChatActionsDialogView chatActionsDialog;
+    private HomeMenuDialogView homeMenuDialog;
     private ChatRepository repository;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
@@ -44,40 +45,29 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         homeView = new HomeView(this, this);
         setContentView(homeView);
         ExitAppController.install(this, null);
-        chatActionsDialog = new ChatActionsDialogView(this, (chat, action) -> {
-            String setting;
-            long value;
-            String successMessage;
-            long now = System.currentTimeMillis();
-            switch (action) {
-                case MUTE_ONE_DAY:
-                    setting = "mute"; value = now + 24L * 60 * 60 * 1000;
-                    successMessage = "Notifications muted for 1 day"; break;
-                case MUTE_ONE_WEEK:
-                    setting = "mute"; value = now + 7L * 24 * 60 * 60 * 1000;
-                    successMessage = "Notifications muted for 1 week"; break;
-                case MUTE_ONE_MONTH:
-                    setting = "mute"; value = now + 30L * 24 * 60 * 60 * 1000;
-                    successMessage = "Notifications muted for 1 month"; break;
-                case MUTE_UNTIL_UNMUTED:
-                    setting = "mute"; value = -1;
-                    successMessage = "Notifications muted until you unmute"; break;
-                case UNMUTE:
-                    setting = "mute"; value = 0;
-                    successMessage = "Notifications unmuted"; break;
-                case PIN:
-                    setting = "pin"; value = chat.isPinned() ? 0 : 1;
-                    successMessage = chat.isPinned() ? "Chat unpinned" : "Chat pinned"; break;
-                default:
-                    setting = "archive"; value = chat.isArchived() ? 0 : 1;
-                    successMessage = chat.isArchived() ? "Chat unarchived" : "Chat archived";
-                    break;
-            }
-            updateChatSetting(chat, setting, value, successMessage);
-        });
         ViewGroup content = findViewById(android.R.id.content);
-        content.addView(chatActionsDialog, new FrameLayout.LayoutParams(
+        homeMenuDialog = new HomeMenuDialogView(this, new HomeMenuDialogView.Listener() {
+            @Override public void onNewChat() { HomeActivity.this.onNewChat(); }
+            @Override public void onNewGroup() {
+                Toast.makeText(HomeActivity.this, "New Group", Toast.LENGTH_SHORT).show();
+            }
+            @Override public void onLinkedDevices() {
+                Toast.makeText(HomeActivity.this, "Linked Devices", Toast.LENGTH_SHORT).show();
+            }
+            @Override public void onSettings() { openSettings(); }
+        });
+        content.addView(homeMenuDialog, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override public void handleOnBackPressed() {
+                if (homeMenuDialog != null && homeMenuDialog.dismissIfShowing()) return;
+                if (homeView != null && homeView.clearChatSelection()) return;
+
+                setEnabled(false);
+                getOnBackPressedDispatcher().onBackPressed();
+                setEnabled(true);
+            }
+        });
         ViewCompat.setOnApplyWindowInsetsListener(homeView, (view, windowInsets) -> {
             Insets bars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars());
             homeView.setInsets(bars.top, bars.bottom);
@@ -130,29 +120,18 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         startActivity(intent);
     }
 
-    private void updateChatSetting(Chat chat, String setting, long value,
-                                   String successMessage) {
-        if (repository == null || chat == null) return;
-        repository.updateChatSetting(chat.getChatId(), setting, value,
-                new AppFunctionManager.Callback() {
-                    @Override public void onSuccess(Object object) {
-                        Toast.makeText(HomeActivity.this, successMessage,
-                                Toast.LENGTH_SHORT).show();
-                        String uid = LoginStateManager.getInstance().getUID(HomeActivity.this);
-                        if (uid != null) repository.refreshChatList(normalizeAccountId(uid));
-                    }
-
-                    @Override public void onError(String error) {
-                        Toast.makeText(HomeActivity.this,
-                                error == null || error.trim().isEmpty()
-                                        ? "Unable to update chat" : error,
-                                Toast.LENGTH_SHORT).show();
-                    }
-                });
-    }
-
-    @Override public void onChatLongPress(Chat chat) {
-        if (chatActionsDialog != null) chatActionsDialog.show(chat);
+    @Override protected void onResume() {
+        super.onResume();
+        if (repository == null) return;
+        repository.setEventListener(new ChatRepository.EventListener() {
+            @Override public void onTyping(String chatId, String userId, boolean typing) {
+                if (homeView != null) homeView.setChatTyping(chatId, typing);
+            }
+            @Override public void onSocketError(String error) { }
+            @Override public void onTotalUnread(int totalUnread) {
+                if (homeView != null) homeView.setTotalUnread(totalUnread);
+            }
+        });
     }
 
     @Override public void onOpenCall(CallLog callLog) {
@@ -170,11 +149,72 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         startActivity(new Intent(this, NewChatActivity.class));
     }
 
+    @Override public void onNewGroup() {
+        Toast.makeText(this, "Create a group", Toast.LENGTH_SHORT).show();
+    }
+
     @Override public void onMakeCall() {
         Toast.makeText(this, R.string.make_call, Toast.LENGTH_SHORT).show();
     }
 
     @Override public void onOpenSettings() {
+        if (homeMenuDialog != null) homeMenuDialog.show();
+    }
+
+    @Override public void onBulkGroup(List<Chat> chats) {
+        if (homeView != null) homeView.clearChatSelection();
+        Toast.makeText(this, "Create group with " + chats.size() + " selected chats",
+                Toast.LENGTH_SHORT).show();
+    }
+
+    @Override public void onBulkPin(List<Chat> chats) {
+        boolean allPinned = !chats.isEmpty();
+        for (Chat chat : chats) allPinned &= chat.isPinned();
+        applyBulkSetting(chats, "pin", allPinned ? 0 : 1,
+                allPinned ? "Chats unpinned" : "Chats pinned", false);
+    }
+
+    @Override public void onBulkMute(List<Chat> chats) {
+        boolean allMuted = !chats.isEmpty();
+        for (Chat chat : chats) allMuted &= chat.isMuted();
+        applyBulkSetting(chats, "mute", allMuted ? 0 : -1,
+                allMuted ? "Chats unmuted" : "Chats muted", false);
+    }
+
+    @Override public void onBulkDelete(List<Chat> chats) {
+        applyBulkSetting(chats, "delete", 1, "Chats deleted", true);
+    }
+
+    private void applyBulkSetting(List<Chat> chats, String setting, long value,
+                                  String successMessage, boolean deleteLocal) {
+        if (repository == null || chats == null || chats.isEmpty()) return;
+        if (homeView != null) homeView.clearChatSelection();
+        final int[] remaining = {chats.size()};
+        final boolean[] failed = {false};
+        for (Chat chat : chats) {
+            repository.updateChatSetting(chat.getChatId(), setting, value,
+                    new AppFunctionManager.Callback() {
+                        @Override public void onSuccess(Object object) {
+                            if (deleteLocal) repository.deleteLocalChat(chat.getChatId());
+                            finishBulkOperation();
+                        }
+                        @Override public void onError(String error) {
+                            failed[0] = true;
+                            finishBulkOperation();
+                        }
+                        private void finishBulkOperation() {
+                            if (--remaining[0] != 0) return;
+                            Toast.makeText(HomeActivity.this,
+                                    failed[0] ? "Some chats could not be updated" : successMessage,
+                                    Toast.LENGTH_SHORT).show();
+                            String uid = LoginStateManager.getInstance().getUID(HomeActivity.this);
+                            if (uid != null) repository.refreshChatList(normalizeAccountId(uid));
+                        }
+                    });
+        }
+    }
+
+    private void openSettings() {
         startActivity(new Intent(this, SettingsActivity.class));
     }
 
@@ -189,7 +229,12 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                 localPath = ChatProfilePhotoStore.getLocalPath(this, entity.otherUserId);
             }
             chats.add(new Chat(entity.chatId, contact, entity.profilePhotoUrl, localPath,
-                    entity.lastMessage, entity.lastMessageTime, entity.unreadCount,
+                    entity.lastMessage, entity.lastMessageTime,
+                    normalizeAccountId(entity.lastMessageSenderId).equals(
+                            normalizeAccountId(LoginStateManager.getInstance().getUID(this))),
+                    entity.lastMessageDeliveredTime, entity.lastMessageReadTime,
+                    entity.lastMessageType, entity.lastMessageAttachmentName,
+                    entity.unreadCount,
                     entity.pinned, entity.notificationMuted, entity.archived,
                     entity.isOnline, entity.lastSeen));
         }
@@ -210,9 +255,9 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
             homeView.release();
             homeView = null;
         }
-        if (chatActionsDialog != null) {
-            chatActionsDialog.release();
-            chatActionsDialog = null;
+        if (homeMenuDialog != null) {
+            homeMenuDialog.release();
+            homeMenuDialog = null;
         }
         super.onDestroy();
     }

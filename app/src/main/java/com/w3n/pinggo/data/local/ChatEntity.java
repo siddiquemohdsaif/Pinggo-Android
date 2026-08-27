@@ -15,6 +15,11 @@ public class ChatEntity {
     public String localProfilePhotoPath;
     public String lastMessage;
     public long lastMessageTime;
+    public String lastMessageSenderId;
+    public Long lastMessageDeliveredTime;
+    public Long lastMessageReadTime;
+    public String lastMessageType;
+    public String lastMessageAttachmentName;
     public int unreadCount;
     public boolean pinned;
     public long notificationMuted;
@@ -31,6 +36,11 @@ public class ChatEntity {
             String localProfilePhotoPath,
             String lastMessage,
             long lastMessageTime,
+            String lastMessageSenderId,
+            Long lastMessageDeliveredTime,
+            Long lastMessageReadTime,
+            String lastMessageType,
+            String lastMessageAttachmentName,
             int unreadCount,
             boolean pinned,
             long notificationMuted,
@@ -46,6 +56,11 @@ public class ChatEntity {
         this.localProfilePhotoPath = localProfilePhotoPath;
         this.lastMessage = lastMessage;
         this.lastMessageTime = lastMessageTime;
+        this.lastMessageSenderId = lastMessageSenderId;
+        this.lastMessageDeliveredTime = lastMessageDeliveredTime;
+        this.lastMessageReadTime = lastMessageReadTime;
+        this.lastMessageType = lastMessageType;
+        this.lastMessageAttachmentName = lastMessageAttachmentName;
         this.unreadCount = unreadCount;
         this.pinned = pinned;
         this.notificationMuted = notificationMuted;

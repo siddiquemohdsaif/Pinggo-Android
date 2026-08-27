@@ -22,6 +22,9 @@ public interface MessageDao {
     @Query("SELECT * FROM messages WHERE clientMessageId = :clientMessageId LIMIT 1")
     MessageEntity findByClientMessageId(String clientMessageId);
 
+    @Query("SELECT * FROM messages WHERE messageId = :messageId LIMIT 1")
+    MessageEntity findByMessageId(String messageId);
+
     @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE messageId = :messageId)")
     boolean existsByMessageId(String messageId);
 

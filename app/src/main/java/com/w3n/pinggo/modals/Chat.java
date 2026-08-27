@@ -7,6 +7,11 @@ public class Chat {
     private final String localProfilePhotoPath;
     private final String lastMessage;
     private final long lastMessageTime;
+    private final boolean lastMessageOutgoing;
+    private final Long lastMessageDeliveredTime;
+    private final Long lastMessageReadTime;
+    private final String lastMessageType;
+    private final String lastMessageAttachmentName;
     private final int unreadCount;
     private final boolean pinned;
     private final long notificationMuted;
@@ -52,12 +57,37 @@ public class Chat {
                 String localProfilePhotoPath, String lastMessage, long lastMessageTime,
                 int unreadCount, boolean pinned, long notificationMuted, boolean archived,
                 boolean isOnline, long lastSeen) {
+        this(chatId, phoneNumber, profilePhotoUrl, localProfilePhotoPath, lastMessage,
+                lastMessageTime, false, unreadCount, pinned, notificationMuted, archived,
+                isOnline, lastSeen);
+    }
+
+    public Chat(String chatId, String phoneNumber, String profilePhotoUrl,
+                String localProfilePhotoPath, String lastMessage, long lastMessageTime,
+                boolean lastMessageOutgoing, int unreadCount, boolean pinned,
+                long notificationMuted, boolean archived, boolean isOnline, long lastSeen) {
+        this(chatId, phoneNumber, profilePhotoUrl, localProfilePhotoPath, lastMessage,
+                lastMessageTime, lastMessageOutgoing, null, null, "text", "", unreadCount, pinned,
+                notificationMuted, archived, isOnline, lastSeen);
+    }
+
+    public Chat(String chatId, String phoneNumber, String profilePhotoUrl,
+                String localProfilePhotoPath, String lastMessage, long lastMessageTime,
+                boolean lastMessageOutgoing, Long lastMessageDeliveredTime,
+                Long lastMessageReadTime, String lastMessageType,
+                String lastMessageAttachmentName, int unreadCount, boolean pinned,
+                long notificationMuted, boolean archived, boolean isOnline, long lastSeen) {
         this.chatId = chatId;
         this.phoneNumber = phoneNumber;
         this.profilePhotoUrl = profilePhotoUrl;
         this.localProfilePhotoPath = localProfilePhotoPath;
         this.lastMessage = lastMessage;
         this.lastMessageTime = lastMessageTime;
+        this.lastMessageOutgoing = lastMessageOutgoing;
+        this.lastMessageDeliveredTime = lastMessageDeliveredTime;
+        this.lastMessageReadTime = lastMessageReadTime;
+        this.lastMessageType = lastMessageType == null ? "text" : lastMessageType;
+        this.lastMessageAttachmentName = lastMessageAttachmentName;
         this.unreadCount = unreadCount;
         this.pinned = pinned;
         this.notificationMuted = notificationMuted;
@@ -93,6 +123,11 @@ public class Chat {
     public long getLastMessageTime() {
         return lastMessageTime;
     }
+    public boolean isLastMessageOutgoing() { return lastMessageOutgoing; }
+    public Long getLastMessageDeliveredTime() { return lastMessageDeliveredTime; }
+    public Long getLastMessageReadTime() { return lastMessageReadTime; }
+    public String getLastMessageType() { return lastMessageType; }
+    public String getLastMessageAttachmentName() { return lastMessageAttachmentName; }
 
     public int getUnreadCount() {
         return unreadCount;
