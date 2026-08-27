@@ -105,6 +105,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     private final ExecutorService profilePhotoExecutor = Executors.newFixedThreadPool(4);
     private final Set<String> profilePhotoDownloads =
             Collections.synchronizedSet(new HashSet<>());
+    private final Set<String> locallyReadChats =
+            Collections.synchronizedSet(new HashSet<>());
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ChatWebSocketClient socketClient;
     private EventListener eventListener;
@@ -115,7 +117,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     private final MutableLiveData<Boolean> chatListPaginationLoading =
             new MutableLiveData<>(false);
     private int chatListGeneration;
-    private int latestTotalUnread = -1;
+    private volatile int latestTotalUnread = -1;
     private CallEventListener callEventListener;
     private IncomingCallListener incomingCallListener;
     private String currentUserId;
@@ -203,7 +205,19 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         activeChatId = chatId == null ? "" : chatId.trim();
         if (!activeChatId.isEmpty()) {
             String openedChatId = activeChatId;
-            ioExecutor.execute(() -> chatDao.clearUnreadCount(openedChatId));
+            ioExecutor.execute(() -> {
+                ChatEntity chat = chatDao.findByChatId(openedChatId);
+                boolean wasUnread = chat != null && chat.unreadCount > 0;
+                chatDao.clearUnreadCount(openedChatId);
+                locallyReadChats.add(openedChatId);
+                if (wasUnread) {
+                    int currentTotal = latestTotalUnread;
+                    int updatedTotal = currentTotal >= 0
+                            ? Math.max(0, currentTotal - 1)
+                            : chatDao.countUnreadChats();
+                    notifyTotalUnread(updatedTotal);
+                }
+            });
         }
     }
 
@@ -1258,9 +1272,12 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     @Override
     public void onEvent(JsonObject event) {
         String type = JsonParserUtil.getString(event, "type");
+        int totalUnreadBeforeEvent = latestTotalUnread;
+        int serverTotalUnread = -1;
         if (event.has("total_unread") && !event.get("total_unread").isJsonNull()) {
-            notifyTotalUnread(Math.max(0,
-                    (int) JsonParserUtil.getLong(event, "total_unread")));
+            serverTotalUnread = Math.max(0,
+                    (int) JsonParserUtil.getLong(event, "total_unread"));
+            notifyTotalUnread(serverTotalUnread);
         }
         if ("call_invite".equals(type) && incomingCallListener != null) {
             mainHandler.post(() -> incomingCallListener.onIncomingCall(event));
@@ -1277,7 +1294,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         } else if ("message_failed".equals(type)) {
             handleMessageFailed(event);
         } else if ("new_message".equals(type)) {
-            handleNewMessage(event);
+            handleNewMessage(event, totalUnreadBeforeEvent, serverTotalUnread);
         } else if ("message_seen".equals(type)) {
             handleMessageSeen(event);
         } else if ("message_seen_ack".equals(type)) {
@@ -1368,7 +1385,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         ioExecutor.execute(() -> messageDao.updateStatusByClientMessageId(clientMessageId, MessageStatus.FAILED));
     }
 
-    private void handleNewMessage(JsonObject event) {
+    private void handleNewMessage(
+            JsonObject event, int totalUnreadBeforeEvent, int serverTotalUnread) {
         JsonElement messageElement = event.get("message");
         if (messageElement == null || !messageElement.isJsonObject()) {
             return;
@@ -1379,6 +1397,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         }
         ioExecutor.execute(() -> {
             boolean isNewMessage = !messageDao.existsByMessageId(message.messageId);
+            ChatEntity chatBeforeMessage = chatDao.findByChatId(message.chatId);
+            boolean chatWasUnread = chatBeforeMessage != null
+                    && chatBeforeMessage.unreadCount > 0
+                    && !locallyReadChats.contains(message.chatId);
             preserveLocalAttachmentUri(message);
             messageDao.upsert(message);
             updateChatSummary(message);
@@ -1386,8 +1408,24 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             if (incoming && isNewMessage) {
                 if (message.chatId.equals(activeChatId)) {
                     chatDao.clearUnreadCount(message.chatId);
+                    locallyReadChats.add(message.chatId);
                 } else {
                     chatDao.incrementUnreadCount(message.chatId);
+                    locallyReadChats.remove(message.chatId);
+                    if (!chatWasUnread) {
+                        int updatedTotal;
+                        if (serverTotalUnread >= 0 && totalUnreadBeforeEvent >= 0) {
+                            int localExpectedTotal = totalUnreadBeforeEvent + 1;
+                            updatedTotal = Math.max(serverTotalUnread, localExpectedTotal);
+                        } else if (serverTotalUnread < 0 && latestTotalUnread >= 0) {
+                            updatedTotal = latestTotalUnread + 1;
+                        } else {
+                            updatedTotal = serverTotalUnread >= 0
+                                    ? serverTotalUnread
+                                    : chatDao.countUnreadChats();
+                        }
+                        notifyTotalUnread(updatedTotal);
+                    }
                 }
             }
             messageDao.markDelivered(

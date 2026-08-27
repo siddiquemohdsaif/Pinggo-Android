@@ -127,6 +127,13 @@ public final class HomeView extends ViewGroup {
 
     public void submitChats(List<Chat> chats) {
         chatsView.submit(chats);
+        int unreadChats = 0;
+        if (chats != null) {
+            for (Chat chat : chats) {
+                if (chat != null && chat.getUnreadCount() > 0) unreadChats++;
+            }
+        }
+        bottomNavigationView.setTotalUnread(unreadChats);
     }
 
     public void submitCalls(List<CallLog> calls) {

@@ -44,6 +44,9 @@ public interface ChatDao {
     @Query("UPDATE chats SET unreadCount = 0 WHERE chatId = :chatId")
     void clearUnreadCount(String chatId);
 
+    @Query("SELECT COUNT(*) FROM chats WHERE unreadCount > 0")
+    int countUnreadChats();
+
     @Query("UPDATE chats SET unreadCount = :unreadCount WHERE chatId = :chatId")
     void setUnreadCount(String chatId, int unreadCount);
 
