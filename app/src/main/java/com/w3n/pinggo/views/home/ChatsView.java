@@ -22,6 +22,7 @@ import com.ogfa.nativeviews.component.FigmaConfig;
 import com.ogfa.nativeviews.font.NativeFonts;
 import com.ogfa.nativeviews.image.Image;
 import com.ogfa.nativeviews.list.ComponentList;
+import com.ogfa.nativeviews.progress.Progress;
 import com.ogfa.nativeviews.text.FontVariation;
 import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.zlayer.ZLayer;
@@ -93,6 +94,10 @@ public final class ChatsView extends View {
     private final Bitmap videoOutgoingBitmap = resourceBitmap(R.drawable.chat_video_outgoing);
     private final Bitmap videoMissedBitmap = resourceBitmap(R.drawable.chat_video_missed);
     private final Observer<List<ChatEntity>> observer = entities -> post(() -> submit(toChats(entities)));
+    private final Observer<Boolean> paginationObserver = loading -> post(() -> {
+        paginationLoading = Boolean.TRUE.equals(loading);
+        updateVisibility();
+    });
     private ComponentList<Chat> list;
     private Text status;
     private Image emptyIllustration;
@@ -103,6 +108,8 @@ public final class ChatsView extends View {
     private Text emptyStartChatLabel;
     private Button emptyCreateGroup;
     private Button floatingAction;
+    private Progress paginationProgress;
+    private boolean paginationLoading;
     private boolean loaded;
     private boolean observing;
     private String statusMessage = "Loading chats...";
@@ -181,6 +188,7 @@ public final class ChatsView extends View {
         if (observing) return;
         observing = true;
         repository.observeChats().observeForever(observer);
+        repository.observeChatListPaginationLoading().observeForever(paginationObserver);
     }
 
     @Override protected void onAttachedToWindow() {
@@ -191,6 +199,7 @@ public final class ChatsView extends View {
     @Override protected void onDetachedFromWindow() {
         if (observing) {
             repository.observeChats().removeObserver(observer);
+            repository.observeChatListPaginationLoading().removeObserver(paginationObserver);
             observing = false;
         }
         super.onDetachedFromWindow();
@@ -290,6 +299,21 @@ public final class ChatsView extends View {
                 actionBounds)
                 .setImageScaleType(Image.ScaleType.FIT_CENTER).setRippleEnabled(true)
                 .setRippleColor(0x22FFFFFF).setOnClickListener(id -> openNewChat()));
+        float progressSize = 44f * scale;
+        float progressBottom = 18f * scale;
+        paginationProgress = stateLayer.add(new Progress.Builder(getContext(),
+                "chat_page_progress",
+                new RectF((width - progressSize) / 2f,
+                        height - progressBottom - progressSize,
+                        (width + progressSize) / 2f,
+                        height - progressBottom))
+                .setStyle(Progress.Style.CIRCULAR)
+                .setMode(Progress.Mode.INDETERMINATE)
+                .setProgressColor(ACCENT)
+                .setTrackColor(0x22019CC4)
+                .setThickness(6f)
+                .setIndeterminateDuration(850L)
+                .setVisible(false));
         updateVisibility();
     }
 
@@ -313,6 +337,9 @@ public final class ChatsView extends View {
         emptyStartChatLabel.setVisible(empty);
         emptyCreateGroup.setVisible(empty).setEnabled(empty);
         floatingAction.setVisible(!isSelecting()).setEnabled(!isSelecting());
+        if (paginationProgress != null) {
+            paginationProgress.setVisible(hasChats && paginationLoading);
+        }
         invalidate();
     }
 
@@ -347,7 +374,10 @@ public final class ChatsView extends View {
         typingHandler.removeCallbacksAndMessages(null);
         typingBaselines.clear();
         typingTimeouts.clear();
-        if (observing) repository.observeChats().removeObserver(observer);
+        if (observing) {
+            repository.observeChats().removeObserver(observer);
+            repository.observeChatListPaginationLoading().removeObserver(paginationObserver);
+        }
         observing = false;
         layers.release();
         recycle(dividerBitmap, actionBitmap, emptyTransparentBitmap, floatingActionBitmap,

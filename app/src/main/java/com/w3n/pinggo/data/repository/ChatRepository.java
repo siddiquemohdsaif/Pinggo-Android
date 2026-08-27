@@ -7,6 +7,7 @@ import android.os.Handler;
 import android.os.Looper;
 
 import androidx.lifecycle.LiveData;
+import androidx.lifecycle.MutableLiveData;
 import androidx.work.Constraints;
 import androidx.work.ExistingWorkPolicy;
 import androidx.work.NetworkType;
@@ -106,6 +107,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     private String nextChatListCursor;
     private boolean chatListHasMore;
     private boolean chatListPageLoading;
+    private final MutableLiveData<Boolean> chatListPaginationLoading =
+            new MutableLiveData<>(false);
     private int chatListGeneration;
     private int latestTotalUnread = -1;
     private CallEventListener callEventListener;
@@ -967,7 +970,12 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             chatListPageLoading = false;
             generation = ++chatListGeneration;
         }
+        chatListPaginationLoading.postValue(false);
         requestChatListPage(normalizedPhoneNumber, null, generation);
+    }
+
+    public LiveData<Boolean> observeChatListPaginationLoading() {
+        return chatListPaginationLoading;
     }
 
     public void loadNextChatListPage() {
@@ -988,10 +996,12 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     private void requestChatListPage(String phoneNumber, String cursor, int generation) {
+        final boolean pagination = cursor != null && !cursor.isEmpty();
         synchronized (this) {
             if (chatListPageLoading || generation != chatListGeneration) return;
             chatListPageLoading = true;
         }
+        if (pagination) chatListPaginationLoading.postValue(true);
         appFunctionManager.getChatList(
                 phoneNumber,
                 CHAT_LIST_PAGE_SIZE,
@@ -1021,7 +1031,6 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 String returnedCursor = JsonParserUtil.getString(response, "nextCursor");
                 boolean hasMore = JsonParserUtil.getBoolean(response, "hasMore")
                         && !returnedCursor.isEmpty();
-                finishChatListPage(generation, returnedCursor, hasMore);
                 List<ChatEntity> chats = new ArrayList<>();
                 Set<String> chatsWithServerUnreadCount = new HashSet<>();
                 long now = System.currentTimeMillis();
@@ -1050,6 +1059,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     }
                     chatDao.upsertAll(chats);
                     prefetchChatProfilePhotos(chats);
+                    finishChatListPage(generation, returnedCursor, hasMore);
                 });
             }
 
@@ -1067,10 +1077,14 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         chatListPageLoading = false;
         nextChatListCursor = cursor;
         chatListHasMore = hasMore;
+        chatListPaginationLoading.postValue(false);
     }
 
     private synchronized void releaseChatListPage(int generation) {
-        if (generation == chatListGeneration) chatListPageLoading = false;
+        if (generation == chatListGeneration) {
+            chatListPageLoading = false;
+            chatListPaginationLoading.postValue(false);
+        }
     }
 
     private void notifyTotalUnread(int totalUnread) {

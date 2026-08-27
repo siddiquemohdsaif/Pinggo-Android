@@ -157,7 +157,7 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         Toast.makeText(this, R.string.make_call, Toast.LENGTH_SHORT).show();
     }
 
-    @Override public void onOpenSettings() {
+    @Override public void onOpenMenuDialog() {
         if (homeMenuDialog != null) homeMenuDialog.show();
     }
 

@@ -76,6 +76,7 @@ public final class HomeView extends ViewGroup {
     private Image searchBackground;
     private TextField search;
     private Button overflow;
+    private Image overflowDots;
     private Button action;
     private int topInset;
     private int bottomInset;
@@ -183,6 +184,7 @@ public final class HomeView extends ViewGroup {
         title = null;
         logo = null;
         overflow = null;
+        overflowDots = null;
         searchBackground = null;
         search = null;
         action = null;
@@ -204,10 +206,17 @@ public final class HomeView extends ViewGroup {
                     new RectF(199f * scale, figmaTop + 34f * scale,
                             600f * scale, figmaTop + 143f * scale), 54f * scale, 0xFF009FC8,
                     FontVariation.BOLD));
-            overflow = addButton(contentLayer, "overflow", overflowDotsBitmap, "",
+            overflowDots = contentLayer.add(image("overflow_dots", overflowDotsBitmap,
                     new RectF(996f * scale, figmaTop + 56f * scale,
-                            1028f * scale, figmaTop + 113f * scale), PRIMARY, 0,
-                    id -> listener.onOpenSettings());
+                            1028f * scale, figmaTop + 113f * scale))
+                    .setScaleType(Image.ScaleType.FIT_XY));
+            overflow = contentLayer.add(new Button.Builder(getContext(), "overflow_touch",
+                    transparentBitmap, "",
+                    new RectF(940f * scale, figmaTop + 25f * scale,
+                            1068f * scale, figmaTop + 145f * scale))
+                    .setImageScaleType(Image.ScaleType.FIT_XY)
+                    .setRippleEnabled(false)
+                    .setOnClickListener(id -> listener.onOpenMenuDialog()));
         } else {
             buildSelectionHeader(width, figmaTop, scale);
         }
@@ -249,6 +258,7 @@ public final class HomeView extends ViewGroup {
         showingMeet = false;
         if (title != null) title.setText(getString(R.string.app_name));
         if (overflow != null) overflow.setVisible(selectedChats.isEmpty());
+        if (overflowDots != null) overflowDots.setVisible(selectedChats.isEmpty());
         if (logo != null) logo.setVisible(selectedChats.isEmpty());
         searchBackground.setVisible(true);
         search.setVisible(true);
@@ -313,6 +323,7 @@ public final class HomeView extends ViewGroup {
         hideKeyboard();
         title.setText(getString(R.string.call));
         overflow.setVisible(false);
+        if (overflowDots != null) overflowDots.setVisible(false);
         logo.setVisible(false);
         searchBackground.setVisible(false);
         search.setVisible(false);
@@ -334,6 +345,7 @@ public final class HomeView extends ViewGroup {
         hideKeyboard();
         title.setText(getString(R.string.meet));
         overflow.setVisible(false);
+        if (overflowDots != null) overflowDots.setVisible(false);
         logo.setVisible(false);
         searchBackground.setVisible(false);
         search.setVisible(false);
@@ -438,7 +450,7 @@ public final class HomeView extends ViewGroup {
         void onNewChat();
         void onNewGroup();
         void onMakeCall();
-        void onOpenSettings();
+        void onOpenMenuDialog();
         void onBulkGroup(List<Chat> chats);
         void onBulkPin(List<Chat> chats);
         void onBulkMute(List<Chat> chats);
