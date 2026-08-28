@@ -1,7 +1,5 @@
 package com.w3n.pinggo.views.login;
 
-import static android.widget.Toast.LENGTH_SHORT;
-
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -22,7 +20,6 @@ import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
-import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 
@@ -40,7 +37,6 @@ import com.ogfa.nativeviews.textfield.TextField;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.R;
-import com.w3n.pinggo.activity.LoginActivity;
 import com.w3n.pinggo.views.common.NativeTextFieldImeController;
 
 /** Native-view implementation of the email step in the login flow. */
@@ -91,8 +87,8 @@ public class EmailLoginView extends View {
                 getResources(), R.drawable.pinggo_login_background_2);
         illustrationBitmap = BitmapFactory.decodeResource(
                 getResources(), R.drawable.pinggo_email_illustration);
-        backBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.ic_email_back);
-        arrowBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.ic_pinggo_arrow);
+        backBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.email_back);
+        arrowBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.pinggo_arrow);
         buttonBitmap = createButtonBackground(arrowBitmap);
         googleLogoBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.google_logo);
         googleButtonBitmap = createGoogleButtonBackground(googleLogoBitmap);

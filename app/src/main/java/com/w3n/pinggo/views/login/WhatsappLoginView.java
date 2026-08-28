@@ -72,8 +72,8 @@ public class WhatsappLoginView extends View {
     illustrationBitmap =
         BitmapFactory.decodeResource(getResources(), R.drawable.pinggo_whatsapp_illustration);
     whatsappLogoBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.whatsapp_logo);
-    backBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.ic_email_back);
-    arrowBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.ic_pinggo_arrow);
+    backBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.email_back);
+    arrowBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.pinggo_arrow);
     actionButtonBitmap = createActionButtonBackground(arrowBitmap);
   }
 

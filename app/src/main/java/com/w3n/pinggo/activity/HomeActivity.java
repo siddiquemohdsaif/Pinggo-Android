@@ -103,7 +103,7 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                 entities -> homeView.submitChats(toChats(entities)));
         String uid = LoginStateManager.getInstance().getUID(this);
         if (uid != null && !uid.trim().isEmpty()) {
-            repository.refreshChatList(normalizeAccountId(uid));
+            repository.ensureChatListLoaded(normalizeAccountId(uid));
         }
     }
 
@@ -189,29 +189,29 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                                   String successMessage, boolean deleteLocal) {
         if (repository == null || chats == null || chats.isEmpty()) return;
         if (homeView != null) homeView.clearChatSelection();
-        final int[] remaining = {chats.size()};
-        final boolean[] failed = {false};
+        List<String> chatIds = new ArrayList<>();
         for (Chat chat : chats) {
-            repository.updateChatSetting(chat.getChatId(), setting, value,
-                    new AppFunctionManager.Callback() {
-                        @Override public void onSuccess(Object object) {
-                            if (deleteLocal) repository.deleteLocalChat(chat.getChatId());
-                            finishBulkOperation();
-                        }
-                        @Override public void onError(String error) {
-                            failed[0] = true;
-                            finishBulkOperation();
-                        }
-                        private void finishBulkOperation() {
-                            if (--remaining[0] != 0) return;
-                            Toast.makeText(HomeActivity.this,
-                                    failed[0] ? "Some chats could not be updated" : successMessage,
-                                    Toast.LENGTH_SHORT).show();
-                            String uid = LoginStateManager.getInstance().getUID(HomeActivity.this);
-                            if (uid != null) repository.refreshChatList(normalizeAccountId(uid));
-                        }
-                    });
+            if (chat.getChatId() != null && !chat.getChatId().trim().isEmpty()) {
+                chatIds.add(chat.getChatId());
+            }
         }
+        repository.updateChatSettings(chatIds, setting, value,
+                new AppFunctionManager.Callback() {
+                    @Override public void onSuccess(Object object) {
+                        if (deleteLocal) {
+                            for (String chatId : chatIds) repository.deleteLocalChat(chatId);
+                        }
+                        finishBulkOperation(successMessage);
+                    }
+                    @Override public void onError(String error) {
+                        finishBulkOperation("Chats could not be updated");
+                    }
+                    private void finishBulkOperation(String message) {
+                        Toast.makeText(HomeActivity.this, message, Toast.LENGTH_SHORT).show();
+                        String uid = LoginStateManager.getInstance().getUID(HomeActivity.this);
+                        if (uid != null) repository.refreshChatList(normalizeAccountId(uid));
+                    }
+                });
     }
 
     private void openSettings() {

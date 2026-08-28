@@ -22,6 +22,7 @@ import retrofit2.Response;
 
 public class ChatHandler {
     private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
+    private static final int MESSAGE_CACHE_SIZE = 50;
 
     public static void getChatList(AppRestAPI appApi, String phoneNumber, AppFunctionManager.Callback callback) {
         getChatList(appApi, phoneNumber, 20, null, callback);
@@ -33,6 +34,7 @@ public class ChatHandler {
         try {
             jsonObject.put("phoneNumber", normalizePhoneNumber(phoneNumber));
             jsonObject.put("pageSize", pageSize);
+            jsonObject.put("messageCacheSize", MESSAGE_CACHE_SIZE);
             if (cursor != null && !cursor.trim().isEmpty()) {
                 jsonObject.put("cursor", cursor);
             }
@@ -45,10 +47,19 @@ public class ChatHandler {
     }
 
     public static void getChat(AppRestAPI appApi, String chatId, String phoneNumber, AppFunctionManager.Callback callback) {
+        getChat(appApi, chatId, phoneNumber, 50, null, callback);
+    }
+
+    public static void getChat(AppRestAPI appApi, String chatId, String phoneNumber, int pageSize,
+                               String cursor, AppFunctionManager.Callback callback) {
         JSONObject jsonObject = new JSONObject();
         try {
             jsonObject.put("chatId", chatId);
             jsonObject.put("phoneNumber", normalizePhoneNumber(phoneNumber));
+            jsonObject.put("pageSize", pageSize);
+            if (cursor != null && !cursor.trim().isEmpty()) {
+                jsonObject.put("cursor", cursor);
+            }
         } catch (JSONException e) {
             handleJsonError(e, callback);
             return;
@@ -102,6 +113,26 @@ public class ChatHandler {
             return;
         }
         enqueueChatCall(appApi.updateChatSettings(createJsonBody(jsonObject)), callback);
+    }
+
+    public static void updateChatSettingsBulk(AppRestAPI appApi, String phoneNumber,
+                                              List<String> chatIds, String setting, long value,
+                                              AppFunctionManager.Callback callback) {
+        JSONObject jsonObject = new JSONObject();
+        try {
+            jsonObject.put("phoneNumber", normalizePhoneNumber(phoneNumber));
+            JSONArray normalizedChatIds = new JSONArray();
+            for (String chatId : chatIds) {
+                normalizedChatIds.put(chatId == null ? "" : chatId.trim());
+            }
+            jsonObject.put("chatIds", normalizedChatIds);
+            jsonObject.put("setting", setting == null ? "" : setting.trim());
+            jsonObject.put("value", value);
+        } catch (JSONException e) {
+            handleJsonError(e, callback);
+            return;
+        }
+        enqueueChatCall(appApi.updateChatSettingsBulk(createJsonBody(jsonObject)), callback);
     }
 
     public static void syncPresence(AppRestAPI appApi, List<String> userIds,

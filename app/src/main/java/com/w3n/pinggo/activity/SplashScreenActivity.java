@@ -21,6 +21,7 @@ import com.w3n.pinggo.Database.Firestore.Util.ListenerCallback.OnSuccessListener
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.Util.BackgroundRunnerThread;
 import com.w3n.pinggo.Util.MainRunnerThread;
+import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.views.SplashAnimationView;
 
 import org.json.JSONObject;
@@ -30,6 +31,7 @@ public class SplashScreenActivity extends AppCompatActivity {
     private static final long APP_CONFIG_TIMEOUT_MS = 5000L;
     private boolean minimumSplashDurationElapsed;
     private boolean navigationStarted;
+    private boolean listRoutesStarted;
     private SplashAnimationView splashAnimationView;
 
     @Override
@@ -65,8 +67,11 @@ public class SplashScreenActivity extends AppCompatActivity {
         BackgroundRunnerThread.run(() -> fetchAppConfig(
                 appConfig -> MainRunnerThread.run(() -> {
                     boolean configLoaded = AppContextProvider.setAppConfig(appConfig);
-                    if (configLoaded && minimumSplashDurationElapsed) {
-                        continueToApp();
+                    if (configLoaded) {
+                        startListRoutes();
+                        if (minimumSplashDurationElapsed) {
+                            continueToApp();
+                        }
                     }
                 }),
                 error -> {
@@ -97,14 +102,36 @@ public class SplashScreenActivity extends AppCompatActivity {
         navigationStarted = true;
 
         boolean isLoggedIn = LoginStateManager.getInstance().isLoggedIn(this);
-        if (isLoggedIn) {
-            AppFunctionManager.getInstance().applyAuth(this);
-        }
+        if (isLoggedIn) startListRoutes();
         Class<?> destination = isLoggedIn
                 ? HomeActivity.class
                 : LoginActivity.class;
         startActivity(new Intent(this, destination));
         finish();
+    }
+
+    private void startListRoutes() {
+        if (listRoutesStarted
+                || !LoginStateManager.getInstance().isLoggedIn(getApplicationContext())) {
+            return;
+        }
+        String uid = LoginStateManager.getInstance().getUID(getApplicationContext());
+        if (uid == null || uid.trim().isEmpty()) return;
+
+        listRoutesStarted = true;
+        AppFunctionManager.getInstance().applyAuth(getApplicationContext());
+        ChatRepository repository = ChatRepository.getInstance(getApplicationContext());
+        repository.connect();
+        repository.preloadChatCache();
+        repository.ensureChatListLoaded(normalizeAccountId(uid));
+    }
+
+    private static String normalizeAccountId(String value) {
+        String normalized = value == null ? "" : value.trim();
+        if (normalized.startsWith("<plus>")) {
+            return normalized.substring("<plus>".length());
+        }
+        return normalized.startsWith("+") ? normalized.substring(1) : normalized;
     }
 
     public void fetchAppConfig(OnSuccessListener<JSONObject> onSuccessListener, OnFailureListener onFailureListener) {

@@ -94,7 +94,7 @@ public class OtpLoginView extends View {
       illustrationResource = R.drawable.pinggo_sms_illustration;
     }
     illustrationBitmap = BitmapFactory.decodeResource(getResources(), illustrationResource);
-    backBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.ic_email_back);
+    backBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.email_back);
     digitBoxBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.otp_digit_box);
     keyBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.otp_key);
     backspaceKeyBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.otp_backspace_key);

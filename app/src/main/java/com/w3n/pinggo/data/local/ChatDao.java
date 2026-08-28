@@ -8,6 +8,9 @@ import androidx.room.Query;
 import androidx.room.Transaction;
 
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
 
 @Dao
 public interface ChatDao {
@@ -16,6 +19,31 @@ public interface ChatDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     void upsertAll(List<ChatEntity> chats);
+
+    @Query("SELECT * FROM chats")
+    List<ChatEntity> getAllChats();
+
+    @Transaction
+    default void mergeServerPage(List<ChatEntity> serverChats,
+                                 Set<String> chatsWithServerUnreadCount,
+                                 String activeChatId) {
+        if (serverChats == null || serverChats.isEmpty()) return;
+        Map<String, ChatEntity> existingById = new HashMap<>();
+        for (ChatEntity existing : getAllChats()) {
+            existingById.put(existing.chatId, existing);
+        }
+        for (ChatEntity chat : serverChats) {
+            ChatEntity existing = existingById.get(chat.chatId);
+            if (chat.chatId.equals(activeChatId)) {
+                chat.unreadCount = 0;
+            } else if (existing != null
+                    && (chatsWithServerUnreadCount == null
+                    || !chatsWithServerUnreadCount.contains(chat.chatId))) {
+                chat.unreadCount = existing.unreadCount;
+            }
+        }
+        upsertAll(serverChats);
+    }
 
     @Query("UPDATE chats SET lastMessage = :preview, lastMessageTime = :sentTime, "
             + "lastMessageSenderId = :senderId, lastMessageDeliveredTime = :deliveredTime, "

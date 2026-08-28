@@ -16,8 +16,10 @@ public interface MessageDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     void upsertAll(List<MessageEntity> messages);
 
-    @Query("SELECT * FROM messages WHERE chatId = :chatId ORDER BY sentTime ASC")
-    LiveData<List<MessageEntity>> observeMessages(String chatId);
+    @Query("SELECT * FROM (SELECT * FROM messages WHERE chatId = :chatId "
+            + "ORDER BY sentTime DESC, messageId DESC LIMIT :limit) "
+            + "ORDER BY sentTime ASC, messageId ASC")
+    LiveData<List<MessageEntity>> observeLatestMessages(String chatId, int limit);
 
     @Query("SELECT * FROM messages WHERE clientMessageId = :clientMessageId LIMIT 1")
     MessageEntity findByClientMessageId(String clientMessageId);

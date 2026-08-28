@@ -139,8 +139,8 @@ public class PhoneNumberLoginView extends View {
         setFocusableInTouchMode(true);
         backgroundBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.pinggo_login_background);
         logoBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.pinggo_logo);
-        lockBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.ic_pinggo_lock);
-        arrowBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.ic_pinggo_arrow);
+        lockBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.pinggo_lock);
+        arrowBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.pinggo_arrow);
         buttonBitmap = createButtonBackground(arrowBitmap);
         dropdownDownBitmap = drawableToBitmap(R.drawable.country_dropdown_down);
         dropdownUpBitmap = drawableToBitmap(R.drawable.country_dropdown_up);

@@ -77,11 +77,11 @@ public final class ProfileSetupView extends View {
         setFocusableInTouchMode(true);
         backgroundBitmap = BitmapFactory.decodeResource(
                 getResources(), R.drawable.pinggo_login_background_2);
-        backBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.ic_email_back);
-        lockBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.ic_pinggo_lock);
+        backBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.email_back);
+        lockBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.pinggo_lock);
         cardBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.signup_profile_card);
         nextBitmap = makeNext(BitmapFactory.decodeResource(
-                getResources(), R.drawable.ic_pinggo_arrow));
+                getResources(), R.drawable.pinggo_arrow));
         avatarBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.signup_avatar);
         cameraBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.signup_camera);
     }

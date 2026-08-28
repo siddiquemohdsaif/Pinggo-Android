@@ -11,6 +11,7 @@ import android.util.Log;
 
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
+import androidx.lifecycle.Observer;
 import androidx.work.Constraints;
 import androidx.work.ExistingWorkPolicy;
 import androidx.work.NetworkType;
@@ -42,8 +43,10 @@ import com.w3n.pinggo.data.worker.AttachmentDownloadWorker;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.UUID;
@@ -63,8 +66,10 @@ import retrofit2.Response;
 
 public class ChatRepository implements ChatWebSocketClient.Listener {
     private static final String PERF_TAG = "ChatsRepoPerf";
+    private static final String TESTING_TAG = "PARVEZ_TESTING";
     private static final long ATTACHMENT_CHUNK_SIZE = 3L * 1024L * 1024L;
     private static final int CHAT_LIST_PAGE_SIZE = 20;
+    public static final int MESSAGE_PAGE_SIZE = 50;
     public interface EventListener {
         void onTyping(String chatId, String userId, boolean typing);
 
@@ -93,6 +98,32 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         void onError(String message);
     }
 
+    public interface MessagePageCallback {
+        void onLoaded(String nextCursor, boolean hasMore, int loadedCount);
+        void onError(String message);
+    }
+
+    /** Pagination state retained only while this application process is alive. */
+    public static final class MessageSessionState {
+        private final int messageLimit;
+        private final boolean firstPageLoaded;
+        private final String nextCursor;
+        private final boolean networkHasMore;
+
+        private MessageSessionState(int messageLimit, boolean firstPageLoaded,
+                                    String nextCursor, boolean networkHasMore) {
+            this.messageLimit = Math.max(MESSAGE_PAGE_SIZE, messageLimit);
+            this.firstPageLoaded = firstPageLoaded;
+            this.nextCursor = nextCursor;
+            this.networkHasMore = networkHasMore;
+        }
+
+        public int getMessageLimit() { return messageLimit; }
+        public boolean isFirstPageLoaded() { return firstPageLoaded; }
+        public String getNextCursor() { return nextCursor; }
+        public boolean hasMoreOnNetwork() { return networkHasMore; }
+    }
+
     private static volatile ChatRepository instance;
 
     private final Context appContext;
@@ -100,6 +131,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     private final ChatDao chatDao;
     private final PresenceDao presenceDao;
     private final TransferDao transferDao;
+    private final LiveData<List<ChatEntity>> chatListLiveData;
     private final AppFunctionManager appFunctionManager;
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService profilePhotoExecutor = Executors.newFixedThreadPool(4);
@@ -107,6 +139,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             Collections.synchronizedSet(new HashSet<>());
     private final Set<String> locallyReadChats =
             Collections.synchronizedSet(new HashSet<>());
+    private final Map<String, MessageSessionState> messageSessionStates = new HashMap<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ChatWebSocketClient socketClient;
     private EventListener eventListener;
@@ -114,8 +147,24 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     private String nextChatListCursor;
     private boolean chatListHasMore;
     private boolean chatListPageLoading;
-    private final MutableLiveData<Boolean> chatListPaginationLoading =
-            new MutableLiveData<>(false);
+    private boolean chatListFirstPageLoaded;
+    private boolean chatCachePreloadStarted;
+    private boolean chatCacheLoaded;
+    private int cachedChatCount;
+    private boolean chatListRefreshing;
+    private boolean chatListPaginating;
+    private String chatListError = "";
+    private final MutableLiveData<ChatListState> chatListState =
+            new MutableLiveData<>(ChatListState.initial());
+    private final Observer<List<ChatEntity>> chatCacheObserver = chats -> {
+        synchronized (ChatRepository.this) {
+            chatCacheLoaded = true;
+            cachedChatCount = chats == null ? 0 : chats.size();
+        }
+        Log.d(TESTING_TAG, "chat_list source=room_cache phase=loaded count="
+                + (chats == null ? 0 : chats.size()));
+        publishChatListState();
+    };
     private int chatListGeneration;
     private volatile int latestTotalUnread = -1;
     private CallEventListener callEventListener;
@@ -128,6 +177,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         PingGoDatabase database = PingGoDatabase.getInstance(appContext);
         messageDao = database.messageDao();
         chatDao = database.chatDao();
+        chatListLiveData = chatDao.observeChats();
         presenceDao = database.presenceDao();
         transferDao = database.transferDao();
         appFunctionManager = AppFunctionManager.getInstance();
@@ -149,10 +199,42 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     public static void resetInstance() {
         synchronized (ChatRepository.class) {
             if (instance != null) {
+                instance.stopChatCacheObservation();
                 instance.disconnect();
             }
             instance = null;
         }
+    }
+
+    public synchronized MessageSessionState getMessageSessionState(String chatId) {
+        if (chatId == null || chatId.trim().isEmpty()) return null;
+        return messageSessionStates.get(chatId);
+    }
+
+    public synchronized void saveMessageSessionState(
+            String chatId, int messageLimit, boolean firstPageLoaded,
+            String nextCursor, boolean networkHasMore) {
+        if (chatId == null || chatId.trim().isEmpty()) return;
+        MessageSessionState previous = messageSessionStates.get(chatId);
+        MessageSessionState updated = new MessageSessionState(
+                messageLimit, firstPageLoaded, nextCursor, networkHasMore);
+        messageSessionStates.put(chatId, updated);
+        if (previous == null
+                || previous.messageLimit != updated.messageLimit
+                || previous.firstPageLoaded != updated.firstPageLoaded
+                || previous.networkHasMore != updated.networkHasMore
+                || !sameValue(previous.nextCursor, updated.nextCursor)) {
+            Log.d(TESTING_TAG, "message_cache source=session phase=saved chatId=" + chatId
+                    + " limit=" + updated.messageLimit
+                    + " firstPageLoaded=" + updated.firstPageLoaded
+                    + " hasMore=" + updated.networkHasMore
+                    + " hasNextCursor=" + (updated.nextCursor != null
+                    && !updated.nextCursor.isEmpty()));
+        }
+    }
+
+    private static boolean sameValue(String first, String second) {
+        return first == null ? second == null : first.equals(second);
     }
 
     public void setEventListener(EventListener eventListener) {
@@ -180,12 +262,29 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         return socketClient.send(event);
     }
 
-    public LiveData<List<MessageEntity>> observeMessages(String chatId) {
-        return messageDao.observeMessages(chatId);
+    public LiveData<List<MessageEntity>> observeMessages(String chatId, int limit) {
+        return messageDao.observeLatestMessages(chatId, Math.max(1, limit));
     }
 
     public LiveData<List<ChatEntity>> observeChats() {
-        return chatDao.observeChats();
+        return chatListLiveData;
+    }
+
+    public void preloadChatCache() {
+        synchronized (this) {
+            if (chatCachePreloadStarted) return;
+            chatCachePreloadStarted = true;
+        }
+        Log.d(TESTING_TAG, "chat_list source=room_cache phase=observe_start");
+        Runnable startPreload = () -> chatListLiveData.observeForever(chatCacheObserver);
+        if (Looper.myLooper() == Looper.getMainLooper()) startPreload.run();
+        else mainHandler.post(startPreload);
+    }
+
+    private void stopChatCacheObservation() {
+        Runnable stopPreload = () -> chatListLiveData.removeObserver(chatCacheObserver);
+        if (Looper.myLooper() == Looper.getMainLooper()) stopPreload.run();
+        else mainHandler.post(stopPreload);
     }
 
     public void updateChatSetting(String chatId, String setting, long value,
@@ -194,6 +293,18 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 LoginStateManager.getInstance().getUID(appContext));
         appFunctionManager.updateChatSettings(
                 phoneNumber, chatId, setting, value, callback);
+    }
+
+    public void updateChatSettings(List<String> chatIds, String setting, long value,
+                                   AppFunctionManager.Callback callback) {
+        if (chatIds == null || chatIds.isEmpty()) {
+            if (callback != null) callback.onError("Select at least one chat.");
+            return;
+        }
+        String phoneNumber = normalizeAccountId(
+                LoginStateManager.getInstance().getUID(appContext));
+        appFunctionManager.updateChatSettingsBulk(
+                phoneNumber, chatIds, setting, value, callback);
     }
 
     public void deleteLocalChat(String chatId) {
@@ -937,9 +1048,12 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     public void syncAfterReconnect(String phoneNumber) {
         ioExecutor.execute(() -> {
             Long lastSync = messageDao.getLastSyncTime();
+            // An empty database has no incremental checkpoint. Chat history is hydrated
+            // page-by-page when a conversation opens instead of downloading every message.
+            if (lastSync == null) return;
             appFunctionManager.syncChatMessages(
                     phoneNumber,
-                    lastSync == null ? 0L : lastSync,
+                    lastSync,
                     new AppFunctionManager.Callback() {
                 @Override
                 public void onSuccess(Object object) {
@@ -966,6 +1080,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     ioExecutor.execute(() -> {
                         preserveLocalAttachmentUris(entities);
                         messageDao.upsertAll(entities);
+                        Log.d(TESTING_TAG, "message_cache source=sync_routes phase=room_upsert"
+                                + " messages=" + entities.size() + " since=" + lastSync);
                         for (MessageEntity message : entities) updateChatSummary(message);
                         applySyncedUnreadCounts(chatListSettings);
                     });
@@ -987,14 +1103,30 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             nextChatListCursor = null;
             chatListHasMore = true;
             chatListPageLoading = false;
+            chatListFirstPageLoaded = false;
+            chatListRefreshing = false;
+            chatListPaginating = false;
+            chatListError = "";
             generation = ++chatListGeneration;
         }
-        chatListPaginationLoading.postValue(false);
+        publishChatListState();
         requestChatListPage(normalizedPhoneNumber, null, generation);
     }
 
-    public LiveData<Boolean> observeChatListPaginationLoading() {
-        return chatListPaginationLoading;
+    public void ensureChatListLoaded(String phoneNumber) {
+        preloadChatCache();
+        String normalizedPhoneNumber = normalizeAccountId(phoneNumber);
+        synchronized (this) {
+            if (normalizedPhoneNumber.equals(chatListPhoneNumber)
+                    && (chatListPageLoading || chatListFirstPageLoaded)) {
+                return;
+            }
+        }
+        refreshChatList(normalizedPhoneNumber);
+    }
+
+    public LiveData<ChatListState> observeChatListState() {
+        return chatListState;
     }
 
     public void loadNextChatListPage() {
@@ -1020,8 +1152,16 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         synchronized (this) {
             if (chatListPageLoading || generation != chatListGeneration) return;
             chatListPageLoading = true;
+            chatListPaginating = pagination;
+            chatListRefreshing = !pagination;
+            chatListError = "";
         }
-        if (pagination) chatListPaginationLoading.postValue(true);
+        Log.d(TESTING_TAG, "chat_list source=routes phase=request page="
+                + (pagination ? "pagination" : "initial")
+                + " pageSize=" + CHAT_LIST_PAGE_SIZE
+                + " hasCursor=" + (cursor != null && !cursor.isEmpty())
+                + " generation=" + generation);
+        publishChatListState();
         appFunctionManager.getChatList(
                 phoneNumber,
                 CHAT_LIST_PAGE_SIZE,
@@ -1033,7 +1173,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     if (generation != chatListGeneration) return;
                 }
                 if (!(object instanceof JsonObject)) {
-                    finishChatListPage(generation, null, false);
+                    failChatListPage(generation,
+                            "Invalid chat list response.");
                     return;
                 }
                 JsonObject response = (JsonObject) object;
@@ -1050,13 +1191,15 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 }
                 JsonArray userProfiles = response.getAsJsonArray("userProfiles");
                 if (userProfiles == null) {
-                    finishChatListPage(generation, null, false);
+                    failChatListPage(generation,
+                            "Chat list response is incomplete.");
                     return;
                 }
                 String returnedCursor = JsonParserUtil.getString(response, "nextCursor");
                 boolean hasMore = JsonParserUtil.getBoolean(response, "hasMore")
                         && !returnedCursor.isEmpty();
                 List<ChatEntity> chats = new ArrayList<>();
+                List<MessageEntity> cachedMessages = parseMessageCache(response);
                 Set<String> chatsWithServerUnreadCount = new HashSet<>();
                 long now = System.currentTimeMillis();
                 for (JsonElement element : userProfiles) {
@@ -1072,31 +1215,42 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                         }
                     }
                 }
+                Log.d(TESTING_TAG, "chat_list source=routes phase=response page="
+                        + (pagination ? "pagination" : "initial")
+                        + " chats=" + chats.size()
+                        + " cachedMessages=" + cachedMessages.size()
+                        + " hasMore=" + hasMore
+                        + " hasNextCursor=" + !returnedCursor.isEmpty());
                 ioExecutor.execute(() -> {
                     long databaseStarted = SystemClock.elapsedRealtime();
-                    for (ChatEntity chat : chats) {
-                        ChatEntity existing = chatDao.findByChatId(chat.chatId);
-                        if (chat.chatId.equals(activeChatId)) {
-                            chat.unreadCount = 0;
-                        } else if (existing != null
-                                && !chatsWithServerUnreadCount.contains(chat.chatId)) {
-                            chat.unreadCount = existing.unreadCount;
-                        }
-                    }
-                    chatDao.upsertAll(chats);
+                    preserveLocalAttachmentUris(cachedMessages);
+                    if (!cachedMessages.isEmpty()) messageDao.upsertAll(cachedMessages);
+                    chatDao.mergeServerPage(
+                            chats, chatsWithServerUnreadCount, activeChatId);
+                    Log.d(TESTING_TAG, "chat_list source=routes phase=room_write_complete page="
+                            + (pagination ? "pagination" : "initial")
+                            + " chats=" + chats.size()
+                            + " cachedMessages=" + cachedMessages.size());
                     if (isDebugBuild()) {
                         Log.d(PERF_TAG, "pageRoomWrite="
                                 + (SystemClock.elapsedRealtime() - databaseStarted)
-                                + "ms chats=" + chats.size() + " pagination=" + pagination);
+                                + "ms chats=" + chats.size()
+                                + " cachedMessages=" + cachedMessages.size()
+                                + " pagination=" + pagination);
                     }
                     prefetchChatProfilePhotos(chats);
+                    recordServerMerge(generation, chats.size());
+                    markChatListFirstPageLoaded(generation, pagination);
                     finishChatListPage(generation, returnedCursor, hasMore);
                 });
             }
 
             @Override
             public void onError(String error) {
-                releaseChatListPage(generation);
+                Log.e(TESTING_TAG, "chat_list source=routes phase=error page="
+                        + (pagination ? "pagination" : "initial")
+                        + " generation=" + generation + " error=" + error);
+                failChatListPage(generation, error);
                 notifySocketError(error);
             }
         });
@@ -1108,14 +1262,48 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         chatListPageLoading = false;
         nextChatListCursor = cursor;
         chatListHasMore = hasMore;
-        chatListPaginationLoading.postValue(false);
+        chatListPaginating = false;
+        chatListRefreshing = false;
+        chatListError = "";
+        publishChatListState();
     }
 
-    private synchronized void releaseChatListPage(int generation) {
+    private synchronized void markChatListFirstPageLoaded(
+            int generation, boolean pagination) {
+        if (generation == chatListGeneration && !pagination) {
+            chatListFirstPageLoaded = true;
+        }
+    }
+
+    private synchronized void recordServerMerge(int generation, int mergedChatCount) {
+        if (generation == chatListGeneration && mergedChatCount > 0) {
+            chatCacheLoaded = true;
+            cachedChatCount = Math.max(cachedChatCount, mergedChatCount);
+        }
+    }
+
+    private synchronized void failChatListPage(int generation, String error) {
         if (generation == chatListGeneration) {
             chatListPageLoading = false;
-            chatListPaginationLoading.postValue(false);
+            chatListPaginating = false;
+            chatListRefreshing = false;
+            chatListError = error == null || error.trim().isEmpty()
+                    ? "Unable to refresh chats." : error.trim();
+            publishChatListState();
         }
+    }
+
+    private void publishChatListState() {
+        ChatListState state;
+        synchronized (this) {
+            state = ChatListState.create(
+                    chatCacheLoaded,
+                    cachedChatCount,
+                    chatListRefreshing,
+                    chatListPaginating,
+                    chatListError);
+        }
+        chatListState.postValue(state);
     }
 
     private void notifyTotalUnread(int totalUnread) {
@@ -1177,29 +1365,74 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     public void hydrateChat(String chatId, String phoneNumber) {
+        hydrateChatPage(chatId, phoneNumber, null, null);
+    }
+
+    public void hydrateChatPage(String chatId, String phoneNumber, String cursor,
+                                MessagePageCallback callback) {
         if (chatId == null || chatId.trim().isEmpty()) {
+            if (callback != null) callback.onError("Chat id missing.");
             return;
         }
-        appFunctionManager.getChat(chatId, phoneNumber, new AppFunctionManager.Callback() {
+        Log.d(TESTING_TAG, "message_list source=routes phase=request chatId=" + chatId
+                + " page=" + (cursor == null || cursor.isEmpty() ? "initial" : "pagination")
+                + " pageSize=" + MESSAGE_PAGE_SIZE
+                + " hasCursor=" + (cursor != null && !cursor.isEmpty()));
+        appFunctionManager.getChat(
+                chatId, phoneNumber, MESSAGE_PAGE_SIZE, cursor, new AppFunctionManager.Callback() {
             @Override
             public void onSuccess(Object object) {
                 if (!(object instanceof JsonObject)) {
+                    if (callback != null) callback.onError("Invalid chat response.");
                     return;
                 }
-                JsonElement chatElement = ((JsonObject) object).get("chat");
-                if (chatElement == null || !chatElement.isJsonObject()) {
-                    return;
+                JsonObject response = (JsonObject) object;
+                List<MessageEntity> messages = new ArrayList<>();
+                JsonElement pageElement = response.get("messages");
+                if (pageElement != null && pageElement.isJsonArray()) {
+                    for (JsonElement element : pageElement.getAsJsonArray()) {
+                        if (element == null || !element.isJsonObject()) continue;
+                        MessageEntity entity = toMessageEntity(element.getAsJsonObject());
+                        if (entity != null) messages.add(entity);
+                    }
+                } else {
+                    // Compatibility with servers that still return the complete chat document.
+                    JsonElement chatElement = response.get("chat");
+                    if (chatElement != null && chatElement.isJsonObject()) {
+                        messages = parseChatDocument(chatElement.getAsJsonObject(), chatId);
+                    }
                 }
-                List<MessageEntity> messages = parseChatDocument(chatElement.getAsJsonObject(), chatId);
+                final List<MessageEntity> page = messages;
+                final String nextCursor = response.has("nextCursor")
+                        && !response.get("nextCursor").isJsonNull()
+                        ? response.get("nextCursor").getAsString() : null;
+                final boolean hasMore = response.has("hasMore")
+                        && !response.get("hasMore").isJsonNull()
+                        && response.get("hasMore").getAsBoolean();
+                Log.d(TESTING_TAG, "message_list source=routes phase=response chatId=" + chatId
+                        + " page=" + (cursor == null || cursor.isEmpty()
+                                ? "initial" : "pagination")
+                        + " messages=" + page.size()
+                        + " hasMore=" + hasMore
+                        + " hasNextCursor=" + (nextCursor != null && !nextCursor.isEmpty()));
                 ioExecutor.execute(() -> {
-                    preserveLocalAttachmentUris(messages);
-                    messageDao.upsertAll(messages);
+                    preserveLocalAttachmentUris(page);
+                    if (!page.isEmpty()) messageDao.upsertAll(page);
+                    Log.d(TESTING_TAG, "message_list source=routes phase=room_write_complete chatId="
+                            + chatId + " messages=" + page.size());
+                    if (callback != null) mainHandler.post(
+                            () -> callback.onLoaded(nextCursor, hasMore, page.size()));
                 });
             }
 
             @Override
             public void onError(String error) {
+                Log.e(TESTING_TAG, "message_list source=routes phase=error chatId=" + chatId
+                        + " page=" + (cursor == null || cursor.isEmpty()
+                                ? "initial" : "pagination")
+                        + " error=" + error);
                 notifySocketError(error);
+                if (callback != null) callback.onError(error);
             }
         });
     }
@@ -1403,6 +1636,9 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     && !locallyReadChats.contains(message.chatId);
             preserveLocalAttachmentUri(message);
             messageDao.upsert(message);
+            Log.d(TESTING_TAG, "message_cache source=socket phase=room_upsert chatId="
+                    + message.chatId + " messageId=" + message.messageId
+                    + " sentTime=" + message.sentTime);
             updateChatSummary(message);
             boolean incoming = !normalizeAccountId(message.senderId).equals(currentUserId);
             if (incoming && isNewMessage) {
@@ -1607,6 +1843,33 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             if (entity != null) {
                 messages.add(entity);
             }
+        }
+        return messages;
+    }
+
+    private List<MessageEntity> parseMessageCache(JsonObject response) {
+        List<MessageEntity> messages = new ArrayList<>();
+        JsonElement cacheElement = response.get("messageCache");
+        if (cacheElement == null || !cacheElement.isJsonObject()) return messages;
+        for (java.util.Map.Entry<String, JsonElement> chatEntry
+                : cacheElement.getAsJsonObject().entrySet()) {
+            if (chatEntry.getValue() == null || !chatEntry.getValue().isJsonArray()) continue;
+            int chatMessageCount = 0;
+            for (JsonElement element : chatEntry.getValue().getAsJsonArray()) {
+                if (element == null || !element.isJsonObject()) continue;
+                JsonObject message = element.getAsJsonObject();
+                if (!message.has("chatId") || message.get("chatId").isJsonNull()
+                        || message.get("chatId").getAsString().isEmpty()) {
+                    message.addProperty("chatId", chatEntry.getKey());
+                }
+                MessageEntity entity = toMessageEntity(message);
+                if (entity != null) {
+                    messages.add(entity);
+                    chatMessageCount++;
+                }
+            }
+            Log.d(TESTING_TAG, "message_cache source=list_routes phase=parsed chatId="
+                    + chatEntry.getKey() + " messages=" + chatMessageCount);
         }
         return messages;
     }

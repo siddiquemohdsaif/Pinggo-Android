@@ -70,6 +70,9 @@ public interface AppRestAPI {
   @POST("chats/settings")
   Call<JsonObject> updateChatSettings(@Body RequestBody body);
 
+  @POST("chats/settings/bulk")
+  Call<JsonObject> updateChatSettingsBulk(@Body RequestBody body);
+
   @POST("profile/presence")
   Call<JsonObject> syncPresence(@Body RequestBody body);
 

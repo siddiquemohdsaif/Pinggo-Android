@@ -13,6 +13,7 @@ import android.graphics.BitmapShader;
 import android.graphics.Shader;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -38,6 +39,7 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.activity.NewChatActivity;
 import com.w3n.pinggo.data.local.ChatEntity;
+import com.w3n.pinggo.data.repository.ChatListState;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.modals.Chat;
 
@@ -50,6 +52,7 @@ import java.util.Locale;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.LinkedHashSet;
+import java.util.Objects;
 import java.util.Set;
 import java.util.Collections;
 import java.util.concurrent.ExecutorService;
@@ -77,6 +80,7 @@ public final class ChatsView extends View {
     private Runnable newGroupListener;
     private final Bitmap dividerBitmap = colorBitmap(0xFFE5EAF0);
     private final Bitmap actionBitmap = colorBitmap(ACCENT);
+    private final Bitmap whiteBitmap = colorBitmap(Color.WHITE);
     private final Bitmap emptyTransparentBitmap = colorBitmap(Color.TRANSPARENT);
     private final Bitmap floatingActionBitmap = BitmapFactory.decodeResource(
             getResources(), R.drawable.chat_floating_action);
@@ -104,8 +108,8 @@ public final class ChatsView extends View {
     private final Bitmap videoOutgoingBitmap = resourceBitmap(R.drawable.chat_video_outgoing);
     private final Bitmap videoMissedBitmap = resourceBitmap(R.drawable.chat_video_missed);
     private final Observer<List<ChatEntity>> observer = entities -> post(() -> submit(toChats(entities)));
-    private final Observer<Boolean> paginationObserver = loading -> post(() -> {
-        paginationLoading = Boolean.TRUE.equals(loading);
+    private final Observer<ChatListState> listStateObserver = state -> post(() -> {
+        chatListState = state == null ? ChatListState.initial() : state;
         updateVisibility();
     });
     private ComponentList<Chat> list;
@@ -118,8 +122,13 @@ public final class ChatsView extends View {
     private Text emptyStartChatLabel;
     private Button emptyCreateGroup;
     private Button floatingAction;
+    private Text refreshErrorText;
+    private Image paginationBackground;
+    private Progress initialProgress;
+    private Text initialLoadingText;
     private Progress paginationProgress;
-    private boolean paginationLoading;
+    private Text paginationLoadingText;
+    private ChatListState chatListState = ChatListState.initial();
     private boolean loaded;
     private boolean observing;
     private String statusMessage = "Loading chats...";
@@ -139,6 +148,8 @@ public final class ChatsView extends View {
     private final Calendar todayCalendar = Calendar.getInstance();
     private final Date reusableDate = new Date();
     private boolean frameProfilerRunning;
+    private float loadingGestureStartY;
+    private boolean loadingGestureBlocked;
     private long previousFrameNanos;
     private final Choreographer.FrameCallback frameProfiler =
             new Choreographer.FrameCallback() {
@@ -175,7 +186,7 @@ public final class ChatsView extends View {
             return;
         }
         startObserving();
-        repository.refreshChatList(phone);
+        repository.ensureChatListLoaded(phone);
     }
 
     public void submit(List<Chat> chats) {
@@ -198,8 +209,9 @@ public final class ChatsView extends View {
     public boolean isSelecting() { return !selectedChatIds.isEmpty(); }
     public boolean clearSelection() {
         if (selectedChatIds.isEmpty()) return false;
+        List<String> previouslySelected = new ArrayList<>(selectedChatIds);
         selectedChatIds.clear();
-        adapter.notifyDataSetChanged();
+        for (String chatId : previouslySelected) adapter.notifyChatChanged(chatId);
         updateVisibility();
         notifySelectionChanged();
         return true;
@@ -212,25 +224,25 @@ public final class ChatsView extends View {
         if (previous != null) typingHandler.removeCallbacks(previous);
         if (!typing) {
             typingBaselines.remove(chatId);
-            adapter.notifyDataSetChanged();
+            adapter.notifyChatChanged(chatId);
             return;
         }
         typingBaselines.put(chatId, adapter.findLastMessageTime(chatId));
         Runnable timeout = () -> {
             typingBaselines.remove(chatId);
             typingTimeouts.remove(chatId);
-            adapter.notifyDataSetChanged();
+            adapter.notifyChatChanged(chatId);
         };
         typingTimeouts.put(chatId, timeout);
         typingHandler.postDelayed(timeout, 30_000L);
-        adapter.notifyDataSetChanged();
+        adapter.notifyChatChanged(chatId);
     }
 
     private void startObserving() {
         if (observing) return;
         observing = true;
         repository.observeChats().observeForever(observer);
-        repository.observeChatListPaginationLoading().observeForever(paginationObserver);
+        repository.observeChatListState().observeForever(listStateObserver);
     }
 
     @Override protected void onAttachedToWindow() {
@@ -248,7 +260,7 @@ public final class ChatsView extends View {
         Choreographer.getInstance().removeFrameCallback(frameProfiler);
         if (observing) {
             repository.observeChats().removeObserver(observer);
-            repository.observeChatListPaginationLoading().removeObserver(paginationObserver);
+            repository.observeChatListState().removeObserver(listStateObserver);
             observing = false;
         }
         super.onDetachedFromWindow();
@@ -348,14 +360,45 @@ public final class ChatsView extends View {
                 actionBounds)
                 .setImageScaleType(Image.ScaleType.FIT_CENTER).setRippleEnabled(true)
                 .setRippleColor(0x22FFFFFF).setOnClickListener(id -> openNewChat()));
+        float initialProgressSize = 72f * scale;
+        initialProgress = stateLayer.add(new Progress.Builder(getContext(),
+                "chat_initial_progress",
+                new RectF((width - initialProgressSize) / 2f,
+                        (height - initialProgressSize) / 2f,
+                        (width + initialProgressSize) / 2f,
+                        (height + initialProgressSize) / 2f))
+                .setStyle(Progress.Style.CIRCULAR)
+                .setMode(Progress.Mode.INDETERMINATE)
+                .setProgressColor(ACCENT)
+                .setTrackColor(0x22019CC4)
+                .setThickness(7f)
+                .setIndeterminateDuration(850L)
+                .setVisible(false));
+        initialLoadingText = stateLayer.add(new Text.Builder(getContext(),
+                "chat_initial_loading_text", "Loading chats...",
+                new RectF(dp(20), (height + initialProgressSize) / 2f + dp(10),
+                        width - dp(20), (height + initialProgressSize) / 2f + dp(54)))
+                .setFont(NativeFonts.INTER).setFontVariations(FontVariation.MEDIUM)
+                .setTextSizePx(sp(14)).setTextColor(SECONDARY)
+                .setAlignment(Text.Alignment.CENTER)
+                .setVerticalAlignment(Text.VerticalAlignment.CENTER)
+                .setMaxLines(1));
+        initialLoadingText.setVisible(false);
+        float footerHeight = paginationFooterHeight();
+        float footerTop = height - footerHeight;
+        paginationBackground = stateLayer.add(new Image.Builder(getContext(),
+                "chat_page_background", whiteBitmap,
+                new RectF(0, footerTop, width, height))
+                .setScaleType(Image.ScaleType.FIT_XY));
+        paginationBackground.setVisible(false);
         float progressSize = 44f * scale;
-        float progressBottom = 18f * scale;
+        float loadingGroupWidth = 330f * scale;
+        float loadingGroupLeft = (width - loadingGroupWidth) / 2f;
+        float progressTop = footerTop + (footerHeight - progressSize) / 2f;
         paginationProgress = stateLayer.add(new Progress.Builder(getContext(),
                 "chat_page_progress",
-                new RectF((width - progressSize) / 2f,
-                        height - progressBottom - progressSize,
-                        (width + progressSize) / 2f,
-                        height - progressBottom))
+                new RectF(loadingGroupLeft, progressTop,
+                        loadingGroupLeft + progressSize, progressTop + progressSize))
                 .setStyle(Progress.Style.CIRCULAR)
                 .setMode(Progress.Mode.INDETERMINATE)
                 .setProgressColor(ACCENT)
@@ -363,6 +406,25 @@ public final class ChatsView extends View {
                 .setThickness(6f)
                 .setIndeterminateDuration(850L)
                 .setVisible(false));
+        paginationLoadingText = stateLayer.add(new Text.Builder(getContext(),
+                "chat_page_loading_text", "Loading chats...",
+                new RectF(loadingGroupLeft + progressSize + 24f * scale, footerTop,
+                        loadingGroupLeft + loadingGroupWidth, height))
+                .setFont(NativeFonts.INTER).setFontVariations(FontVariation.MEDIUM)
+                .setTextSizePx(sp(14)).setTextColor(SECONDARY)
+                .setAlignment(Text.Alignment.START)
+                .setVerticalAlignment(Text.VerticalAlignment.CENTER)
+                .setMaxLines(1));
+        paginationLoadingText.setVisible(false);
+        refreshErrorText = stateLayer.add(new Text.Builder(getContext(),
+                "chat_refresh_error", "Couldn't refresh chats. Showing saved chats.",
+                new RectF(dp(20), height - dp(64), width - dp(20), height - dp(12)))
+                .setFont(NativeFonts.INTER).setFontVariations(FontVariation.MEDIUM)
+                .setTextSizePx(sp(13)).setTextColor(UNREAD_PREVIEW)
+                .setAlignment(Text.Alignment.CENTER)
+                .setVerticalAlignment(Text.VerticalAlignment.CENTER)
+                .setMaxLines(1));
+        refreshErrorText.setVisible(false);
         updateVisibility();
     }
 
@@ -374,10 +436,29 @@ public final class ChatsView extends View {
     private void updateVisibility() {
         if (list == null || status == null) return;
         boolean hasChats = adapter.getItemCount() > 0;
-        boolean empty = !hasChats && statusMessage.equals(
-                getResources().getString(R.string.start_new_conversation));
+        ChatListState.Status state = chatListState.getStatus();
+        boolean awaitingCachedRows = !adapter.hasChats()
+                && chatListState.getCachedChatCount() > 0;
+        boolean initialLoading = !hasChats
+                && (state == ChatListState.Status.INITIAL_CACHE_LOADING
+                || awaitingCachedRows);
+        boolean empty = !hasChats && !adapter.hasChats()
+                && state == ChatListState.Status.EMPTY;
+        boolean errorWithoutCache = !hasChats
+                && state == ChatListState.Status.ERROR_WITHOUT_CACHE;
+        boolean errorWithCache = adapter.hasChats()
+                && state == ChatListState.Status.ERROR_WITH_CACHE;
+        boolean showingProgress = state == ChatListState.Status.REFRESHING
+                || state == ChatListState.Status.PAGINATING;
+        float listBottom = getHeight() - (hasChats && showingProgress
+                ? paginationFooterHeight() : 0f);
+        if (hasChats && showingProgress) list.stopScroll();
+        list.setRegion(new RectF(0, 0, getWidth(), Math.max(0, listBottom)));
         list.setVisible(hasChats).setEnabled(hasChats);
-        status.setText(statusMessage).setVisible(!hasChats && !empty);
+        status.setText(errorWithoutCache
+                        ? "Couldn't refresh chats. Check your connection and try again."
+                        : statusMessage)
+                .setVisible(!hasChats && !empty && !initialLoading);
         emptyIllustration.setVisible(empty);
         emptyTitle.setVisible(empty);
         emptyDescription.setVisible(empty);
@@ -386,8 +467,23 @@ public final class ChatsView extends View {
         emptyStartChatLabel.setVisible(empty);
         emptyCreateGroup.setVisible(empty).setEnabled(empty);
         floatingAction.setVisible(!isSelecting()).setEnabled(!isSelecting());
+        if (initialProgress != null) {
+            initialProgress.setVisible(initialLoading);
+        }
+        if (initialLoadingText != null) {
+            initialLoadingText.setVisible(initialLoading);
+        }
+        if (paginationBackground != null) {
+            paginationBackground.setVisible(hasChats && showingProgress);
+        }
         if (paginationProgress != null) {
-            paginationProgress.setVisible(hasChats && paginationLoading);
+            paginationProgress.setVisible(hasChats && showingProgress);
+        }
+        if (paginationLoadingText != null) {
+            paginationLoadingText.setVisible(hasChats && showingProgress);
+        }
+        if (refreshErrorText != null) {
+            refreshErrorText.setVisible(errorWithCache);
         }
         invalidate();
     }
@@ -395,7 +491,7 @@ public final class ChatsView extends View {
     private void toggleSelection(Chat chat) {
         if (chat == null || chat.getChatId() == null) return;
         if (!selectedChatIds.add(chat.getChatId())) selectedChatIds.remove(chat.getChatId());
-        adapter.notifyDataSetChanged();
+        adapter.notifyChatChanged(chat.getChatId());
         updateVisibility();
         notifySelectionChanged();
     }
@@ -416,9 +512,40 @@ public final class ChatsView extends View {
 
     @Override protected void onDraw(Canvas canvas) { super.onDraw(canvas); layers.draw(canvas); }
     @Override public boolean onTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            loadingGestureStartY = event.getY();
+            loadingGestureBlocked = false;
+        } else if (event.getActionMasked() == MotionEvent.ACTION_MOVE
+                && !loadingGestureBlocked && isChatPageLoading()
+                && event.getY() - loadingGestureStartY
+                < -ViewConfiguration.get(getContext()).getScaledTouchSlop()) {
+            MotionEvent cancel = MotionEvent.obtain(event);
+            cancel.setAction(MotionEvent.ACTION_CANCEL);
+            layers.onTouchEvent(cancel);
+            cancel.recycle();
+            loadingGestureBlocked = true;
+        }
+        if (loadingGestureBlocked) {
+            if (event.getActionMasked() == MotionEvent.ACTION_UP
+                    || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                loadingGestureBlocked = false;
+            }
+            return true;
+        }
         boolean handled = layers.onTouchEvent(event);
         if (handled) post(this::loadNextPageIfNeeded);
         return handled || super.onTouchEvent(event);
+    }
+
+    private boolean isChatPageLoading() {
+        ChatListState.Status state = chatListState.getStatus();
+        return adapter.getItemCount() > 0
+                && (state == ChatListState.Status.REFRESHING
+                || state == ChatListState.Status.PAGINATING);
+    }
+
+    private float paginationFooterHeight() {
+        return 112f * figmaConfig.getScale(Math.max(1, getWidth()));
     }
 
     private void loadNextPageIfNeeded() {
@@ -438,14 +565,15 @@ public final class ChatsView extends View {
         typingTimeouts.clear();
         if (observing) {
             repository.observeChats().removeObserver(observer);
-            repository.observeChatListPaginationLoading().removeObserver(paginationObserver);
+            repository.observeChatListState().removeObserver(listStateObserver);
         }
         observing = false;
         avatarExecutor.shutdownNow();
         avatarLoads.clear();
         avatarCache.evictAll();
         layers.release();
-        recycle(dividerBitmap, actionBitmap, emptyTransparentBitmap, floatingActionBitmap,
+        recycle(dividerBitmap, actionBitmap, whiteBitmap, emptyTransparentBitmap,
+                floatingActionBitmap,
                 emptyIllustrationBitmap,
                 emptyStartChatIconBitmap,
                 unreadBadgeBitmap,
@@ -473,16 +601,90 @@ public final class ChatsView extends View {
             }
             all.clear();
             if (values != null) all.addAll(values);
-            filter(currentQuery);
+            query = normalizeQuery(currentQuery);
+            applyVisibleDiff(filteredChats());
         }
         void filter(String value) {
-            query = value == null ? "" : value.trim().toLowerCase(Locale.US);
-            chats.clear();
+            query = normalizeQuery(value);
+            applyVisibleDiff(filteredChats());
+        }
+        private String normalizeQuery(String value) {
+            return value == null ? "" : value.trim().toLowerCase(Locale.US);
+        }
+        private List<Chat> filteredChats() {
+            List<Chat> filtered = new ArrayList<>();
             for (Chat chat : all) {
                 String name = chat.getContactName() == null ? "" : chat.getContactName();
-                if (query.isEmpty() || name.toLowerCase(Locale.US).contains(query)) chats.add(chat);
+                if (query.isEmpty() || name.toLowerCase(Locale.US).contains(query)) {
+                    filtered.add(chat);
+                }
             }
-            notifyDataSetChanged();
+            return filtered;
+        }
+        private void applyVisibleDiff(List<Chat> updated) {
+            String previousLastChatId = chats.isEmpty()
+                    ? null : chats.get(chats.size() - 1).getChatId();
+            boolean structureChanged = false;
+            for (int targetIndex = 0; targetIndex < updated.size(); targetIndex++) {
+                Chat target = updated.get(targetIndex);
+                int existingIndex = indexOfChatFrom(target.getChatId(), targetIndex);
+                if (existingIndex < 0) {
+                    chats.add(targetIndex, target);
+                    notifyItemInserted(targetIndex);
+                    structureChanged = true;
+                    continue;
+                }
+                if (existingIndex != targetIndex) {
+                    Chat moved = chats.remove(existingIndex);
+                    chats.add(targetIndex, moved);
+                    notifyItemMoved(existingIndex, targetIndex);
+                    structureChanged = true;
+                }
+                Chat previous = chats.set(targetIndex, target);
+                if (!sameChatContent(previous, target)) notifyItemChanged(targetIndex);
+            }
+            for (int index = chats.size() - 1; index >= updated.size(); index--) {
+                chats.remove(index);
+                notifyItemRemoved(index);
+                structureChanged = true;
+            }
+            if (structureChanged) {
+                notifyChatChanged(previousLastChatId);
+                String currentLastChatId = chats.isEmpty()
+                        ? null : chats.get(chats.size() - 1).getChatId();
+                if (!Objects.equals(previousLastChatId, currentLastChatId)) {
+                    notifyChatChanged(currentLastChatId);
+                }
+            }
+        }
+        private int indexOfChatFrom(String chatId, int startIndex) {
+            for (int index = Math.max(0, startIndex); index < chats.size(); index++) {
+                if (Objects.equals(chats.get(index).getChatId(), chatId)) return index;
+            }
+            return -1;
+        }
+        private boolean sameChatContent(Chat first, Chat second) {
+            return Objects.equals(first.getChatId(), second.getChatId())
+                    && Objects.equals(first.getContactName(), second.getContactName())
+                    && Objects.equals(first.getProfilePhotoUrl(), second.getProfilePhotoUrl())
+                    && Objects.equals(first.getLocalProfilePhotoPath(),
+                    second.getLocalProfilePhotoPath())
+                    && Objects.equals(first.getLastMessage(), second.getLastMessage())
+                    && first.getLastMessageTime() == second.getLastMessageTime()
+                    && first.isLastMessageOutgoing() == second.isLastMessageOutgoing()
+                    && Objects.equals(first.getLastMessageDeliveredTime(),
+                    second.getLastMessageDeliveredTime())
+                    && Objects.equals(first.getLastMessageReadTime(),
+                    second.getLastMessageReadTime())
+                    && Objects.equals(first.getLastMessageType(), second.getLastMessageType())
+                    && Objects.equals(first.getLastMessageAttachmentName(),
+                    second.getLastMessageAttachmentName())
+                    && first.getUnreadCount() == second.getUnreadCount()
+                    && first.isPinned() == second.isPinned()
+                    && first.isMuted() == second.isMuted()
+                    && first.isArchived() == second.isArchived()
+                    && first.isOnline() == second.isOnline()
+                    && first.getLastSeen() == second.getLastSeen();
         }
         boolean hasChats() { return !all.isEmpty(); }
         long findLastMessageTime(String chatId) {
@@ -496,6 +698,10 @@ public final class ChatsView extends View {
                 if (chats.get(index).getChatId().equals(chatId)) return index;
             }
             return -1;
+        }
+        void notifyChatChanged(String chatId) {
+            int position = indexOfChat(chatId);
+            if (position >= 0) notifyItemChanged(position);
         }
         @Override public int getItemCount() { return chats.size(); }
         @Override public Chat getItem(int position) { return chats.get(position); }
@@ -547,6 +753,14 @@ public final class ChatsView extends View {
             row.add(new Image.Builder(getContext(), scope.id("state_with_unread"), pinnedBitmap,
                     new RectF(width - 175f * scale, 103f * scale,
                             width - 143f * scale, 135f * scale))
+                    .setScaleType(Image.ScaleType.FIT_CENTER));
+            row.add(new Image.Builder(getContext(), scope.id("second_state"), mutedBitmap,
+                    new RectF(width - 132f * scale, 103f * scale,
+                            width - 100f * scale, 135f * scale))
+                    .setScaleType(Image.ScaleType.FIT_CENTER));
+            row.add(new Image.Builder(getContext(), scope.id("second_state_with_unread"),
+                    mutedBitmap, new RectF(width - 233f * scale, 103f * scale,
+                            width - 201f * scale, 135f * scale))
                     .setScaleType(Image.ScaleType.FIT_CENTER));
             row.add(new Image.Builder(getContext(), scope.id("message_status"), deliveredBitmap,
                     new RectF(220f * scale, 115f * scale, 265f * scale, 143f * scale))
@@ -618,6 +832,8 @@ public final class ChatsView extends View {
             item.find("unread_with_state", Text.class).setVisible(false);
             item.find("state", Image.class).setVisible(false);
             item.find("state_with_unread", Image.class).setVisible(false);
+            item.find("second_state", Image.class).setVisible(false);
+            item.find("second_state_with_unread", Image.class).setVisible(false);
             if (unread) {
                 String badgeId = hasState ? "unread_badge_with_state" : "unread_badge";
                 String textId = hasState ? "unread_with_state" : "unread";
@@ -629,6 +845,13 @@ public final class ChatsView extends View {
                 item.find(stateId, Image.class)
                         .setBitmap(chat.isPinned() ? pinnedBitmap : mutedBitmap)
                         .setVisible(true);
+                if (chat.isPinned() && chat.isMuted()) {
+                    String secondStateId = unread
+                            ? "second_state_with_unread" : "second_state";
+                    item.find(secondStateId, Image.class)
+                            .setBitmap(mutedBitmap)
+                            .setVisible(true);
+                }
             }
             hideMessageComponents(item);
             if (typingBaselines.containsKey(chat.getChatId())) {

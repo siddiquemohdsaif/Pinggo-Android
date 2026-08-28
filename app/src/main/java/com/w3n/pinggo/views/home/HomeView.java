@@ -16,6 +16,7 @@ import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 
 import androidx.annotation.NonNull;
+import androidx.core.content.ContextCompat;
 
 import com.ogfa.nativeviews.button.Button;
 import com.ogfa.nativeviews.component.FigmaConfig;
@@ -66,6 +67,7 @@ public final class HomeView extends ViewGroup {
             getResources(), R.drawable.chat_selection_mute);
     private final Bitmap selectionDeleteBitmap = BitmapFactory.decodeResource(
             getResources(), R.drawable.chat_selection_delete);
+    private final Bitmap selectionBackBitmap = drawableBitmap(R.drawable.conversation_back);
 
     private final ChatsView chatsView;
     private final CallsView callsView;
@@ -285,10 +287,11 @@ public final class HomeView extends ViewGroup {
     private void buildSelectionHeader(float width, float top, float scale) {
         contentLayer.add(image("selection_header", selectionBackgroundBitmap,
                 new RectF(0, top, width, top + 170f * scale)));
-        contentLayer.add(text("selection_back", "←",
+        contentLayer.add(new Image.Builder(getContext(), "selection_back",
+                selectionBackBitmap,
                 new RectF(50f * scale, top + 60f * scale,
-                        101f * scale, top + 120f * scale), 51f * scale, SECONDARY,
-                FontVariation.REGULAR).setAlignment(Text.Alignment.CENTER));
+                        101f * scale, top + 111f * scale))
+                .setScaleType(Image.ScaleType.FIT_CENTER));
         contentLayer.add(new Button.Builder(getContext(), "selection_back_touch",
                 transparentBitmap, "", new RectF(30f * scale, top + 40f * scale,
                         121f * scale, top + 131f * scale))
@@ -430,7 +433,7 @@ public final class HomeView extends ViewGroup {
                 transparentBitmap, logoBitmap,
                 searchBackgroundBitmap, overflowDotsBitmap, selectionBackgroundBitmap,
                 selectionGroupBitmap, selectionPinBitmap, selectionMuteBitmap,
-                selectionDeleteBitmap}) {
+                selectionDeleteBitmap, selectionBackBitmap}) {
             if (!bitmap.isRecycled()) bitmap.recycle();
         }
     }
@@ -450,6 +453,19 @@ public final class HomeView extends ViewGroup {
     private static Bitmap colorBitmap(int color) {
         Bitmap bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
         bitmap.eraseColor(color);
+        return bitmap;
+    }
+
+    private Bitmap drawableBitmap(int resource) {
+        android.graphics.drawable.Drawable drawable =
+                ContextCompat.getDrawable(getContext(), resource);
+        if (drawable == null) return transparentBitmap;
+        int width = Math.max(1, drawable.getIntrinsicWidth());
+        int height = Math.max(1, drawable.getIntrinsicHeight());
+        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+        drawable.setBounds(0, 0, width, height);
+        drawable.draw(canvas);
         return bitmap;
     }
 

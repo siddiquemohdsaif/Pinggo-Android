@@ -13,12 +13,14 @@ import android.text.InputType;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import com.ogfa.nativeviews.button.Button;
 import com.ogfa.nativeviews.font.NativeFonts;
 import com.ogfa.nativeviews.image.Image;
 import com.ogfa.nativeviews.list.ComponentList;
+import com.ogfa.nativeviews.progress.Progress;
 import com.ogfa.nativeviews.text.FontVariation;
 import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.textfield.TextField;
@@ -28,10 +30,8 @@ import com.w3n.pinggo.R;
 import com.w3n.pinggo.data.local.MessageEntity;
 import androidx.core.content.ContextCompat;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 
 /** AAR-native conversation screen and message composer. */
 public final class ChatView extends View {
@@ -41,14 +41,12 @@ public final class ChatView extends View {
       content = layers.addLayer("content"),
       overlay = layers.addLayer("overlay");
   private final Listener listener;
-  private final MessageAdapter adapter = new MessageAdapter();
+  private final ChatMessageAdapter adapter;
   private final Bitmap white = color(Color.WHITE),
       transparent = color(Color.TRANSPARENT),
       divider = color(0xFFE5EAF0),
       accent = color(ACCENT),
       attachmentOption = color(0xFFEAF7FA),
-      incoming = color(0xFFE9EEF3),
-      outgoing = color(ACCENT),
       conversationBackground = resourceBitmap(R.drawable.conversation_background),
       headerBackground = resourceBitmap(R.drawable.conversation_header_background),
       composerBackground = resourceBitmap(R.drawable.conversation_composer_background),
@@ -56,29 +54,46 @@ public final class ChatView extends View {
       emojiIcon = resourceBitmap(R.drawable.conversation_emoji),
       attachmentIcon = resourceBitmap(R.drawable.conversation_attachment),
       cameraIcon = resourceBitmap(R.drawable.conversation_camera),
-      backIcon = drawableBitmap(R.drawable.ic_arrow_back),
-      voiceCallIcon = resourceBitmap(R.drawable.bottom_nav_calls_inactive),
-      videoCallIcon = resourceBitmap(R.drawable.bottom_nav_meet_inactive),
-      moreIcon = resourceBitmap(R.drawable.home_overflow_dots);
+      backIcon = drawableBitmap(R.drawable.conversation_back),
+      voiceCallIcon = resourceBitmap(R.drawable.conversation_voice_call),
+      videoCallIcon = resourceBitmap(R.drawable.conversation_video_call),
+      moreIcon = resourceBitmap(R.drawable.home_overflow_dots),
+      messageSentIcon = resourceBitmap(R.drawable.chat_status_sent),
+      messageDeliveredIcon = resourceBitmap(R.drawable.chat_status_delivered),
+      messageReadIcon = resourceBitmap(R.drawable.chat_status_read);
   private final String chatName, currentUser;
   private final Bitmap profile;
   private ComponentList<MessageEntity> list;
-  private Text presence, status, replyText;
+  private Text presence, status, olderStatus, replyText;
+  private Image olderLoadingBackground;
+  private Progress olderProgress;
   private TextField input;
   private Button send;
   private int topInset, bottomInset, imeInset;
   private int floatingCallInset;
   private boolean imeVisible, attachmentPanelVisible;
+  private boolean loadingOlderMessages, canLoadOlderMessages = true;
   private String draft = "", replyPreview = "";
   private String attachmentPreviewType = "", attachmentPreviewName = "";
   private String statusValue = "Loading messages...";
   private float headerBottom, baseListBottom;
+  private float loadingGestureStartY;
+  private boolean loadingGestureBlocked;
 
   public ChatView(Context c, String name, String currentUser, String photoPath, Listener l) {
     super(c);
     chatName = name;
     this.currentUser = normalize(currentUser);
     listener = l;
+    adapter =
+        new ChatMessageAdapter(
+            c,
+            this.currentUser,
+            transparent,
+            messageSentIcon,
+            messageDeliveredIcon,
+            messageReadIcon,
+            listener::attachmentState);
     Bitmap b =
         photoPath == null || photoPath.trim().isEmpty()
             ? null
@@ -129,15 +144,38 @@ public final class ChatView extends View {
   }
 
   public void submitMessages(List<MessageEntity> values) {
+    int oldCount = adapter.getItemCount();
+    int firstVisible = list == null ? -1 : list.getFirstVisiblePosition();
+    int lastVisible = list == null ? -1 : list.getLastVisiblePosition();
+    String anchorId = adapter.messageIdAt(firstVisible);
+    String oldFirstId = adapter.messageIdAt(0);
+    String oldLastId = adapter.messageIdAt(oldCount - 1);
+    boolean wasNearBottom = oldCount == 0 || lastVisible >= oldCount - 2;
     adapter.submit(values);
     boolean empty = adapter.getItemCount() == 0;
     statusValue = "";
     if (status != null) status.setText("").setVisible(false);
     if (list != null) {
       list.setVisible(!empty).setEnabled(!empty);
-      if (!empty) list.scrollToPosition(adapter.getItemCount() - 1);
+      if (!empty) {
+        boolean prepended = oldFirstId != null && adapter.indexOfMessage(oldFirstId) > 0;
+        String newLastId = adapter.messageIdAt(adapter.getItemCount() - 1);
+        boolean appended = oldLastId != null && !oldLastId.equals(newLastId);
+        int anchorPosition = adapter.indexOfMessage(anchorId);
+        if (oldCount == 0 || (wasNearBottom && appended && !prepended)) {
+          list.scrollToPosition(adapter.getItemCount() - 1);
+        } else if (anchorPosition >= 0) {
+          list.scrollToPosition(anchorPosition);
+        }
+      }
     }
     invalidate();
+  }
+
+  public void setOlderMessagesState(boolean loading, boolean canLoad) {
+    loadingOlderMessages = loading;
+    canLoadOlderMessages = canLoad;
+    updateOlderLoadingChrome();
   }
 
   public String getDraft() {
@@ -206,6 +244,11 @@ public final class ChatView extends View {
   }
 
   private void build() {
+    int previousCount = adapter.getItemCount();
+    int previousFirstVisible = list == null ? -1 : list.getFirstVisiblePosition();
+    int previousLastVisible = list == null ? -1 : list.getLastVisiblePosition();
+    String previousAnchorId = adapter.messageIdAt(previousFirstVisible);
+    boolean wasNearBottom = previousCount == 0 || previousLastVisible >= previousCount - 2;
     if (input != null) draft = input.getText();
     bg.clear();
     content.clear();
@@ -304,18 +347,14 @@ public final class ChatView extends View {
     float previewHeight = attachmentPreviewType.isEmpty() ? 0 : dp(72);
     float listBottom = composerTop - replyHeight - previewHeight;
     baseListBottom = listBottom;
+    float messageListTop = messageListTop();
     list =
         content.add(
             new ComponentList.Builder<MessageEntity>(
-                    getContext(), "messages", new RectF(0, headerBottom, w, listBottom))
+                    getContext(), "messages", new RectF(0, messageListTop, w, listBottom))
                 .setOrientation(ComponentList.Orientation.VERTICAL)
                 .setItemSizeProvider(
-                    (message, position) ->
-                        dp(isRichMessage(message) ? 112 : 72)
-                            + (hasTransientStatus(message) ? dp(18) : 0)
-                            + (message.repliedMessageId == null || message.repliedMessageId.isEmpty()
-                                ? 0
-                                : dp(22)))
+                    (message, position) -> adapter.rowHeight(message, w - dp(24)))
                 .setPaddingPx(dp(12), dp(8), dp(12), dp(12))
                 .setAdapter(adapter)
                 .setClipToBounds(true)
@@ -337,6 +376,42 @@ public final class ChatView extends View {
             SECONDARY,
             FontVariation.REGULAR,
             Text.Alignment.CENTER);
+    float olderLoadingHeight = olderLoadingHeight();
+    olderLoadingBackground =
+        overlay.add(
+            new Image.Builder(
+                    getContext(), "older_loading_background", white,
+                    new RectF(0, headerBottom, w, headerBottom + olderLoadingHeight))
+                .setScaleType(Image.ScaleType.FIT_XY));
+    float olderProgressSize = dp(18);
+    float olderGroupWidth = dp(218);
+    float olderGroupLeft = (w - olderGroupWidth) / 2f;
+    float olderProgressTop = headerBottom + (olderLoadingHeight - olderProgressSize) / 2f;
+    olderProgress =
+        overlay.add(
+            new Progress.Builder(
+                    getContext(), "older_message_progress",
+                    new RectF(olderGroupLeft, olderProgressTop,
+                        olderGroupLeft + olderProgressSize,
+                        olderProgressTop + olderProgressSize))
+                .setStyle(Progress.Style.CIRCULAR)
+                .setMode(Progress.Mode.INDETERMINATE)
+                .setProgressColor(ACCENT)
+                .setTrackColor(0x22019CC4)
+                .setThickness(dp(2))
+                .setIndeterminateDuration(850L));
+    olderStatus =
+        text(
+            overlay,
+            "older_status",
+            loadingOlderMessages ? "Loading older messages..." : "",
+            new RectF(olderGroupLeft + olderProgressSize + dp(10), headerBottom,
+                olderGroupLeft + olderGroupWidth, headerBottom + olderLoadingHeight),
+            sp(13),
+            SECONDARY,
+            FontVariation.MEDIUM,
+            Text.Alignment.START);
+    updateOlderLoadingChrome();
     float replyTop = replyPreview.isEmpty() ? composerTop - previewHeight : listBottom;
     replyText =
         text(
@@ -491,7 +566,11 @@ public final class ChatView extends View {
     boolean empty = adapter.getItemCount() == 0;
     list.setVisible(!empty);
     status.setVisible(empty && !statusValue.isEmpty());
-    if (!empty) list.scrollToPosition(adapter.getItemCount() - 1);
+    if (!empty) {
+      int anchorPosition = adapter.indexOfMessage(previousAnchorId);
+      if (wasNearBottom || anchorPosition < 0) list.scrollToPosition(adapter.getItemCount() - 1);
+      else list.scrollToPosition(anchorPosition);
+    }
     applyKeyboardInsets();
     invalidate();
   }
@@ -501,145 +580,32 @@ public final class ChatView extends View {
     float shift = imeVisible ? -Math.max(0, imeInset - bottomInset) : 0;
     overlay.setTranslationY(shift);
     float listBottom = Math.max(headerBottom + dp(1), baseListBottom + shift);
-    list.setRegion(new RectF(0, headerBottom, getWidth(), listBottom));
+    list.setRegion(new RectF(0, messageListTop(), getWidth(), listBottom));
     invalidate();
   }
 
-  private final class MessageAdapter extends ComponentList.Adapter<MessageEntity> {
-    private final List<MessageEntity> messages = new ArrayList<>();
-    private final Map<String, String> texts = new HashMap<>();
-
-    void submit(List<MessageEntity> values) {
-      messages.clear();
-      texts.clear();
-      if (values != null) {
-        messages.addAll(values);
-        for (MessageEntity m : values) texts.put(m.messageId, displayMessage(m));
-      }
-      notifyDataSetChanged();
+  private void updateOlderLoadingChrome() {
+    boolean visible = shouldShowOlderLoading();
+    if (visible && list != null) list.stopScroll();
+    if (olderLoadingBackground != null) olderLoadingBackground.setVisible(visible);
+    if (olderProgress != null) olderProgress.setVisible(visible);
+    if (olderStatus != null) {
+      olderStatus.setText(visible ? "Loading older messages..." : "").setVisible(visible);
     }
-
-    @Override
-    public int getItemCount() {
-      return messages.size();
-    }
-
-    @Override
-    public MessageEntity getItem(int p) {
-      return messages.get(p);
-    }
-
-    @Override
-    public int getItemViewType(int p) {
-      return currentUser.equals(normalize(messages.get(p).senderId)) ? 1 : 0;
-    }
-
-    @Override
-    public long getItemId(int p) {
-      String id = messages.get(p).messageId;
-      return id == null ? p : id.hashCode();
-    }
-
-    @Override
-    public void onCreateItem(ComponentList.Item item, int type) {
-      ComponentList.ItemScope s = item.getScope();
-      float w = s.width(),
-          h = s.height(),
-          left = type == 1 ? w - dp(292) : dp(4),
-          right = type == 1 ? w - dp(4) : dp(292);
-      ZLayer row = item.addLayer("row");
-      row.add(
-          new Image.Builder(
-                  getContext(),
-                  s.id("bubble"),
-                  type == 1 ? outgoing : incoming,
-                  new RectF(left, dp(8), right, h - dp(8)))
-              .setScaleType(Image.ScaleType.FIT_XY));
-      row.add(
-          textBuilder(
-              s.id("reply"),
-              "",
-              new RectF(left + dp(12), dp(7), right - dp(12), dp(30)),
-              sp(11),
-              type == 1 ? 0xDDFFFFFF : SECONDARY,
-              FontVariation.REGULAR));
-      row.add(
-          textBuilder(
-              s.id("message"),
-              "",
-              new RectF(left + dp(12), dp(24), right - dp(12), h - dp(9)),
-              sp(15),
-              type == 1 ? Color.WHITE : PRIMARY,
-              FontVariation.REGULAR));
-    }
-
-    @Override
-    public void onBindItem(ComponentList.Item item, MessageEntity m, int p) {
-      String replied = m.repliedMessageId == null ? "" : texts.get(m.repliedMessageId);
-      Text r = item.find("reply", Text.class);
-      r.setText(replied == null ? "Reply" : replied)
-          .setVisible(m.repliedMessageId != null && !m.repliedMessageId.isEmpty());
-      item.find("message", Text.class).setText(displayMessage(m));
-    }
+    if (list != null) applyKeyboardInsets();
+    else invalidate();
   }
 
-  private String displayMessage(MessageEntity message) {
-    String type = message.messageType == null ? "text" : message.messageType;
-    String displayed;
-    if ("location".equals(type) && message.latitude != null && message.longitude != null) {
-      displayed = "[LOCATION]\n" + formatCoordinate(message.latitude) + ", "
-          + formatCoordinate(message.longitude) + "\nTap to open map";
-    } else if ("image".equals(type) || "video".equals(type) || "file".equals(type)) {
-      String fallback = "file".equals(type) ? "File" : capitalize(type);
-      String name = message.attachmentName == null || message.attachmentName.isEmpty()
-          ? fallback : message.attachmentName;
-      String size = message.attachmentSize == null ? "" : " • " + formatSize(message.attachmentSize);
-      String availability = "";
-      if (!"sending".equals(message.status) && !"failed".equals(message.status)) {
-        int state = listener.attachmentState(message);
-        if (state == 1) availability = "\n↓ Download";
-        else if (state == 2) availability = "\n◷ Downloading";
-      }
-      displayed = "[" + type.toUpperCase(Locale.US) + "]\n" + name + size
-          + captionSuffix(message.text) + availability;
-    } else {
-      displayed = message.text == null ? "" : message.text;
-    }
-    return displayed + statusSuffix(message);
+  private boolean shouldShowOlderLoading() {
+    return loadingOlderMessages && adapter.getItemCount() > 0;
   }
 
-  private boolean hasTransientStatus(MessageEntity message) {
-    return "sending".equals(message.status) || "failed".equals(message.status);
+  private float messageListTop() {
+    return headerBottom + (shouldShowOlderLoading() ? olderLoadingHeight() : 0f);
   }
 
-  private String statusSuffix(MessageEntity message) {
-    if (!currentUser.equals(normalize(message.senderId))) return "";
-    if ("sending".equals(message.status)) return "\n◷ Sending";
-    if ("failed".equals(message.status)) return "\nFailed • Tap to resend";
-    return "";
-  }
-
-  private boolean isRichMessage(MessageEntity message) {
-    String type = message.messageType == null ? "text" : message.messageType;
-    return !"text".equals(type);
-  }
-
-  private String formatSize(long bytes) {
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1024 * 1024) return String.format(Locale.US, "%.1f KB", bytes / 1024f);
-    return String.format(Locale.US, "%.1f MB", bytes / (1024f * 1024f));
-  }
-
-  private String formatCoordinate(double value) {
-    return String.format(Locale.US, "%.6f", value);
-  }
-
-  private String capitalize(String value) {
-    return value.substring(0, 1).toUpperCase(Locale.US) + value.substring(1);
-  }
-
-  private String captionSuffix(String caption) {
-    return caption == null || caption.trim().isEmpty() ? "" : " — " + caption.trim();
+  private float olderLoadingHeight() {
+    return dp(48);
   }
 
   private Text.Builder textBuilder(String id, String v, RectF r, float sz, int c, FontVariation f) {
@@ -695,7 +661,35 @@ public final class ChatView extends View {
 
   @Override
   public boolean onTouchEvent(MotionEvent e) {
-    return layers.onTouchEvent(e) || super.onTouchEvent(e);
+    if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
+      loadingGestureStartY = e.getY();
+      loadingGestureBlocked = false;
+    } else if (e.getActionMasked() == MotionEvent.ACTION_MOVE
+        && !loadingGestureBlocked && shouldShowOlderLoading()
+        && e.getY() - loadingGestureStartY
+            > ViewConfiguration.get(getContext()).getScaledTouchSlop()) {
+      MotionEvent cancel = MotionEvent.obtain(e);
+      cancel.setAction(MotionEvent.ACTION_CANCEL);
+      layers.onTouchEvent(cancel);
+      cancel.recycle();
+      loadingGestureBlocked = true;
+    }
+    if (loadingGestureBlocked) {
+      if (e.getActionMasked() == MotionEvent.ACTION_UP
+          || e.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+        loadingGestureBlocked = false;
+      }
+      return true;
+    }
+    boolean handled = layers.onTouchEvent(e);
+    if (handled) post(this::loadOlderMessagesIfNeeded);
+    return handled || super.onTouchEvent(e);
+  }
+
+  private void loadOlderMessagesIfNeeded() {
+    if (list == null || adapter.getItemCount() == 0
+        || loadingOlderMessages || !canLoadOlderMessages) return;
+    if (list.getFirstVisiblePosition() <= 2) listener.onLoadOlderMessages();
   }
 
   @Override
@@ -716,10 +710,12 @@ public final class ChatView extends View {
 
   public void release() {
     layers.release();
+    adapter.release();
     recycle(
-        white, transparent, divider, accent, attachmentOption, incoming, outgoing, profile,
+        white, transparent, divider, accent, attachmentOption, profile,
         conversationBackground, headerBackground, composerBackground, microphoneIcon, emojiIcon,
-        attachmentIcon, cameraIcon, backIcon, voiceCallIcon, videoCallIcon, moreIcon);
+        attachmentIcon, cameraIcon, backIcon, voiceCallIcon, videoCallIcon, moreIcon,
+        messageSentIcon, messageDeliveredIcon, messageReadIcon);
   }
 
   private Bitmap avatar(String value) {
@@ -818,6 +814,8 @@ public final class ChatView extends View {
     void onMessageLongPress(MessageEntity message);
 
     void onMessageClick(MessageEntity message);
+
+    void onLoadOlderMessages();
 
     /** 0 = locally available, 1 = needs download, 2 = downloading. */
     int attachmentState(MessageEntity message);
