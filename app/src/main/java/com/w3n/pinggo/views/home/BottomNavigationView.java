@@ -26,7 +26,7 @@ import java.util.Map;
 public final class BottomNavigationView extends View {
     private static final float FIGMA_WIDTH = 1080f;
     private static final float FIGMA_HEIGHT = 205f;
-    private static final int SURFACE = 0xFFFFFFFF;
+    private static final int SURFACE = 0xFFF9FBFE;
     private static final int ACCENT = 0xFF019CC4;
     private static final int SECONDARY = 0xFF687382;
     private static final int PILL = 0xFFE8F6FA;
@@ -36,7 +36,8 @@ public final class BottomNavigationView extends View {
     private final FigmaConfig figmaConfig = new FigmaConfig(FIGMA_WIDTH);
     private final ZLayer layer = layers.addLayer("bottom_navigation");
     private final Listener listener;
-    private final Bitmap background = resourceBitmap(R.drawable.bottom_nav_background);
+    private final Bitmap background = bitmap(SURFACE);
+    private final Bitmap topDivider = bitmap(0xFFD5DFEB);
     private final Bitmap selected = resourceBitmap(R.drawable.bottom_nav_selected_pill);
     private final Bitmap transparent = bitmap(Color.TRANSPARENT);
     private final Bitmap badge = resourceBitmap(R.drawable.bottom_nav_badge);
@@ -57,6 +58,7 @@ public final class BottomNavigationView extends View {
     public BottomNavigationView(Context context, Listener listener) {
         super(context);
         this.listener = listener;
+        setBackgroundColor(0xFFF9FBFE);
         setClickable(true);
     }
 
@@ -84,6 +86,9 @@ public final class BottomNavigationView extends View {
         float barHeight = Math.min(FIGMA_HEIGHT * scale, height);
         layer.add(new Image.Builder(getContext(), "background", background,
                 new RectF(0, 0, width, barHeight)).setScaleType(Image.ScaleType.FIT_XY));
+        layer.add(new Image.Builder(getContext(), "top_divider", topDivider,
+                new RectF(0, 0, width, Math.max(1f, scale)))
+                .setScaleType(Image.ScaleType.FIT_XY));
         float tabWidth = width / 3f;
         addTab(Tab.CHATS, "chats", 0, tabWidth, 23f, chatActive, chatInactive, R.string.chats,
                 selectedTab == Tab.CHATS, id -> listener.onChatsSelected());
@@ -182,7 +187,7 @@ public final class BottomNavigationView extends View {
     }
     public void release() {
         layers.release();
-        for (Bitmap value : new Bitmap[]{background, selected, transparent, badge,
+        for (Bitmap value : new Bitmap[]{background, topDivider, selected, transparent, badge,
                 chatActive, chatInactive, callActive, callInactive, meetActive, meetInactive}) {
             if (!value.isRecycled()) value.recycle();
         }

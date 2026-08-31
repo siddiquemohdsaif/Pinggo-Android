@@ -139,6 +139,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             Collections.synchronizedSet(new HashSet<>());
     private final Set<String> locallyReadChats =
             Collections.synchronizedSet(new HashSet<>());
+    private final Set<String> pendingDeliveredAcks =
+            Collections.synchronizedSet(new HashSet<>());
     private final Map<String, MessageSessionState> messageSessionStates = new HashMap<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ChatWebSocketClient socketClient;
@@ -952,11 +954,52 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         socketClient.send(event);
     }
 
+    /**
+     * Acknowledges incoming messages while the chat list is visible. This deliberately
+     * does not mark them seen; seen remains tied to opening the conversation.
+     */
+    public void acknowledgePendingIncomingDeliveries() {
+        String receiverId = currentUserId == null || currentUserId.isEmpty()
+                ? normalizeAccountId(LoginStateManager.getInstance().getUID(appContext))
+                : currentUserId;
+        if (receiverId.isEmpty()) return;
+        ioExecutor.execute(() -> acknowledgeIncomingDeliveries(
+                messageDao.findUndeliveredIncoming(receiverId)));
+    }
+
+    private void acknowledgeIncomingDeliveries(List<MessageEntity> messages) {
+        if (messages == null || messages.isEmpty()) return;
+        String receiverId = currentUserId == null || currentUserId.isEmpty()
+                ? normalizeAccountId(LoginStateManager.getInstance().getUID(appContext))
+                : currentUserId;
+        if (receiverId.isEmpty()) return;
+
+        Map<String, List<String>> idsByChat = new HashMap<>();
+        for (MessageEntity message : messages) {
+            if (message == null || message.invisible
+                    || message.messageId == null || message.messageId.isEmpty()
+                    || message.chatId == null || message.chatId.isEmpty()
+                    || message.deliveredTime != null || message.readTime != null
+                    || !receiverId.equals(normalizeAccountId(message.receiverId))) {
+                continue;
+            }
+            if (!pendingDeliveredAcks.add(message.messageId)) continue;
+            idsByChat.computeIfAbsent(message.chatId, ignored -> new ArrayList<>())
+                    .add(message.messageId);
+        }
+
+        for (Map.Entry<String, List<String>> entry : idsByChat.entrySet()) {
+            Log.d(TESTING_TAG, "delivery_ack phase=request chatId=" + entry.getKey()
+                    + " messages=" + entry.getValue().size());
+            markDelivered(entry.getKey(), entry.getValue());
+        }
+    }
+
     public void hideLocalMessage(String messageId) {
         if (messageId == null || messageId.trim().isEmpty()) {
             return;
         }
-        ioExecutor.execute(() -> messageDao.deleteByMessageId(messageId));
+        ioExecutor.execute(() -> messageDao.markInvisible(messageId));
     }
 
     public void updateLocalMessageText(String messageId, String text) {
@@ -967,7 +1010,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     public void markLocalMessageDeleted(String messageId) {
-        updateLocalMessageText(messageId, "This Message was deleted");
+        if (messageId == null || messageId.trim().isEmpty()) return;
+        ioExecutor.execute(() -> messageDao.markDeleted(messageId, "This Message was deleted"));
     }
 
     public void editMessage(String chatId, String messageId, String text) {
@@ -998,43 +1042,178 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     public void deleteOwnMessage(String chatId, String messageId) {
+        deleteOwnMessages(chatId, Collections.singletonList(messageId));
+    }
+
+    public void deleteOwnMessages(String chatId, List<String> messageIds) {
         String senderId = currentUserId == null || currentUserId.isEmpty()
                 ? normalizeAccountId(LoginStateManager.getInstance().getUID(appContext))
                 : currentUserId;
-        if (chatId == null || chatId.trim().isEmpty() || messageId == null || messageId.trim().isEmpty()) {
+        List<String> ids = validMessageIds(messageIds);
+        if (chatId == null || chatId.trim().isEmpty() || ids.isEmpty()) {
             notifySocketError("Message id missing.");
             return;
         }
 
-        markLocalMessageDeleted(messageId);
+        ioExecutor.execute(() -> {
+            Map<String, MessageEntity> stored = messagesById(messageDao.findByMessageIds(ids));
+            List<String> pending = new ArrayList<>();
+            for (String messageId : ids) {
+                MessageEntity message = stored.get(messageId);
+                pending.add(messageId);
+                if (message != null && isDeleted(message)) {
+                    messageDao.markInvisible(messageId);
+                } else {
+                    messageDao.markDeleted(messageId, "This Message was deleted");
+                }
+            }
+            if (pending.isEmpty()) return;
+            JsonObject event = new JsonObject();
+            event.addProperty("type", pending.size() == 1 ? "delete_message" : "delete_messages");
+            event.addProperty("chatId", chatId);
+            if (pending.size() == 1) event.addProperty("messageId", pending.get(0));
+            else event.add("messageIds", jsonIds(pending));
+            event.addProperty("senderId", senderId);
+            if (!socketClient.send(event)) {
+                notifySocketError("Unable to delete message while socket is disconnected.");
+            }
+        });
+    }
+
+    public void deleteOpponentMessage(String chatId, String messageId) {
+        deleteOpponentMessages(chatId, Collections.singletonList(messageId));
+    }
+
+    public void deleteOpponentMessages(String chatId, List<String> messageIds) {
+        List<String> ids = validMessageIds(messageIds);
+        if (chatId == null || chatId.trim().isEmpty() || ids.isEmpty()) {
+            notifySocketError("Message id missing.");
+            return;
+        }
+
+        ioExecutor.execute(() -> messageDao.deleteByMessageIds(ids));
 
         JsonObject event = new JsonObject();
-        event.addProperty("type", "delete_message");
+        event.addProperty("type",
+                ids.size() == 1 ? "delete_opponent_message" : "delete_opponent_messages");
         event.addProperty("chatId", chatId);
-        event.addProperty("messageId", messageId);
-        event.addProperty("senderId", senderId);
+        if (ids.size() == 1) event.addProperty("messageId", ids.get(0));
+        else event.add("messageIds", jsonIds(ids));
 
         if (!socketClient.send(event)) {
             notifySocketError("Unable to delete message while socket is disconnected.");
         }
     }
 
-    public void deleteOpponentMessage(String chatId, String messageId) {
-        if (chatId == null || chatId.trim().isEmpty() || messageId == null || messageId.trim().isEmpty()) {
+    public void pinMessages(String chatId, List<String> messageIds) {
+        List<String> ids = validMessageIds(messageIds);
+        if (chatId == null || chatId.trim().isEmpty() || ids.isEmpty()) {
             notifySocketError("Message id missing.");
             return;
         }
+        ioExecutor.execute(() -> {
+            Map<String, MessageEntity> stored = messagesById(messageDao.findByMessageIds(ids));
+            List<String> pending = new ArrayList<>();
+            for (String messageId : ids) {
+                MessageEntity message = stored.get(messageId);
+                if (message != null && message.pinned) continue;
+                pending.add(messageId);
+            }
+            if (pending.isEmpty()) return;
+            long pinnedAt = System.currentTimeMillis();
+            messageDao.updatePinned(pending, true, pinnedAt);
+            JsonObject event = new JsonObject();
+            event.addProperty("type", "pin_messages");
+            event.addProperty("chatId", chatId);
+            event.add("messageIds", jsonIds(pending));
+            event.addProperty("pinned", true);
+            event.addProperty("pinned_at", pinnedAt);
+            if (!socketClient.send(event)) {
+                notifySocketError("Unable to pin messages while socket is disconnected.");
+            }
+        });
+    }
 
-        hideLocalMessage(messageId);
-
-        JsonObject event = new JsonObject();
-        event.addProperty("type", "delete_opponent_message");
-        event.addProperty("chatId", chatId);
-        event.addProperty("messageId", messageId);
-
-        if (!socketClient.send(event)) {
-            notifySocketError("Unable to delete message while socket is disconnected.");
+    public void unpinMessages(String chatId, List<String> messageIds) {
+        List<String> ids = validMessageIds(messageIds);
+        if (chatId == null || chatId.trim().isEmpty() || ids.isEmpty()) {
+            notifySocketError("Message id missing.");
+            return;
         }
+        ioExecutor.execute(() -> {
+            Map<String, MessageEntity> stored = messagesById(messageDao.findByMessageIds(ids));
+            List<String> pending = new ArrayList<>();
+            for (String messageId : ids) {
+                MessageEntity message = stored.get(messageId);
+                if (message != null && !message.pinned) continue;
+                pending.add(messageId);
+            }
+            if (pending.isEmpty()) return;
+            messageDao.updatePinned(pending, false, null);
+            JsonObject event = new JsonObject();
+            event.addProperty("type", "unpin_messages");
+            event.addProperty("chatId", chatId);
+            event.add("messageIds", jsonIds(pending));
+            event.addProperty("pinned", false);
+            if (!socketClient.send(event)) {
+                notifySocketError("Unable to unpin messages while socket is disconnected.");
+            }
+        });
+    }
+
+    public void forwardMessages(String sourceChatId, List<String> messageIds,
+                                String destinationChatId, String receiverId) {
+        List<String> ids = validMessageIds(messageIds);
+        String senderId = currentUserId == null || currentUserId.isEmpty()
+                ? normalizeAccountId(LoginStateManager.getInstance().getUID(appContext))
+                : currentUserId;
+        String normalizedReceiver = normalizeAccountId(receiverId);
+        if (sourceChatId == null || sourceChatId.trim().isEmpty()
+                || destinationChatId == null || destinationChatId.trim().isEmpty()
+                || normalizedReceiver.isEmpty() || ids.isEmpty()) {
+            notifySocketError("Forward destination or messages are missing.");
+            return;
+        }
+        JsonObject event = new JsonObject();
+        event.addProperty("type", "forward_messages");
+        event.addProperty("sourceChatId", sourceChatId);
+        event.addProperty("destinationChatId", destinationChatId);
+        event.addProperty("senderId", senderId);
+        event.addProperty("receiverId", normalizedReceiver);
+        event.addProperty("operationId", UUID.randomUUID().toString());
+        event.add("messageIds", jsonIds(ids));
+        if (!socketClient.send(event)) {
+            notifySocketError("Unable to forward messages while socket is disconnected.");
+        }
+    }
+
+    private static List<String> validMessageIds(List<String> messageIds) {
+        List<String> ids = new ArrayList<>();
+        if (messageIds == null) return ids;
+        for (String id : messageIds) {
+            if (id != null && !id.trim().isEmpty() && !ids.contains(id.trim())) ids.add(id.trim());
+        }
+        return ids;
+    }
+
+    private static JsonArray jsonIds(List<String> messageIds) {
+        JsonArray ids = new JsonArray();
+        for (String messageId : messageIds) ids.add(messageId);
+        return ids;
+    }
+
+    private static Map<String, MessageEntity> messagesById(List<MessageEntity> messages) {
+        Map<String, MessageEntity> values = new HashMap<>();
+        if (messages == null) return values;
+        for (MessageEntity message : messages) {
+            if (message != null && message.messageId != null) values.put(message.messageId, message);
+        }
+        return values;
+    }
+
+    private static boolean isDeleted(MessageEntity message) {
+        return message.deletedText != null
+                || "This Message was deleted".equals(message.text);
     }
 
     public void sendTyping(String chatId, String receiverId, boolean typing) {
@@ -1080,6 +1259,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     ioExecutor.execute(() -> {
                         preserveLocalAttachmentUris(entities);
                         messageDao.upsertAll(entities);
+                        acknowledgeIncomingDeliveries(entities);
                         Log.d(TESTING_TAG, "message_cache source=sync_routes phase=room_upsert"
                                 + " messages=" + entities.size() + " since=" + lastSync);
                         for (MessageEntity message : entities) updateChatSummary(message);
@@ -1225,6 +1405,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     long databaseStarted = SystemClock.elapsedRealtime();
                     preserveLocalAttachmentUris(cachedMessages);
                     if (!cachedMessages.isEmpty()) messageDao.upsertAll(cachedMessages);
+                    acknowledgeIncomingDeliveries(cachedMessages);
                     chatDao.mergeServerPage(
                             chats, chatsWithServerUnreadCount, activeChatId);
                     Log.d(TESTING_TAG, "chat_list source=routes phase=room_write_complete page="
@@ -1491,6 +1672,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     @Override
     public void onConnected() {
         resendCompletedUploadsAwaitingAck();
+        retryPersistedPendingMessages();
         String phoneNumber = LoginStateManager.getInstance().getUID(appContext);
         syncAfterReconnect(phoneNumber);
         if (callEventListener != null) {
@@ -1500,6 +1682,49 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 if (callEventListener != null) callEventListener.onCallEvent(event);
             });
         }
+    }
+
+    private void retryPersistedPendingMessages() {
+        String senderId = currentUserId == null || currentUserId.isEmpty()
+                ? normalizeAccountId(LoginStateManager.getInstance().getUID(appContext))
+                : currentUserId;
+        if (senderId.isEmpty()) return;
+        ioExecutor.execute(() -> {
+            List<MessageEntity> pending = messageDao.findPendingOutgoing(senderId);
+            for (MessageEntity message : pending) {
+                String clientId = message.clientMessageId == null
+                        ? message.messageId : message.clientMessageId;
+                if (clientId == null || clientId.isEmpty()
+                        || socketClient.isAwaitingMessageAck(clientId)) {
+                    continue;
+                }
+                if (("image".equals(message.messageType)
+                        || "video".equals(message.messageType)
+                        || "file".equals(message.messageType))
+                        && message.attachmentId == null) {
+                    // WorkManager owns uploads and retries them when connectivity returns.
+                    continue;
+                }
+                JsonObject attachment = null;
+                if (message.attachmentId != null && !message.attachmentId.isEmpty()) {
+                    attachment = new JsonObject();
+                    attachment.addProperty("id", message.attachmentId);
+                }
+                JsonObject location = null;
+                if (message.latitude != null && message.longitude != null) {
+                    location = new JsonObject();
+                    location.addProperty("latitude", message.latitude);
+                    location.addProperty("longitude", message.longitude);
+                    if (message.locationAccuracy != null) {
+                        location.addProperty("accuracy", message.locationAccuracy);
+                    }
+                }
+                Log.d(TESTING_TAG, "message_retry phase=reconnect clientMessageId=" + clientId);
+                sendExistingMessage(clientId, message.chatId, message.senderId,
+                        message.receiverId, message.text, message.repliedMessageId,
+                        message.messageType, attachment, location);
+            }
+        });
     }
 
     @Override
@@ -1548,6 +1773,26 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             handleOpponentMessageDeleted(event);
         } else if ("delete_opponent_message_failed".equals(type)) {
             notifySocketError(JsonParserUtil.getString(event, "message"));
+        } else if ("delete_messages_ack".equals(type)) {
+            handleMessagesDeleted(event);
+        } else if ("delete_messages_failed".equals(type)) {
+            notifySocketError(JsonParserUtil.getString(event, "message"));
+        } else if ("delete_opponent_messages_ack".equals(type)) {
+            handleOpponentMessagesDeleted(event);
+        } else if ("delete_opponent_messages_failed".equals(type)) {
+            notifySocketError(JsonParserUtil.getString(event, "message"));
+        } else if ("pin_messages_ack".equals(type) || "messages_pinned".equals(type)) {
+            handleMessagesPinned(event);
+        } else if ("pin_messages_failed".equals(type)) {
+            notifySocketError(JsonParserUtil.getString(event, "message"));
+        } else if ("unpin_messages_ack".equals(type) || "messages_unpinned".equals(type)) {
+            handleMessagesPinned(event);
+        } else if ("unpin_messages_failed".equals(type)) {
+            notifySocketError(JsonParserUtil.getString(event, "message"));
+        } else if ("forward_messages_ack".equals(type)) {
+            handleForwardedMessages(event);
+        } else if ("forward_messages_failed".equals(type)) {
+            notifySocketError(JsonParserUtil.getString(event, "message"));
         } else if ("message_edited".equals(type)) {
             handleMessageEdited(event);
         } else if ("message_deleted".equals(type)) {
@@ -1584,9 +1829,12 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     private void handleMessageAck(JsonObject event) {
         String clientMessageId = JsonParserUtil.getString(event, "clientMessageId");
         String messageId = JsonParserUtil.getString(event, "messageId");
+        String chatId = JsonParserUtil.getString(event, "chatId");
         long sentTime = JsonParserUtil.getLong(event, "sentTime");
         ioExecutor.execute(() -> {
             messageDao.applyAck(clientMessageId, messageId, MessageStatus.SENT, sentTime);
+            if (!chatId.isEmpty()) chatDao.applyLastMessageAck(chatId, clientMessageId,
+                    messageId, sentTime, MessageStatus.SENT, System.currentTimeMillis());
             MessageEntity acknowledged = messageDao.findByClientMessageId(clientMessageId);
             if (acknowledged != null) updateChatSummary(acknowledged);
             transferDao.messageSent(clientMessageId, System.currentTimeMillis());
@@ -1664,13 +1912,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     }
                 }
             }
-            messageDao.markDelivered(
-                    Collections.singletonList(message.messageId),
-                    MessageStatus.DELIVERED,
-                    System.currentTimeMillis()
-            );
+            acknowledgeIncomingDeliveries(Collections.singletonList(message));
         });
-        markDelivered(message.chatId, Collections.singletonList(message.messageId));
     }
 
     private void preserveLocalAttachmentUris(List<MessageEntity> messages) {
@@ -1694,13 +1937,19 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         for (JsonElement id : ids) {
             messageIds.add(id.getAsString());
         }
+        pendingDeliveredAcks.removeAll(messageIds);
         long deliveredTime = JsonParserUtil.getLong(event, "deliveredTime");
+        String eventChatId = JsonParserUtil.getString(event, "chatId");
         ioExecutor.execute(() -> {
             messageDao.markDelivered(messageIds, MessageStatus.DELIVERED, deliveredTime);
             for (String messageId : messageIds) {
                 MessageEntity message = messageDao.findByMessageId(messageId);
-                if (message != null) chatDao.updateLastMessageReceipt(message.chatId,
-                        message.sentTime, deliveredTime, message.readTime);
+                String chatId = message == null ? eventChatId : message.chatId;
+                long sentTime = message == null ? 0L : message.sentTime;
+                Long readTime = message == null ? null : message.readTime;
+                if (!chatId.isEmpty()) chatDao.updateLastMessageReceipt(chatId, messageId,
+                        sentTime, deliveredTime, readTime,
+                        readTime == null ? MessageStatus.DELIVERED : MessageStatus.SEEN);
             }
         });
     }
@@ -1715,12 +1964,16 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             messageIds.add(id.getAsString());
         }
         long readTime = JsonParserUtil.getLong(event, "readTime");
+        String eventChatId = JsonParserUtil.getString(event, "chatId");
         ioExecutor.execute(() -> {
             messageDao.markSeen(messageIds, MessageStatus.SEEN, readTime);
             for (String messageId : messageIds) {
                 MessageEntity message = messageDao.findByMessageId(messageId);
-                if (message != null) chatDao.updateLastMessageReceipt(message.chatId,
-                        message.sentTime, message.deliveredTime, readTime);
+                String chatId = message == null ? eventChatId : message.chatId;
+                long sentTime = message == null ? 0L : message.sentTime;
+                Long deliveredTime = message == null ? null : message.deliveredTime;
+                if (!chatId.isEmpty()) chatDao.updateLastMessageReceipt(chatId, messageId,
+                        sentTime, deliveredTime, readTime, MessageStatus.SEEN);
             }
         });
     }
@@ -1742,12 +1995,65 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 messageId = JsonParserUtil.getString(messageElement.getAsJsonObject(), "id");
             }
         }
-        markLocalMessageDeleted(messageId);
+        if (JsonParserUtil.getBoolean(event, "hidden")) hideLocalMessage(messageId);
+        else markLocalMessageDeleted(messageId);
     }
 
     private void handleOpponentMessageDeleted(JsonObject event) {
         String messageId = JsonParserUtil.getString(event, "messageId");
         hideLocalMessage(messageId);
+    }
+
+    private void handleMessagesDeleted(JsonObject event) {
+        List<String> messageIds = messageIds(event);
+        Set<String> hidden = new HashSet<>(stringList(event, "hiddenMessageIds"));
+        for (String messageId : messageIds) {
+            if (hidden.contains(messageId)) hideLocalMessage(messageId);
+            else markLocalMessageDeleted(messageId);
+        }
+    }
+
+    private void handleOpponentMessagesDeleted(JsonObject event) {
+        List<String> messageIds = messageIds(event);
+        if (!messageIds.isEmpty()) ioExecutor.execute(() -> messageDao.deleteByMessageIds(messageIds));
+    }
+
+    private void handleMessagesPinned(JsonObject event) {
+        List<String> messageIds = messageIds(event);
+        if (messageIds.isEmpty()) return;
+        boolean pinned = !event.has("pinned") || event.get("pinned").getAsBoolean();
+        Long pinnedAt = getNullableLong(event, "pinned_at");
+        ioExecutor.execute(() -> messageDao.updatePinned(messageIds, pinned, pinnedAt));
+    }
+
+    private void handleForwardedMessages(JsonObject event) {
+        JsonArray messages = event.getAsJsonArray("messages");
+        if (messages == null) return;
+        List<MessageEntity> forwarded = new ArrayList<>();
+        for (JsonElement element : messages) {
+            if (element == null || !element.isJsonObject()) continue;
+            MessageEntity message = toMessageEntity(element.getAsJsonObject());
+            if (message != null) forwarded.add(message);
+        }
+        if (forwarded.isEmpty()) return;
+        ioExecutor.execute(() -> {
+            messageDao.upsertAll(forwarded);
+            for (MessageEntity message : forwarded) updateChatSummary(message);
+        });
+    }
+
+    private static List<String> messageIds(JsonObject event) {
+        return stringList(event, "messageIds");
+    }
+
+    private static List<String> stringList(JsonObject event, String key) {
+        List<String> ids = new ArrayList<>();
+        JsonArray values = event.getAsJsonArray(key);
+        if (values == null) return ids;
+        for (JsonElement value : values) {
+            if (value != null && !value.isJsonNull()) ids.add(value.getAsString());
+        }
+        return ids;
     }
 
     private void handleOnlineStatus(JsonObject event) {
@@ -1775,9 +2081,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     private MessageEntity toMessageEntity(JsonObject message) {
-        if ("gone".equals(JsonParserUtil.getString(message, "visible"))) {
-            return null;
-        }
+        boolean invisible = "gone".equals(JsonParserUtil.getString(message, "visible"))
+                || isInvisibleToCurrentUser(message);
         String id = JsonParserUtil.getString(message, "id");
         if (id.isEmpty()) {
             id = JsonParserUtil.getString(message, "messageId");
@@ -1819,7 +2124,27 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         );
         entity.attachmentSha256 = attachment == null ? null
                 : JsonParserUtil.getString(attachment, "sha256");
+        entity.pinned = JsonParserUtil.getBoolean(message, "pinned");
+        entity.pinnedAt = getNullableLong(message, "pinned_at");
+        entity.forwardedFrom = JsonParserUtil.getString(message, "forwarded_from");
+        entity.deletedText = message.has("deletedText") && !message.get("deletedText").isJsonNull()
+                ? JsonParserUtil.getString(message, "deletedText") : null;
+        entity.invisible = invisible;
         return entity;
+    }
+
+    private boolean isInvisibleToCurrentUser(JsonObject message) {
+        JsonArray invisible = message.has("invisible") && message.get("invisible").isJsonArray()
+                ? message.getAsJsonArray("invisible") : null;
+        if (invisible == null || invisible.size() == 0) return false;
+        String viewer = currentUserId == null || currentUserId.isEmpty()
+                ? normalizeAccountId(LoginStateManager.getInstance().getUID(appContext))
+                : currentUserId;
+        for (JsonElement value : invisible) {
+            if (value != null && !value.isJsonNull()
+                    && viewer.equals(normalizeAccountId(value.getAsString()))) return true;
+        }
+        return false;
     }
 
     private List<MessageEntity> parseChatDocument(JsonObject chat, String chatId) {
@@ -1891,10 +2216,12 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         boolean isOnline = JsonParserUtil.getBoolean(profile,"isOnline");
         long lastSeen = JsonParserUtil.getLong(profile,"lastSeen");
         String lastMessage = "";
+        String lastMessageId = "";
         long lastMessageTime = 0;
         String lastMessageSenderId = "";
         Long lastMessageDeliveredTime = null;
         Long lastMessageReadTime = null;
+        String lastMessageStatus = "";
         String lastMessageType = "text";
         String lastMessageAttachmentName = "";
         JsonElement lastMessageElement = profile.get("last_message");
@@ -1905,11 +2232,16 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         if (lastMessageElement != null && lastMessageElement.isJsonObject()) {
             JsonObject lastMessageObject = lastMessageElement.getAsJsonObject();
             lastMessage = getMessagePreview(lastMessageObject);
+            lastMessageId = JsonParserUtil.getString(lastMessageObject, "id");
+            if (lastMessageId.isEmpty()) {
+                lastMessageId = JsonParserUtil.getString(lastMessageObject, "messageId");
+            }
             lastMessageTime = JsonParserUtil.getLong(lastMessageObject, "sentTime");
             lastMessageSenderId = normalizeAccountId(
                     JsonParserUtil.getString(lastMessageObject, "senderId"));
             lastMessageDeliveredTime = getNullableLong(lastMessageObject, "deliveredTime");
             lastMessageReadTime = getNullableLong(lastMessageObject, "readTime");
+            lastMessageStatus = JsonParserUtil.getString(lastMessageObject, "status");
             lastMessageType = JsonParserUtil.getString(lastMessageObject, "messageType");
             if (lastMessageType.isEmpty()) lastMessageType = "text";
             if (lastMessageObject.has("attachment")
@@ -1937,10 +2269,12 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 profilePhotoUrl,
                 "",
                 lastMessage,
+                lastMessageId,
                 lastMessageTime,
                 lastMessageSenderId,
                 lastMessageDeliveredTime,
                 lastMessageReadTime,
+                lastMessageStatus,
                 lastMessageType,
                 lastMessageAttachmentName,
                 unreadCount,
@@ -1983,8 +2317,9 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         if (message == null || message.chatId == null || message.chatId.trim().isEmpty()) return;
         long sentTime = message.sentTime > 0 ? message.sentTime : System.currentTimeMillis();
         String preview = getMessagePreview(message);
-        int updated = chatDao.updateLastMessage(message.chatId, preview, sentTime,
+        int updated = chatDao.updateLastMessage(message.chatId, message.messageId, preview, sentTime,
                 normalizeAccountId(message.senderId), message.deliveredTime, message.readTime,
+                message.status,
                 message.messageType, message.attachmentName,
                 System.currentTimeMillis());
         if (updated > 0) return;
@@ -2004,10 +2339,12 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 "",
                 "",
                 preview,
+                message.messageId,
                 sentTime,
                 senderId,
                 message.deliveredTime,
                 message.readTime,
+                message.status,
                 message.messageType,
                 message.attachmentName,
                 0,

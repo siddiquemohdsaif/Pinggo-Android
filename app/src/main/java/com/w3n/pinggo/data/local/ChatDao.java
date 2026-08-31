@@ -45,20 +45,30 @@ public interface ChatDao {
         upsertAll(serverChats);
     }
 
-    @Query("UPDATE chats SET lastMessage = :preview, lastMessageTime = :sentTime, "
+    @Query("UPDATE chats SET lastMessage = :preview, lastMessageId = :messageId, "
+            + "lastMessageTime = :sentTime, "
             + "lastMessageSenderId = :senderId, lastMessageDeliveredTime = :deliveredTime, "
-            + "lastMessageReadTime = :readTime, "
+            + "lastMessageReadTime = :readTime, lastMessageStatus = :status, "
             + "lastMessageType = :messageType, lastMessageAttachmentName = :attachmentName, "
             + "updatedAt = :updatedAt WHERE chatId = :chatId "
             + "AND lastMessageTime <= :sentTime")
-    int updateLastMessage(String chatId, String preview, long sentTime, String senderId,
-                          Long deliveredTime, Long readTime, String messageType,
+    int updateLastMessage(String chatId, String messageId, String preview, long sentTime,
+                          String senderId, Long deliveredTime, Long readTime, String status,
+                          String messageType,
                           String attachmentName, long updatedAt);
 
     @Query("UPDATE chats SET lastMessageDeliveredTime = :deliveredTime, "
-            + "lastMessageReadTime = :readTime WHERE chatId = :chatId "
-            + "AND lastMessageTime = :sentTime")
-    void updateLastMessageReceipt(String chatId, long sentTime, Long deliveredTime, Long readTime);
+            + "lastMessageReadTime = :readTime, lastMessageStatus = :status "
+            + "WHERE chatId = :chatId AND (lastMessageId = :messageId OR "
+            + "((lastMessageId IS NULL OR lastMessageId = '') AND lastMessageTime = :sentTime))")
+    void updateLastMessageReceipt(String chatId, String messageId, long sentTime,
+                                  Long deliveredTime, Long readTime, String status);
+
+    @Query("UPDATE chats SET lastMessageId = :serverMessageId, lastMessageTime = :sentTime, "
+            + "lastMessageStatus = :status, updatedAt = :updatedAt "
+            + "WHERE chatId = :chatId AND lastMessageId = :clientMessageId")
+    void applyLastMessageAck(String chatId, String clientMessageId, String serverMessageId,
+                             long sentTime, String status, long updatedAt);
 
     @Query("SELECT * FROM chats WHERE chatId = :chatId LIMIT 1")
     ChatEntity findByChatId(String chatId);

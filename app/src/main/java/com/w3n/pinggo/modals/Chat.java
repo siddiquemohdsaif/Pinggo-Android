@@ -10,6 +10,7 @@ public class Chat {
     private final boolean lastMessageOutgoing;
     private final Long lastMessageDeliveredTime;
     private final Long lastMessageReadTime;
+    private final String lastMessageStatus;
     private final String lastMessageType;
     private final String lastMessageAttachmentName;
     private final int unreadCount;
@@ -77,6 +78,18 @@ public class Chat {
                 Long lastMessageReadTime, String lastMessageType,
                 String lastMessageAttachmentName, int unreadCount, boolean pinned,
                 long notificationMuted, boolean archived, boolean isOnline, long lastSeen) {
+        this(chatId, phoneNumber, profilePhotoUrl, localProfilePhotoPath, lastMessage,
+                lastMessageTime, lastMessageOutgoing, lastMessageDeliveredTime,
+                lastMessageReadTime, null, lastMessageType, lastMessageAttachmentName,
+                unreadCount, pinned, notificationMuted, archived, isOnline, lastSeen);
+    }
+
+    public Chat(String chatId, String phoneNumber, String profilePhotoUrl,
+                String localProfilePhotoPath, String lastMessage, long lastMessageTime,
+                boolean lastMessageOutgoing, Long lastMessageDeliveredTime,
+                Long lastMessageReadTime, String lastMessageStatus, String lastMessageType,
+                String lastMessageAttachmentName, int unreadCount, boolean pinned,
+                long notificationMuted, boolean archived, boolean isOnline, long lastSeen) {
         this.chatId = chatId;
         this.phoneNumber = phoneNumber;
         this.profilePhotoUrl = profilePhotoUrl;
@@ -86,6 +99,7 @@ public class Chat {
         this.lastMessageOutgoing = lastMessageOutgoing;
         this.lastMessageDeliveredTime = lastMessageDeliveredTime;
         this.lastMessageReadTime = lastMessageReadTime;
+        this.lastMessageStatus = lastMessageStatus;
         this.lastMessageType = lastMessageType == null ? "text" : lastMessageType;
         this.lastMessageAttachmentName = lastMessageAttachmentName;
         this.unreadCount = unreadCount;
@@ -126,6 +140,7 @@ public class Chat {
     public boolean isLastMessageOutgoing() { return lastMessageOutgoing; }
     public Long getLastMessageDeliveredTime() { return lastMessageDeliveredTime; }
     public Long getLastMessageReadTime() { return lastMessageReadTime; }
+    public String getLastMessageStatus() { return lastMessageStatus; }
     public String getLastMessageType() { return lastMessageType; }
     public String getLastMessageAttachmentName() { return lastMessageAttachmentName; }
 

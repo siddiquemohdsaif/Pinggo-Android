@@ -3,6 +3,7 @@ package com.w3n.pinggo.activity;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.widget.FrameLayout;
@@ -35,6 +36,8 @@ import java.util.List;
 
 /** Hosts the AAR-native home surface and owns lifecycle, data, and navigation. */
 public class HomeActivity extends AppCompatActivity implements HomeView.Listener {
+    private static final int SELECTION_STATUS_BAR_COLOR = 0xFFE9EDF0;
+    private static final int BOTTOM_SYSTEM_NAVIGATION_COLOR = 0xFFF9FBFE;
     private HomeView homeView;
     private HomeMenuDialogView homeMenuDialog;
     private ChatRepository repository;
@@ -82,7 +85,7 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         int systemBarColor = ContextCompat.getColor(
                 this, R.color.login_system_bar_background);
         window.setStatusBarColor(systemBarColor);
-        window.setNavigationBarColor(systemBarColor);
+        window.setNavigationBarColor(BOTTOM_SYSTEM_NAVIGATION_COLOR);
 
         WindowInsetsControllerCompat controller =
                 WindowCompat.getInsetsController(window, window.getDecorView());
@@ -99,8 +102,10 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         repository = ChatRepository.getInstance(this);
         // Covers a fresh login completed after Application.onCreate().
         repository.connect();
-        repository.observeChats().observe(this,
-                entities -> homeView.submitChats(toChats(entities)));
+        repository.observeChats().observe(this, entities -> {
+            homeView.submitChats(toChats(entities));
+            repository.acknowledgePendingIncomingDeliveries();
+        });
         String uid = LoginStateManager.getInstance().getUID(this);
         if (uid != null && !uid.trim().isEmpty()) {
             repository.ensureChatListLoaded(normalizeAccountId(uid));
@@ -117,12 +122,14 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
             localPath = ChatProfilePhotoStore.getLocalPath(this, chat.getPhoneNumber());
         }
         intent.putExtra(ChatActivity.EXTRA_LOCAL_PROFILE_PHOTO_PATH, localPath);
+        intent.putExtra(ChatActivity.EXTRA_OPEN_REQUEST_NANOS, SystemClock.elapsedRealtimeNanos());
         startActivity(intent);
     }
 
     @Override protected void onResume() {
         super.onResume();
         if (repository == null) return;
+        repository.acknowledgePendingIncomingDeliveries();
         repository.setEventListener(new ChatRepository.EventListener() {
             @Override public void onTyping(String chatId, String userId, boolean typing) {
                 if (homeView != null) homeView.setChatTyping(chatId, typing);
@@ -185,6 +192,12 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         applyBulkSetting(chats, "delete", 1, "Chats deleted", true);
     }
 
+    @Override public void onChatSelectionChanged(boolean selected) {
+        getWindow().setStatusBarColor(selected
+                ? SELECTION_STATUS_BAR_COLOR
+                : ContextCompat.getColor(this, R.color.login_system_bar_background));
+    }
+
     private void applyBulkSetting(List<Chat> chats, String setting, long value,
                                   String successMessage, boolean deleteLocal) {
         if (repository == null || chats == null || chats.isEmpty()) return;
@@ -233,6 +246,7 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                     normalizeAccountId(entity.lastMessageSenderId).equals(
                             normalizeAccountId(LoginStateManager.getInstance().getUID(this))),
                     entity.lastMessageDeliveredTime, entity.lastMessageReadTime,
+                    entity.lastMessageStatus,
                     entity.lastMessageType, entity.lastMessageAttachmentName,
                     entity.unreadCount,
                     entity.pinned, entity.notificationMuted, entity.archived,

@@ -59,12 +59,17 @@ public final class HomeView extends ViewGroup {
             getResources(), R.drawable.home_overflow_dots);
     private final Bitmap selectionBackgroundBitmap = BitmapFactory.decodeResource(
             getResources(), R.drawable.chat_selection_background);
+    private final Bitmap selectionStatusBarBitmap = colorBitmap(0xFFE9EDF0);
     private final Bitmap selectionGroupBitmap = BitmapFactory.decodeResource(
             getResources(), R.drawable.chat_selection_group);
     private final Bitmap selectionPinBitmap = BitmapFactory.decodeResource(
             getResources(), R.drawable.chat_selection_pin);
+    private final Bitmap selectionUnpinBitmap = BitmapFactory.decodeResource(
+            getResources(), R.drawable.chat_selection_unpin);
     private final Bitmap selectionMuteBitmap = BitmapFactory.decodeResource(
             getResources(), R.drawable.chat_selection_mute);
+    private final Bitmap selectionUnmuteBitmap = BitmapFactory.decodeResource(
+            getResources(), R.drawable.chat_selection_unmute);
     private final Bitmap selectionDeleteBitmap = BitmapFactory.decodeResource(
             getResources(), R.drawable.chat_selection_delete);
     private final Bitmap selectionBackBitmap = drawableBitmap(R.drawable.conversation_back);
@@ -96,6 +101,7 @@ public final class HomeView extends ViewGroup {
         chatsView = new ChatsView(context, listener::onOpenChat);
         chatsView.setOnSelectionChangedListener(chats -> {
             selectedChats = chats == null ? new ArrayList<>() : new ArrayList<>(chats);
+            listener.onChatSelectionChanged(!selectedChats.isEmpty());
             if (getWidth() > 0) buildScreen();
             invalidate();
         });
@@ -285,6 +291,8 @@ public final class HomeView extends ViewGroup {
     }
 
     private void buildSelectionHeader(float width, float top, float scale) {
+        contentLayer.add(image("selection_status_bar", selectionStatusBarBitmap,
+                new RectF(0, 0, width, top)));
         contentLayer.add(image("selection_header", selectionBackgroundBitmap,
                 new RectF(0, top, width, top + 170f * scale)));
         contentLayer.add(new Image.Builder(getContext(), "selection_back",
@@ -304,10 +312,16 @@ public final class HomeView extends ViewGroup {
         addSelectionButton("selection_group", selectionGroupBitmap,
                 612f, 51f, top, scale,
                 () -> listener.onBulkGroup(new ArrayList<>(selectedChats)));
-        addSelectionButton("selection_pin", selectionPinBitmap,
+        boolean allPinned = !selectedChats.isEmpty();
+        for (Chat chat : selectedChats) allPinned &= chat.isPinned();
+        addSelectionButton(allPinned ? "selection_unpin" : "selection_pin",
+                allPinned ? selectionUnpinBitmap : selectionPinBitmap,
                 728f, 51f, top, scale,
                 () -> listener.onBulkPin(new ArrayList<>(selectedChats)));
-        addSelectionButton("selection_mute", selectionMuteBitmap,
+        boolean allMuted = !selectedChats.isEmpty();
+        for (Chat chat : selectedChats) allMuted &= chat.isMuted();
+        addSelectionButton(allMuted ? "selection_unmute" : "selection_mute",
+                allMuted ? selectionUnmuteBitmap : selectionMuteBitmap,
                 844f, 51f, top, scale,
                 () -> listener.onBulkMute(new ArrayList<>(selectedChats)));
         addSelectionButton("selection_delete", selectionDeleteBitmap,
@@ -432,7 +446,10 @@ public final class HomeView extends ViewGroup {
         for (Bitmap bitmap : new Bitmap[]{backgroundBitmap, accentBitmap,
                 transparentBitmap, logoBitmap,
                 searchBackgroundBitmap, overflowDotsBitmap, selectionBackgroundBitmap,
-                selectionGroupBitmap, selectionPinBitmap, selectionMuteBitmap,
+                selectionStatusBarBitmap,
+                selectionGroupBitmap, selectionPinBitmap, selectionUnpinBitmap,
+                selectionMuteBitmap,
+                selectionUnmuteBitmap,
                 selectionDeleteBitmap, selectionBackBitmap}) {
             if (!bitmap.isRecycled()) bitmap.recycle();
         }
@@ -480,6 +497,7 @@ public final class HomeView extends ViewGroup {
         void onBulkPin(List<Chat> chats);
         void onBulkMute(List<Chat> chats);
         void onBulkDelete(List<Chat> chats);
+        void onChatSelectionChanged(boolean selected);
     }
 
 }

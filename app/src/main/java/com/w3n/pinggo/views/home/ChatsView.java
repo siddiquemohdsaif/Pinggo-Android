@@ -11,6 +11,7 @@ import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.BitmapShader;
 import android.graphics.Shader;
+import android.graphics.drawable.Drawable;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -23,6 +24,7 @@ import android.util.LruCache;
 import android.view.Choreographer;
 
 import androidx.lifecycle.Observer;
+import androidx.core.content.ContextCompat;
 
 import com.ogfa.nativeviews.button.Button;
 import com.ogfa.nativeviews.component.FigmaConfig;
@@ -94,6 +96,7 @@ public final class ChatsView extends View {
     private final Bitmap selectionCheckBitmap = resourceBitmap(R.drawable.chat_selection_check);
     private final Bitmap pinnedBitmap = resourceBitmap(R.drawable.chat_pinned);
     private final Bitmap mutedBitmap = resourceBitmap(R.drawable.chat_muted);
+    private final Bitmap sendingBitmap = drawableBitmap(R.drawable.chat_status_sending_image);
     private final Bitmap deliveredBitmap = resourceBitmap(R.drawable.chat_status_delivered);
     private final Bitmap sentBitmap = resourceBitmap(R.drawable.chat_status_sent);
     private final Bitmap readBitmap = resourceBitmap(R.drawable.chat_status_read);
@@ -275,7 +278,8 @@ public final class ChatsView extends View {
                 new RectF(0, 0, width, height)).setOrientation(ComponentList.Orientation.VERTICAL)
                 .setItemSize(185f * figmaConfig.getScale(width))
                 .setPaddingPx(0, 0, 0, 155f * figmaConfig.getScale(width))
-                .setAdapter(adapter).setClipToBounds(true).setOverscrollEnabled(false)
+                .setAdapter(adapter).setClipToBounds(true).setScrollEnabled(true)
+                .setOverscrollEnabled(false)
                 .setOnItemLongClickListener((componentList, chat, position) -> {
                     toggleSelection(chat);
                     return true;
@@ -578,7 +582,7 @@ public final class ChatsView extends View {
                 emptyStartChatIconBitmap,
                 unreadBadgeBitmap,
                 selectionBackgroundBitmap, selectionCheckBitmap,
-                pinnedBitmap, mutedBitmap, deliveredBitmap, sentBitmap, readBitmap);
+                pinnedBitmap, mutedBitmap, sendingBitmap, deliveredBitmap, sentBitmap, readBitmap);
         recycle(pictureBitmap, videoBitmap, documentBitmap, locationBitmap);
         recycle(phoneIncomingBitmap, phoneOutgoingBitmap, phoneMissedBitmap,
                 videoIncomingBitmap, videoOutgoingBitmap, videoMissedBitmap);
@@ -676,6 +680,8 @@ public final class ChatsView extends View {
                     second.getLastMessageDeliveredTime())
                     && Objects.equals(first.getLastMessageReadTime(),
                     second.getLastMessageReadTime())
+                    && Objects.equals(first.getLastMessageStatus(),
+                    second.getLastMessageStatus())
                     && Objects.equals(first.getLastMessageType(), second.getLastMessageType())
                     && Objects.equals(first.getLastMessageAttachmentName(),
                     second.getLastMessageAttachmentName())
@@ -871,9 +877,14 @@ public final class ChatsView extends View {
             boolean videoCall = "video_call".equals(type);
             boolean call = voiceCall || videoCall;
             String preview = lastMessage(chat);
-            if (hasMessage && !received && !call && chat.getLastMessageTime() > 0) {
-                Bitmap receipt = chat.getLastMessageReadTime() != null ? readBitmap
-                        : chat.getLastMessageDeliveredTime() != null ? deliveredBitmap : sentBitmap;
+            if (hasMessage && !received && !call) {
+                String status = chat.getLastMessageStatus();
+                Bitmap receipt = chat.getLastMessageReadTime() != null || "seen".equals(status)
+                        ? readBitmap
+                        : chat.getLastMessageDeliveredTime() != null || "delivered".equals(status)
+                        ? deliveredBitmap
+                        : chat.getLastMessageTime() <= 0 || "sending".equals(status)
+                        || "failed".equals(status) ? sendingBitmap : sentBitmap;
                 item.find("message_status", Image.class).setBitmap(receipt).setVisible(true);
             }
             if (call) {
@@ -1118,6 +1129,7 @@ public final class ChatsView extends View {
                     entity.lastMessage, entity.lastMessageTime,
                     normalizeId(entity.lastMessageSenderId).equals(currentPhoneNumber()),
                     entity.lastMessageDeliveredTime, entity.lastMessageReadTime,
+                    entity.lastMessageStatus,
                     entity.lastMessageType, entity.lastMessageAttachmentName,
                     entity.unreadCount,
                     entity.pinned, entity.notificationMuted, entity.archived,
@@ -1152,6 +1164,17 @@ public final class ChatsView extends View {
     }
     private Bitmap resourceBitmap(int resource) {
         return BitmapFactory.decodeResource(getResources(), resource);
+    }
+    private Bitmap drawableBitmap(int resource) {
+        Drawable drawable = ContextCompat.getDrawable(getContext(), resource);
+        if (drawable == null) return colorBitmap(Color.TRANSPARENT);
+        int width = Math.max(1, drawable.getIntrinsicWidth());
+        int height = Math.max(1, drawable.getIntrinsicHeight());
+        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+        drawable.setBounds(0, 0, width, height);
+        drawable.draw(canvas);
+        return bitmap;
     }
     private static void recycle(Bitmap... values) {
         for (Bitmap value : values) if (value != null && !value.isRecycled()) value.recycle();

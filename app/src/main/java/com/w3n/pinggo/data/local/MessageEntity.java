@@ -39,6 +39,11 @@ public class MessageEntity {
     public Double latitude;
     public Double longitude;
     public Float locationAccuracy;
+    public boolean pinned;
+    public Long pinnedAt;
+    public String forwardedFrom;
+    public String deletedText;
+    public boolean invisible;
 
     public MessageEntity(
             @NonNull String messageId,

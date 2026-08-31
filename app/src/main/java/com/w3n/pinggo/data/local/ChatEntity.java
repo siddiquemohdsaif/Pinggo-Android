@@ -14,10 +14,12 @@ public class ChatEntity {
     public String profilePhotoUrl;
     public String localProfilePhotoPath;
     public String lastMessage;
+    public String lastMessageId;
     public long lastMessageTime;
     public String lastMessageSenderId;
     public Long lastMessageDeliveredTime;
     public Long lastMessageReadTime;
+    public String lastMessageStatus;
     public String lastMessageType;
     public String lastMessageAttachmentName;
     public int unreadCount;
@@ -35,10 +37,12 @@ public class ChatEntity {
             String profilePhotoUrl,
             String localProfilePhotoPath,
             String lastMessage,
+            String lastMessageId,
             long lastMessageTime,
             String lastMessageSenderId,
             Long lastMessageDeliveredTime,
             Long lastMessageReadTime,
+            String lastMessageStatus,
             String lastMessageType,
             String lastMessageAttachmentName,
             int unreadCount,
@@ -55,10 +59,12 @@ public class ChatEntity {
         this.profilePhotoUrl = profilePhotoUrl;
         this.localProfilePhotoPath = localProfilePhotoPath;
         this.lastMessage = lastMessage;
+        this.lastMessageId = lastMessageId;
         this.lastMessageTime = lastMessageTime;
         this.lastMessageSenderId = lastMessageSenderId;
         this.lastMessageDeliveredTime = lastMessageDeliveredTime;
         this.lastMessageReadTime = lastMessageReadTime;
+        this.lastMessageStatus = lastMessageStatus;
         this.lastMessageType = lastMessageType;
         this.lastMessageAttachmentName = lastMessageAttachmentName;
         this.unreadCount = unreadCount;

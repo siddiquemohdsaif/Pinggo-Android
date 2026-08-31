@@ -12,8 +12,8 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.OkHttpClient;
@@ -39,7 +39,7 @@ public class ChatWebSocketClient {
             .build();
     private final Listener listener;
     private final List<JsonObject> pendingEvents = new ArrayList<>();
-    private final Map<String, JsonObject> unacknowledgedMessages = new LinkedHashMap<>();
+    private final Map<String, JsonObject> unacknowledgedMessages = new ConcurrentHashMap<>();
     private final Handler reconnectHandler = new Handler(Looper.getMainLooper());
     private WebSocket webSocket;
     private boolean authenticated;
@@ -167,6 +167,12 @@ public class ChatWebSocketClient {
         }
         if (webSocket == null) return false;
         return webSocket.send(event.toString());
+    }
+
+    public boolean isAwaitingMessageAck(String clientMessageId) {
+        return clientMessageId != null
+                && !clientMessageId.isEmpty()
+                && unacknowledgedMessages.containsKey(clientMessageId);
     }
 
     private void sendAuth(String userId, String encryptedCredential) {

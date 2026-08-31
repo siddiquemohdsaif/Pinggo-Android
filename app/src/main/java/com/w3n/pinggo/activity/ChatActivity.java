@@ -1,6 +1,9 @@
 package com.w3n.pinggo.activity;
 
 import android.Manifest;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
@@ -12,11 +15,14 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.OpenableColumns;
 import android.util.Log;
 import android.view.ViewGroup;
+import android.widget.FrameLayout;
 import android.widget.Toast;
 import androidx.activity.EdgeToEdge;
+import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
@@ -31,6 +37,8 @@ import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.local.PresenceEntity;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.views.chat.ChatView;
+import com.w3n.pinggo.views.chat.ChatPerformanceProfiler;
+import com.w3n.pinggo.views.chat.ConversationMenuDialogView;
 import com.w3n.pinggo.call.ActiveCallRegistry;
 import com.w3n.pinggo.views.common.NativePromptDialogView;
 import java.text.DateFormat;
@@ -43,16 +51,28 @@ import java.util.Set;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.io.File;
 import java.io.FileNotFoundException;
 
 public class ChatActivity extends AppCompatActivity implements ChatView.Listener {
   private static final String TESTING_TAG = "PARVEZ_TESTING";
+  private static final int SELECTION_STATUS_BAR_COLOR = 0xFFE9EDF0;
+  private static final int DEFAULT_STATUS_BAR_COLOR = 0xFFFFFFFF;
+  private static final int INITIAL_RENDER_WINDOW_SIZE = 15;
+  private static final int PROGRESSIVE_RENDER_INCREMENT = ChatRepository.MESSAGE_PAGE_SIZE;
+  private static final int MESSAGE_WINDOW_INCREMENT = ChatRepository.MESSAGE_PAGE_SIZE;
+  private static final int ATTACHMENT_AVAILABLE = 0;
+  private static final int ATTACHMENT_DOWNLOAD_REQUIRED = 1;
+  private static final int ATTACHMENT_DOWNLOADING = 2;
   private MessageEntity pendingDownloadMessage;
   public static final String EXTRA_CHAT_NAME = "com.w3n.pinggo.EXTRA_CHAT_NAME",
       EXTRA_CHAT_ID = "com.w3n.pinggo.EXTRA_CHAT_ID",
       EXTRA_PROFILE_PHOTO_URL = "com.w3n.pinggo.EXTRA_PROFILE_PHOTO_URL",
-      EXTRA_LOCAL_PROFILE_PHOTO_PATH = "com.w3n.pinggo.EXTRA_LOCAL_PROFILE_PHOTO_PATH";
+      EXTRA_LOCAL_PROFILE_PHOTO_PATH = "com.w3n.pinggo.EXTRA_LOCAL_PROFILE_PHOTO_PATH",
+      EXTRA_OPEN_REQUEST_NANOS = "com.w3n.pinggo.EXTRA_OPEN_REQUEST_NANOS";
   private final Handler typingHandler = new Handler(Looper.getMainLooper());
   private long lastSocketErrorToastAt;
   private final ActivityResultLauncher<String[]> attachmentPicker =
@@ -67,10 +87,14 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
         pendingDownloadMessage = null;
       });
   private final Set<String> pendingSeen = new HashSet<>();
-  private final Map<String, String> attachmentDownloads = new HashMap<>();
+  private final Map<String, Integer> attachmentStates = new ConcurrentHashMap<>();
+  private final ExecutorService messagePreparationExecutor =
+      Executors.newSingleThreadExecutor();
   private ChatView chatView;
+  private ChatPerformanceProfiler profiler;
   private ChatRepository repository;
   private NativePromptDialogView promptDialog;
+  private ConversationMenuDialogView conversationMenuDialog;
   private String chatId, currentUser, receiverId, replyingId, editingId;
   private String profilePhotoPath;
   private String selectedAttachmentType;
@@ -80,8 +104,15 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
   private LocationListener locationListener;
   private PresenceEntity latestPresence;
   private List<MessageEntity> latestMessages = Collections.emptyList();
+  private List<MessageEntity> availableMessages = Collections.emptyList();
   private LiveData<List<MessageEntity>> messageSource;
+  // Room can deliver the whole network page immediately. The custom list receives only one
+  // viewport first, then progressively larger suffixes so its synchronous layout never blocks
+  // the first useful frame on all 50 variable-height rows.
   private int messageLimit = ChatRepository.MESSAGE_PAGE_SIZE;
+  private int renderedMessageCount;
+  private int messagePreparationGeneration;
+  private boolean messagePreparationRunning;
   private boolean localPageLoading;
   private boolean localHasMore = true;
   private boolean messagePageLoading;
@@ -117,10 +148,14 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
+    long createStartedNanos = SystemClock.elapsedRealtimeNanos();
     EdgeToEdge.enable(this);
     String name = getIntent().getStringExtra(EXTRA_CHAT_NAME);
     if (name == null || name.trim().isEmpty()) name = "Chat";
     chatId = getIntent().getStringExtra(EXTRA_CHAT_ID);
+    profiler = new ChatPerformanceProfiler(
+        chatId, getIntent().getLongExtra(EXTRA_OPEN_REQUEST_NANOS, createStartedNanos));
+    profiler.attach(getWindow());
     currentUser = normalize(LoginStateManager.getInstance().getUID(this));
     receiverId = receiver();
     profilePhotoPath = getIntent().getStringExtra(EXTRA_LOCAL_PROFILE_PHOTO_PATH);
@@ -130,8 +165,34 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
             name,
             currentUser,
             profilePhotoPath,
-            this);
+            this,
+            profiler);
     setContentView(chatView);
+    conversationMenuDialog =
+        new ConversationMenuDialogView(
+            this,
+            option -> { });
+    ((ViewGroup) findViewById(android.R.id.content)).addView(
+        conversationMenuDialog,
+        new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    getOnBackPressedDispatcher().addCallback(
+        this,
+        new OnBackPressedCallback(true) {
+          @Override
+          public void handleOnBackPressed() {
+            if (chatView != null && chatView.clearMessageSelection()) return;
+            if (conversationMenuDialog != null
+                && conversationMenuDialog.dismissIfShowing()) return;
+            if (promptDialog != null) {
+              removePrompt();
+              return;
+            }
+            setEnabled(false);
+            getOnBackPressedDispatcher().onBackPressed();
+            setEnabled(true);
+          }
+        });
     ViewCompat.setOnApplyWindowInsetsListener(
         chatView,
         (v, i) -> {
@@ -170,6 +231,7 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
           }
         });
     observe();
+    profiler.activityCreated(createStartedNanos);
   }
 
   private void observe() {
@@ -183,15 +245,21 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
     }
     observeMessageWindow();
     repository.observeTransfers(chatId).observe(this, values -> {
-      attachmentDownloads.clear();
+      Map<String, Integer> nextStates = new HashMap<>();
       if (values != null) for (com.w3n.pinggo.data.local.TransferEntity transfer : values) {
-        if ("download".equals(transfer.direction) && transfer.attachmentId != null
-            && ("queued".equals(transfer.status) || "downloading".equals(transfer.status)
-                || "retrying".equals(transfer.status))) {
-          attachmentDownloads.put(transfer.attachmentId, transfer.status);
+        if (!"download".equals(transfer.direction) || transfer.attachmentId == null) continue;
+        if ("queued".equals(transfer.status) || "downloading".equals(transfer.status)
+            || "retrying".equals(transfer.status)) {
+          nextStates.put(transfer.attachmentId, ATTACHMENT_DOWNLOADING);
+        } else if (transfer.localUri != null && !transfer.localUri.isEmpty()) {
+          nextStates.put(transfer.attachmentId, ATTACHMENT_AVAILABLE);
         }
       }
-      refreshAttachmentRows();
+      if (!attachmentStates.equals(nextStates)) {
+        attachmentStates.clear();
+        attachmentStates.putAll(nextStates);
+        refreshAttachmentRows();
+      }
     });
     if (!receiverId.isEmpty())
       repository.observePresence(receiverId).observe(this, this::renderPresence);
@@ -270,29 +338,36 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
   }
 
   private void messages(List<MessageEntity> values) {
-    latestMessages = values == null ? Collections.emptyList() : values;
+    availableMessages = values == null ? Collections.emptyList() : values;
     localPageLoading = false;
-    localHasMore = latestMessages.size() >= messageLimit;
+    localHasMore = availableMessages.size() >= messageLimit;
     boolean completedLocalExpansion = localExpansionRequested;
     boolean revealedOlderCachedMessages = completedLocalExpansion
-        && latestMessages.size() > localExpansionPreviousCount
+        && availableMessages.size() > localExpansionPreviousCount
         && !sameMessageId(localExpansionPreviousOldestId,
-            latestMessages.isEmpty() ? null : latestMessages.get(0).messageId);
+            availableMessages.isEmpty() ? null : availableMessages.get(0).messageId);
     localExpansionRequested = false;
     if (completedLocalExpansion) {
       Log.d(TESTING_TAG, "message_list source=pagination phase=local_expansion_complete chatId="
           + chatId + " previousCount=" + localExpansionPreviousCount
-          + " currentCount=" + latestMessages.size()
+          + " currentCount=" + availableMessages.size()
           + " revealedOlder=" + revealedOlderCachedMessages);
     }
-    long oldestTime = latestMessages.isEmpty() ? 0L : latestMessages.get(0).sentTime;
-    long newestTime = latestMessages.isEmpty()
-        ? 0L : latestMessages.get(latestMessages.size() - 1).sentTime;
+    long oldestTime = availableMessages.isEmpty() ? 0L : availableMessages.get(0).sentTime;
+    long newestTime = availableMessages.isEmpty()
+        ? 0L : availableMessages.get(availableMessages.size() - 1).sentTime;
     Log.d(TESTING_TAG, "message_list source=room_cache phase=loaded chatId=" + chatId
-        + " count=" + latestMessages.size() + " limit=" + messageLimit
+        + " count=" + availableMessages.size() + " limit=" + messageLimit
         + " localHasMore=" + localHasMore + " oldestTime=" + oldestTime
         + " newestTime=" + newestTime);
-    chatView.submitMessages(values);
+    if (availableMessages.isEmpty()) renderedMessageCount = 0;
+    else if (renderedMessageCount == 0) {
+      renderedMessageCount = Math.min(INITIAL_RENDER_WINDOW_SIZE, availableMessages.size());
+    } else {
+      renderedMessageCount = Math.min(renderedMessageCount, availableMessages.size());
+    }
+    renderAvailableMessages("room");
+    scheduleProgressiveRender();
     if (completedLocalExpansion && !revealedOlderCachedMessages
         && !messagePageLoading && messageNetworkHasMore
         && (!firstMessagePageLoaded || nextMessageCursor != null)) {
@@ -301,9 +376,76 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
       if (revealedOlderCachedMessages) saveMessageSessionState();
       updateOlderMessagesState();
     }
-    if (values == null) return;
+  }
+
+  private void renderAvailableMessages(String phase) {
+    long operationStartedNanos = SystemClock.elapsedRealtimeNanos();
+    int firstRendered = Math.max(0, availableMessages.size() - renderedMessageCount);
+    latestMessages = availableMessages.isEmpty()
+        ? Collections.emptyList()
+        : new ArrayList<>(availableMessages.subList(firstRendered, availableMessages.size()));
+    long renderStarted = System.nanoTime();
+    boolean changed = chatView.submitMessages(latestMessages);
+    profiler.contentSubmitted(latestMessages.size());
+    long renderDurationMs = (System.nanoTime() - renderStarted) / 1_000_000L;
+    Log.d(TESTING_TAG, "message_list source=render phase=" + phase + "_complete chatId="
+        + chatId + " available=" + availableMessages.size()
+        + " rendered=" + latestMessages.size() + " changed=" + changed
+        + " durationMs=" + renderDurationMs);
+    profiler.operation(
+        "render_submit_" + phase,
+        operationStartedNanos,
+        "available=" + availableMessages.size()
+            + " rendered=" + latestMessages.size()
+            + " changed=" + changed);
+    markRenderedMessagesSeen();
+  }
+
+  private void scheduleProgressiveRender() {
+    if (chatView == null || renderedMessageCount >= availableMessages.size()) {
+      messagePreparationRunning = false;
+      updateOlderMessagesState();
+      return;
+    }
+    int generation = ++messagePreparationGeneration;
+    List<MessageEntity> snapshot = new ArrayList<>(availableMessages);
+    int targetRenderedCount = Math.min(
+        snapshot.size(), renderedMessageCount + PROGRESSIVE_RENDER_INCREMENT);
+    int firstToPrepare = Math.max(0, snapshot.size() - targetRenderedCount);
+    int preparedEnd = Math.max(firstToPrepare, snapshot.size() - renderedMessageCount);
+    List<MessageEntity> preparationChunk = new ArrayList<>(
+        snapshot.subList(firstToPrepare, preparedEnd));
+    float availableWidth = chatView.getMessageLayoutWidth();
+    messagePreparationRunning = true;
+    updateOlderMessagesState();
+    messagePreparationExecutor.execute(() -> {
+      long preparationStartedNanos = SystemClock.elapsedRealtimeNanos();
+      ChatView view = chatView;
+      if (view == null) return;
+      view.prepareMessageMetrics(preparationChunk, availableWidth);
+      profiler.operation(
+          "prepare_chunk",
+          preparationStartedNanos,
+          "count=" + preparationChunk.size() + " targetRendered=" + targetRenderedCount);
+      typingHandler.post(() -> {
+        if (chatView == null || generation != messagePreparationGeneration) return;
+        availableMessages = snapshot;
+        renderedMessageCount = targetRenderedCount;
+        messagePreparationRunning = renderedMessageCount < snapshot.size();
+        renderAvailableMessages("background");
+        updateOlderMessagesState();
+        if (messagePreparationRunning) scheduleProgressiveRender();
+      });
+    });
+  }
+
+  private boolean isProgressiveRendering() {
+    return messagePreparationRunning || renderedMessageCount < availableMessages.size();
+  }
+
+  private void markRenderedMessagesSeen() {
     List<String> unseen = new ArrayList<>();
-    for (MessageEntity m : values) {
+    for (MessageEntity m : latestMessages) {
       boolean incoming = !currentUser.equals(normalize(m.senderId));
       if (incoming && m.readTime == null && !pendingSeen.contains(m.messageId))
         unseen.add(m.messageId);
@@ -319,7 +461,7 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
     if (chatView == null) return;
     chatView.setOlderMessagesState(
         localPageLoading || messagePageLoading,
-        localHasMore || messageNetworkHasMore);
+        !isProgressiveRendering() && (localHasMore || messageNetworkHasMore));
   }
 
   @Override
@@ -330,13 +472,13 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
         + " routeLoading=" + messagePageLoading
         + " routeHasMore=" + messageNetworkHasMore
         + " hasNextCursor=" + (nextMessageCursor != null && !nextMessageCursor.isEmpty()));
-    if (localPageLoading || messagePageLoading
+    if (isProgressiveRendering() || localPageLoading || messagePageLoading
         || (!localHasMore && !messageNetworkHasMore)) return;
     localExpansionRequested = true;
-    localExpansionPreviousCount = latestMessages.size();
-    localExpansionPreviousOldestId = latestMessages.isEmpty()
-        ? null : latestMessages.get(0).messageId;
-    messageLimit += ChatRepository.MESSAGE_PAGE_SIZE;
+    localExpansionPreviousCount = availableMessages.size();
+    localExpansionPreviousOldestId = availableMessages.isEmpty()
+        ? null : availableMessages.get(0).messageId;
+    messageLimit += MESSAGE_WINDOW_INCREMENT;
     observeMessageWindow();
   }
 
@@ -351,7 +493,9 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
       Log.d(TESTING_TAG, "message_cache source=session phase=miss chatId=" + chatId);
       return;
     }
-    messageLimit = Math.max(ChatRepository.MESSAGE_PAGE_SIZE, state.getMessageLimit());
+    // Reopen with one normal network page available to the progressive renderer. A previously
+    // expanded history window is intentionally not submitted to ComponentList in one operation.
+    messageLimit = ChatRepository.MESSAGE_PAGE_SIZE;
     firstMessagePageLoaded = state.isFirstPageLoaded();
     nextMessageCursor = state.getNextCursor();
     messageNetworkHasMore = state.hasMoreOnNetwork();
@@ -657,25 +801,6 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
   }
 
   @Override
-  public void onMessageLongPress(MessageEntity message) {
-    boolean own = currentUser.equals(normalize(message.senderId));
-    List<String> actions = new ArrayList<>();
-    actions.add("Reply");
-    if (own) actions.add("Edit");
-    actions.add("Delete");
-    actions.add("Cancel");
-    showPrompt(NativePromptDialogView.actions(this, actions,
-        which -> {
-          if ("Cancel".equals(actions.get(which))) {
-            removePrompt();
-            return;
-          }
-            handleAction(actions.get(which), message, own);
-        }, this::removePrompt));
-
-  }
-
-  @Override
   public void onMessageClick(MessageEntity message) {
     if ("failed".equals(message.status)) {
       repository.resendMessage(message);
@@ -702,7 +827,8 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
       openLocalAttachment(Uri.parse(message.attachmentLocalUri), message.attachmentMimeType);
       return;
     }
-    if (attachmentDownloads.containsKey(attachmentKey(message))) return;
+    if (attachmentStates.getOrDefault(
+        attachmentKey(message), ATTACHMENT_DOWNLOAD_REQUIRED) == ATTACHMENT_DOWNLOADING) return;
     if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
         && ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
         != PackageManager.PERMISSION_GRANTED) {
@@ -711,6 +837,141 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
       return;
     }
     startAttachmentDownload(message);
+  }
+
+  @Override
+  public void onReplySelected(MessageEntity message) {
+    if (!hasServerMessageId(message)) {
+      Toast.makeText(this, "Wait until the message is sent.", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    replyingId = message.messageId;
+    editingId = null;
+    chatView.clearMessageSelection();
+    chatView.showReply(message.text);
+  }
+
+  @Override
+  public void onCopySelected(List<MessageEntity> messages) {
+    StringBuilder copied = new StringBuilder();
+    for (MessageEntity message : messages) {
+      String value = copyValue(message);
+      if (value.isEmpty()) continue;
+      if (copied.length() > 0) copied.append('\n');
+      copied.append(value);
+    }
+    if (copied.length() == 0) {
+      Toast.makeText(this, "Nothing to copy.", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    ClipboardManager clipboard =
+        (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+    clipboard.setPrimaryClip(ClipData.newPlainText("PingGo messages", copied.toString()));
+    chatView.clearMessageSelection();
+    Toast.makeText(this, messages.size() == 1 ? "Message copied." : "Messages copied.",
+        Toast.LENGTH_SHORT).show();
+  }
+
+  @Override
+  public void onForwardSelected(List<MessageEntity> messages) {
+    ArrayList<String> messageIds = serverMessageIds(messages, true);
+    if (messageIds.isEmpty()) {
+      Toast.makeText(this, "Wait until the selected messages are sent.", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    Intent intent = new Intent(this, NewChatActivity.class);
+    intent.putExtra(NewChatActivity.EXTRA_FORWARD_SOURCE_CHAT_ID, chatId);
+    intent.putStringArrayListExtra(NewChatActivity.EXTRA_FORWARD_MESSAGE_IDS, messageIds);
+    chatView.clearMessageSelection();
+    startActivity(intent);
+  }
+
+  @Override
+  public void onPinSelected(List<MessageEntity> messages) {
+    ArrayList<String> messageIds = serverMessageIds(messages);
+    if (messageIds.isEmpty()) {
+      Toast.makeText(this, "Wait until the selected messages are sent.", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    repository.pinMessages(chatId, messageIds);
+    chatView.clearMessageSelection();
+    Toast.makeText(this, messageIds.size() == 1 ? "Message pinned." : "Messages pinned.",
+        Toast.LENGTH_SHORT).show();
+  }
+
+  @Override
+  public void onUnpinSelected(List<MessageEntity> messages) {
+    ArrayList<String> messageIds = serverMessageIds(messages);
+    if (messageIds.isEmpty()) {
+      Toast.makeText(this, "Wait until the selected messages are sent.", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    repository.unpinMessages(chatId, messageIds);
+    chatView.clearMessageSelection();
+    Toast.makeText(this, messageIds.size() == 1 ? "Message unpinned." : "Messages unpinned.",
+        Toast.LENGTH_SHORT).show();
+  }
+
+  @Override
+  public void onDeleteSelected(List<MessageEntity> messages) {
+    List<String> own = new ArrayList<>(), opponent = new ArrayList<>();
+    for (MessageEntity message : messages) {
+      if (!hasServerMessageId(message)) continue;
+      if (currentUser.equals(normalize(message.senderId))) own.add(message.messageId);
+      else opponent.add(message.messageId);
+    }
+    if (!own.isEmpty()) repository.deleteOwnMessages(chatId, own);
+    if (!opponent.isEmpty()) repository.deleteOpponentMessages(chatId, opponent);
+    chatView.clearMessageSelection();
+    if (own.isEmpty() && opponent.isEmpty()) {
+      Toast.makeText(this, "Wait until the selected messages are sent.", Toast.LENGTH_SHORT).show();
+    }
+  }
+
+  @Override
+  public void onMessageSelectionChanged(boolean selected) {
+    getWindow().setStatusBarColor(
+        selected ? SELECTION_STATUS_BAR_COLOR : DEFAULT_STATUS_BAR_COLOR);
+  }
+
+  private static boolean hasServerMessageId(MessageEntity message) {
+    return message != null && message.messageId != null
+        && !message.messageId.trim().isEmpty()
+        && !message.messageId.startsWith("local_");
+  }
+
+  private static ArrayList<String> serverMessageIds(List<MessageEntity> messages) {
+    return serverMessageIds(messages, false);
+  }
+
+  private static ArrayList<String> serverMessageIds(
+      List<MessageEntity> messages, boolean skipDeleted) {
+    ArrayList<String> ids = new ArrayList<>();
+    for (MessageEntity message : messages) {
+      if (hasServerMessageId(message) && (!skipDeleted || !isDeleted(message))) {
+        ids.add(message.messageId);
+      }
+    }
+    return ids;
+  }
+
+  private static boolean isDeleted(MessageEntity message) {
+    return message != null && (message.deletedText != null
+        || "This Message was deleted".equals(message.text));
+  }
+
+  private static String copyValue(MessageEntity message) {
+    if (message == null) return "";
+    String text = message.text == null ? "" : message.text.trim();
+    if (!text.isEmpty()) return text;
+    String type = message.messageType == null ? "text" : message.messageType;
+    if (message.attachmentName != null && !message.attachmentName.trim().isEmpty()) {
+      return message.attachmentName.trim();
+    }
+    if ("location".equals(type) && message.latitude != null && message.longitude != null) {
+      return message.latitude + "," + message.longitude;
+    }
+    return "text".equals(type) ? "" : type;
   }
 
   private void openUri(Uri target, String mimeType) {
@@ -727,10 +988,12 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
   private void startAttachmentDownload(MessageEntity message) {
     repository.downloadAttachment(message, new ChatRepository.DownloadCallback() {
       @Override public void onAvailable(Uri uri) {
+        attachmentStates.put(attachmentKey(message), ATTACHMENT_AVAILABLE);
+        refreshAttachmentRows();
         openLocalAttachment(uri, message.attachmentMimeType);
       }
       @Override public void onQueued() {
-        attachmentDownloads.put(attachmentKey(message), "queued");
+        attachmentStates.put(attachmentKey(message), ATTACHMENT_DOWNLOADING);
         refreshAttachmentRows();
       }
       @Override public void onError(String error) {
@@ -768,9 +1031,11 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
 
   @Override
   public int attachmentState(MessageEntity message) {
-    if (currentUser.equals(normalize(message.senderId))) return 0;
-    if (attachmentDownloads.containsKey(attachmentKey(message))) return 2;
-    return message.attachmentLocalUri != null && canRead(Uri.parse(message.attachmentLocalUri)) ? 0 : 1;
+    if (currentUser.equals(normalize(message.senderId))) return ATTACHMENT_AVAILABLE;
+    Integer state = attachmentStates.get(attachmentKey(message));
+    if (state != null) return state;
+    return message.attachmentLocalUri != null && !message.attachmentLocalUri.isEmpty()
+        ? ATTACHMENT_AVAILABLE : ATTACHMENT_DOWNLOAD_REQUIRED;
   }
 
   private void handleAction(String action, MessageEntity message, boolean own) {
@@ -805,16 +1070,18 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
 
   @Override
   public void onBack() {
+    if (chatView != null && chatView.clearMessageSelection()) return;
     finish();
   }
 
   @Override
   public void onMore() {
-    showPrompt(NativePromptDialogView.message(this, "Chat",
-        "Messages, presence, reply, edit and delete are connected.", this::removePrompt));
+    removePrompt();
+    if (conversationMenuDialog != null) conversationMenuDialog.show();
   }
 
   private void showPrompt(NativePromptDialogView prompt) {
+    if (conversationMenuDialog != null) conversationMenuDialog.dismissIfShowing();
     removePrompt();
     promptDialog = prompt;
     ((ViewGroup) findViewById(android.R.id.content)).addView(prompt,
@@ -851,13 +1118,21 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
   @Override
   protected void onDestroy() {
     removePrompt();
+    if (conversationMenuDialog != null) {
+      conversationMenuDialog.release();
+      conversationMenuDialog = null;
+    }
     stopTyping.run();
+    messagePreparationGeneration++;
+    messagePreparationExecutor.shutdownNow();
     typingHandler.removeCallbacksAndMessages(null);
     locationPending = false;
     removeLocationUpdates();
     if (repository != null) repository.setEventListener(null);
     if (chatView != null) chatView.release();
     chatView = null;
+    if (profiler != null) profiler.release();
+    profiler = null;
     super.onDestroy();
   }
 }

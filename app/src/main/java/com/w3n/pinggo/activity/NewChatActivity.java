@@ -23,6 +23,7 @@ import com.google.gson.JsonObject;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
+import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.views.chat.NewChatView;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -35,6 +36,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class NewChatActivity extends AppCompatActivity implements NewChatView.Listener {
+  public static final String EXTRA_FORWARD_SOURCE_CHAT_ID =
+      "com.w3n.pinggo.EXTRA_FORWARD_SOURCE_CHAT_ID";
+  public static final String EXTRA_FORWARD_MESSAGE_IDS =
+      "com.w3n.pinggo.EXTRA_FORWARD_MESSAGE_IDS";
   private static final int CONTACTS_PERMISSION_REQUEST = 42, DISCOVER_BATCH_SIZE = 50;
   private final ExecutorService discoveryExecutor = Executors.newSingleThreadExecutor();
   private final ExecutorService photoExecutor = Executors.newFixedThreadPool(3);
@@ -43,12 +48,19 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   private final Set<String> rendered = new LinkedHashSet<>();
   private final Set<String> photoDownloads = Collections.newSetFromMap(new ConcurrentHashMap<>());
   private NewChatView newChatView;
+  private ChatRepository repository;
+  private String forwardSourceChatId;
+  private ArrayList<String> forwardMessageIds;
 
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
     EdgeToEdge.enable(this);
     newChatView = new NewChatView(this, this);
+    forwardSourceChatId = getIntent().getStringExtra(EXTRA_FORWARD_SOURCE_CHAT_ID);
+    forwardMessageIds = getIntent().getStringArrayListExtra(EXTRA_FORWARD_MESSAGE_IDS);
+    repository = ChatRepository.getInstance(this);
+    if (isForwarding()) newChatView.setTitle("Forward to");
     setContentView(newChatView);
     ViewCompat.setOnApplyWindowInsetsListener(
         newChatView,
@@ -251,6 +263,14 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
 
   @Override
   public void onOpenChat(NewChatView.Item item) {
+    if (isForwarding()) {
+      if (item.chatId == null || item.chatId.trim().isEmpty()) {
+        Toast.makeText(this, "This contact has no chat yet.", Toast.LENGTH_SHORT).show();
+        return;
+      }
+      repository.forwardMessages(
+          forwardSourceChatId, forwardMessageIds, item.chatId, item.phoneNumber);
+    }
     Intent intent = new Intent(this, ChatActivity.class);
     intent.putExtra(ChatActivity.EXTRA_CHAT_NAME, item.phoneNumber);
     intent.putExtra(ChatActivity.EXTRA_CHAT_ID, item.chatId);
@@ -259,6 +279,12 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
         ChatActivity.EXTRA_LOCAL_PROFILE_PHOTO_PATH,
         ChatProfilePhotoStore.getLocalPath(this, item.phoneNumber));
     startActivity(intent);
+    if (isForwarding()) finish();
+  }
+
+  private boolean isForwarding() {
+    return forwardSourceChatId != null && !forwardSourceChatId.trim().isEmpty()
+        && forwardMessageIds != null && !forwardMessageIds.isEmpty();
   }
 
   @Override

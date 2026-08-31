@@ -35,8 +35,10 @@ public final class NewChatView extends View {
       accent = colorBitmap(ACCENT);
   private ComponentList<Item> list;
   private Text status;
+  private Text title;
   private int topInset, bottomInset;
   private String statusMessage = "Loading contacts...";
+  private String titleValue = "New Chat";
 
   public NewChatView(Context context, Listener listener) {
     super(context);
@@ -55,6 +57,12 @@ public final class NewChatView extends View {
     statusMessage = value == null ? "" : value;
     adapter.submit(new ArrayList<>());
     update();
+  }
+
+  public void setTitle(String value) {
+    titleValue = value == null || value.trim().isEmpty() ? "New Chat" : value.trim();
+    if (title != null) title.setText(titleValue);
+    invalidate();
   }
 
   public void submitItems(List<Item> items) {
@@ -84,10 +92,10 @@ public final class NewChatView extends View {
         new RectF(dp(8), top, dp(56), top + dp(48)),
         PRIMARY,
         id -> listener.onBack());
-    content.add(
+    title = content.add(
         text(
             "title",
-            "New Chat",
+            titleValue,
             new RectF(dp(64), top, w - dp(20), top + dp(48)),
             sp(24),
             PRIMARY,
