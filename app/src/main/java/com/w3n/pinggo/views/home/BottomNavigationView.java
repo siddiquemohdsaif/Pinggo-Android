@@ -192,7 +192,6 @@ public final class BottomNavigationView extends View {
             if (!value.isRecycled()) value.recycle();
         }
     }
-    private float dp(float value) { return value * getResources().getDisplayMetrics().density; }
     private float sp(float value) { return value * getResources().getDisplayMetrics().scaledDensity; }
     public int contentHeightForWidth(int width) {
         return Math.max(1, Math.round(FIGMA_HEIGHT * figmaConfig.getScale(width)));

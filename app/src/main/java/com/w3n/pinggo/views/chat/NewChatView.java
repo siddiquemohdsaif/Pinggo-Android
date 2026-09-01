@@ -24,6 +24,8 @@ import java.util.Locale;
 
 /** AAR-native contact discovery list. */
 public final class NewChatView extends View {
+  private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
+      new com.ogfa.nativeviews.component.FigmaConfig(1080f);
   private static final int PRIMARY = 0xFF000E1A, SECONDARY = 0xFF687382, ACCENT = 0xFF019CC4;
   private final ZLayerGroup layers = new ZLayerGroup(this);
   private final ZLayer background = layers.addLayer("background");
@@ -80,7 +82,7 @@ public final class NewChatView extends View {
   private void build() {
     background.clear();
     content.clear();
-    float w = getWidth(), top = topInset + dp(10);
+    float w = getWidth(), top = topInset + px(27.5f);
     background.add(
         new Image.Builder(getContext(), "bg", white, new RectF(0, 0, w, getHeight()))
             .setScaleType(Image.ScaleType.FIT_XY));
@@ -89,26 +91,26 @@ public final class NewChatView extends View {
         "back",
         white,
         "‹",
-        new RectF(dp(8), top, dp(56), top + dp(48)),
+        new RectF(px(22f), top, px(154f), top + px(132f)),
         PRIMARY,
         id -> listener.onBack());
     title = content.add(
         text(
             "title",
             titleValue,
-            new RectF(dp(64), top, w - dp(20), top + dp(48)),
+            new RectF(px(176f), top, w - px(55f), top + px(132f)),
             sp(24),
             PRIMARY,
             FontVariation.BOLD));
-    float listTop = top + dp(60);
+    float listTop = top + px(165f);
     list =
         content.add(
             new ComponentList.Builder<Item>(
                     getContext(), "contacts", new RectF(0, listTop, w, getHeight() - bottomInset))
                 .setOrientation(ComponentList.Orientation.VERTICAL)
                 .setItemSizeProvider(
-                    (item, position) -> item.type == Item.DIVIDER ? dp(52) : dp(76))
-                .setPaddingPx(dp(12), dp(4), dp(12), dp(24))
+                    (item, position) -> item.type == Item.DIVIDER ? px(143f) : px(209f))
+                .setPaddingPx(px(33f), px(11f), px(33f), px(66f))
                 .setAdapter(adapter)
                 .setClipToBounds(true)
                 .setOverscrollEnabled(false)
@@ -123,7 +125,7 @@ public final class NewChatView extends View {
                     getContext(),
                     "status",
                     statusMessage,
-                    new RectF(dp(20), listTop + dp(20), w - dp(20), listTop + dp(120)))
+                    new RectF(px(55f), listTop + px(55f), w - px(55f), listTop + px(330f)))
                 .setFont(NativeFonts.INTER)
                 .setFontVariations(FontVariation.REGULAR)
                 .setTextSizePx(sp(16))
@@ -197,7 +199,7 @@ public final class NewChatView extends View {
             text(
                 s.id("label"),
                 "",
-                new RectF(dp(8), 0, w, h),
+                new RectF(px(22f), 0, w, h),
                 sp(14),
                 SECONDARY,
                 FontVariation.BOLD));
@@ -208,13 +210,13 @@ public final class NewChatView extends View {
                   getContext(),
                   s.id("avatar"),
                   avatar("?"),
-                  new RectF(dp(8), dp(10), dp(64), dp(66)))
+                  new RectF(px(22f), px(27.5f), px(176f), px(181.5f)))
               .setScaleType(Image.ScaleType.CENTER_CROP));
       row.add(
           text(
               s.id("name"),
               "",
-              new RectF(dp(80), dp(7), w - dp(76), dp(40)),
+              new RectF(px(220f), px(19.25f), w - px(209f), px(110f)),
               sp(17),
               PRIMARY,
               FontVariation.SEMI_BOLD));
@@ -222,7 +224,7 @@ public final class NewChatView extends View {
           text(
               s.id("detail"),
               "",
-              new RectF(dp(80), dp(38), w - dp(76), dp(68)),
+              new RectF(px(220f), px(104.5f), w - px(209f), px(187f)),
               sp(14),
               SECONDARY,
               FontVariation.REGULAR));
@@ -232,9 +234,9 @@ public final class NewChatView extends View {
                   s.id("invite"),
                   accent,
                   "Invite",
-                  new RectF(w - dp(72), dp(17), w - dp(4), dp(59)))
+                  new RectF(w - px(198f), px(46.75f), w - px(11f), px(162.25f)))
               .setImageScaleType(Image.ScaleType.FIT_XY)
-              .setCornerRadiusPx(dp(12))
+              .setCornerRadiusPx(px(33f))
               .setFont(NativeFonts.INTER)
               .setFontVariations(FontVariation.SEMI_BOLD)
               .setTextSizePx(sp(13))
@@ -247,7 +249,7 @@ public final class NewChatView extends View {
                   }));
       row.add(
           new Image.Builder(
-                  getContext(), s.id("divider"), divider, new RectF(dp(80), h - dp(1), w, h))
+                  getContext(), s.id("divider"), divider, new RectF(px(220f), h - px(2.75f), w, h))
               .setScaleType(Image.ScaleType.FIT_XY));
     }
 
@@ -277,7 +279,7 @@ public final class NewChatView extends View {
   }
 
   private Bitmap avatar(String v) {
-    int s = Math.round(dp(56));
+    int s = Math.round(px(154f));
     Bitmap b = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
     Canvas c = new Canvas(b);
     Paint p = new Paint(1);
@@ -313,7 +315,7 @@ public final class NewChatView extends View {
     l.add(
         new Button.Builder(getContext(), id, b, label, r)
             .setImageScaleType(Image.ScaleType.FIT_XY)
-            .setCornerRadiusPx(dp(12))
+            .setCornerRadiusPx(px(33f))
             .setFont(NativeFonts.INTER)
             .setFontVariations(FontVariation.SEMI_BOLD)
             .setTextSizePx(sp(18))
@@ -322,8 +324,8 @@ public final class NewChatView extends View {
             .setOnClickListener(click));
   }
 
-  private float dp(float v) {
-    return v * getResources().getDisplayMetrics().density;
+  private float px(float v) {
+    return figmaConfig.toRuntime(v, Math.max(1, getResources().getDisplayMetrics().widthPixels));
   }
 
   private float sp(float v) {

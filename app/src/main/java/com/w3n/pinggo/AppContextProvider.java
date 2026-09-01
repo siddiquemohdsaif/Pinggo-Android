@@ -12,6 +12,7 @@ import android.widget.FrameLayout;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import com.ogfa.nativeviews.component.FigmaConfig;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
 import com.w3n.pinggo.activity.VoiceCallActivity;
@@ -27,6 +28,7 @@ import org.json.JSONObject;
 
 
 public class AppContextProvider extends Application implements ChatRepository.IncomingCallListener {
+    private static final FigmaConfig FIGMA_CONFIG = new FigmaConfig(1080f);
     private static Context appContext;
     private static volatile JSONObject appConfig;
     private static volatile AppConfiguration parsedAppConfig;
@@ -133,8 +135,10 @@ public class AppContextProvider extends Application implements ChatRepository.In
         devLabel.setAlpha(0.8f);
 
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                Math.round(72 * activity.getResources().getDisplayMetrics().density),
-                Math.round(40 * activity.getResources().getDisplayMetrics().density)
+                Math.round(FIGMA_CONFIG.toRuntime(198f,
+                        activity.getResources().getDisplayMetrics().widthPixels)),
+                Math.round(FIGMA_CONFIG.toRuntime(110f,
+                        activity.getResources().getDisplayMetrics().widthPixels))
         );
         params.gravity = Gravity.TOP | Gravity.END;
         params.setMargins(16, 50, 16, 16); // adjust top margin if needed

@@ -24,6 +24,8 @@ import com.w3n.pinggo.views.CropImageView;
 
 /** Full-screen AAR dialog whose center hosts the interactive Android crop surface. */
 public final class NativeCropDialogView extends FrameLayout {
+  private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
+      new com.ogfa.nativeviews.component.FigmaConfig(1080f);
   public interface Listener {
     void onRetry();
     void onConfirm(Bitmap bitmap);
@@ -41,7 +43,7 @@ public final class NativeCropDialogView extends FrameLayout {
   private boolean built;
 
   public NativeCropDialogView(@NonNull Context context, @NonNull Bitmap source,
-      int minimumCropDp, int maximumCropDp, @NonNull Listener listener) {
+      int minimumCropPx, int maximumCropPx, @NonNull Listener listener) {
     super(context);
     this.listener = listener;
     setWillNotDraw(false);
@@ -49,7 +51,7 @@ public final class NativeCropDialogView extends FrameLayout {
     dialogLayer.setTouchPolicy(ZLayer.TouchPolicy.MODAL);
     cropView = new CropImageView(context);
     cropView.setBackgroundColor(Color.BLACK);
-    cropView.setCropBoxSizeRangeDp(minimumCropDp, maximumCropDp);
+    cropView.setCropBoxSizeRangePx(minimumCropPx, maximumCropPx);
     cropView.setBitmap(source);
     addView(cropView, new LayoutParams(1, 1));
   }
@@ -58,11 +60,11 @@ public final class NativeCropDialogView extends FrameLayout {
     super.onSizeChanged(width, height, oldWidth, oldHeight);
     if (width <= 0 || height <= 0 || built) return;
     built = true;
-    float margin = dp(16);
+    float margin = px(44f);
     dialog = dialogLayer.add(new Dialog.Builder(getContext(), "crop_dialog",
         new RectF(margin, margin, width - margin, height - margin))
         .setBackgroundColor(Color.WHITE)
-        .setCornerRadiusPx(dp(24))
+        .setCornerRadiusPx(px(66f))
         .removeDropShadow()
         .setDimEnabled(true)
         .setDimAlpha(0.5f)
@@ -71,20 +73,20 @@ public final class NativeCropDialogView extends FrameLayout {
         .setOnDismissListener((id, reason) -> listener.onDismiss())
         .setContent((nativeDialog, content, scope) -> {
           float contentWidth = scope.width();
-          float horizontal = dp(20);
+          float horizontal = px(55f);
           content.add(new Text.Builder(getContext(), scope.id("title"),
               getContext().getString(R.string.select_crop_region),
-              scope.rect(horizontal, dp(18), contentWidth - horizontal * 2f, dp(48)))
+              scope.rect(horizontal, px(49.5f), contentWidth - horizontal * 2f, px(132f)))
               .setFont(NativeFonts.INTER)
               .setFontVariations(FontVariation.BOLD)
-              .setTextSizePx(dp(22))
+              .setTextSizePx(px(60.5f))
               .setTextColor(0xFF000E1A)
               .setAlignment(Text.Alignment.CENTER)
               .setVerticalAlignment(Text.VerticalAlignment.CENTER)
               .setMaxLines(1));
-          float gap = dp(12);
+          float gap = px(33f);
           float buttonWidth = (contentWidth - horizontal * 2f - gap) / 2f;
-          float buttonTop = scope.height() - dp(72);
+          float buttonTop = scope.height() - px(198f);
           content.add(button(scope, "retry", secondary,
               getContext().getString(R.string.retry), horizontal, buttonTop, buttonWidth,
               0xFF000E1A, id -> {
@@ -108,12 +110,12 @@ public final class NativeCropDialogView extends FrameLayout {
   private Button button(Dialog.Scope scope, String id, Bitmap background, String label,
       float left, float top, float width, int textColor, Button.OnClickListener listener) {
     return new Button.Builder(getContext(), scope.id(id), background, label,
-        scope.rect(left, top, width, dp(52)))
+        scope.rect(left, top, width, px(143f)))
         .setImageScaleType(Image.ScaleType.FIT_XY)
-        .setCornerRadiusPx(dp(14))
+        .setCornerRadiusPx(px(38.5f))
         .setFont(NativeFonts.INTER)
         .setFontVariations(FontVariation.MEDIUM)
-        .setTextSizePx(dp(16))
+        .setTextSizePx(px(44f))
         .setTextColor(textColor)
         .setRippleEnabled(true)
         .setOnClickListener(listener)
@@ -121,9 +123,9 @@ public final class NativeCropDialogView extends FrameLayout {
   }
 
   @Override protected void onLayout(boolean changed, int l, int t, int r, int b) {
-    int margin = Math.round(dp(36));
-    int top = Math.round(dp(90));
-    int bottom = Math.max(top + 1, getHeight() - Math.round(dp(104)));
+    int margin = Math.round(px(99f));
+    int top = Math.round(px(247.5f));
+    int bottom = Math.max(top + 1, getHeight() - Math.round(px(286f)));
     cropView.layout(margin, top, Math.max(margin + 1, getWidth() - margin), bottom);
   }
 
@@ -148,8 +150,8 @@ public final class NativeCropDialogView extends FrameLayout {
     primary.recycle();
   }
 
-  private float dp(float value) {
-    return value * getResources().getDisplayMetrics().density;
+  private float px(float value) {
+    return figmaConfig.toRuntime(value, Math.max(1, getResources().getDisplayMetrics().widthPixels));
   }
 
   private static Bitmap colorBitmap(int color) {

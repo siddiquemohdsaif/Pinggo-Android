@@ -34,7 +34,6 @@ import com.ogfa.nativeviews.textfield.TextField;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.R;
-import com.w3n.pinggo.views.common.NativeTextFieldImeController;
 
 /** AAR-native, 1080-wide Figma implementation of signup profile setup. */
 public final class ProfileSetupView extends View {
@@ -358,7 +357,6 @@ public final class ProfileSetupView extends View {
         layers.draw(canvas);
     }
     @Override public boolean onTouchEvent(MotionEvent event) {
-        NativeTextFieldImeController.dismissOnOutsideDown(this, layers, cardLayer, event);
         return layers.onTouchEvent(event) || super.onTouchEvent(event);
     }
     @Override public boolean onCheckIsTextEditor() { return layers.onCheckIsTextEditor(); }

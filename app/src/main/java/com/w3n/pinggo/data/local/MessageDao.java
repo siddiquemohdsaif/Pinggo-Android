@@ -16,8 +16,9 @@ public interface MessageDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     void upsertAll(List<MessageEntity> messages);
 
-    @Query("SELECT * FROM (SELECT * FROM messages WHERE chatId = :chatId AND invisible = 0 "
-            + "ORDER BY sentTime DESC, messageId DESC LIMIT :limit) "
+    @Query("SELECT * FROM messages WHERE chatId = :chatId AND invisible = 0 AND (pinned = 1 OR "
+            + "messageId IN (SELECT messageId FROM messages WHERE chatId = :chatId "
+            + "AND invisible = 0 ORDER BY sentTime DESC, messageId DESC LIMIT :limit)) "
             + "ORDER BY sentTime ASC, messageId ASC")
     LiveData<List<MessageEntity>> observeLatestMessages(String chatId, int limit);
 
@@ -29,6 +30,10 @@ public interface MessageDao {
 
     @Query("SELECT * FROM messages WHERE messageId IN (:messageIds)")
     List<MessageEntity> findByMessageIds(List<String> messageIds);
+
+    @Query("SELECT * FROM messages WHERE chatId = :chatId AND "
+            + "(messageId IN (:messageIds) OR clientMessageId IN (:messageIds))")
+    List<MessageEntity> findReplyTargets(String chatId, List<String> messageIds);
 
     @Query("SELECT * FROM messages WHERE receiverId = :receiverId "
             + "AND invisible = 0 AND deliveredTime IS NULL AND readTime IS NULL")
@@ -64,8 +69,9 @@ public interface MessageDao {
     @Query("UPDATE messages SET invisible = 1 WHERE messageId = :messageId")
     void markInvisible(String messageId);
 
-    @Query("UPDATE messages SET pinned = :pinned, pinnedAt = :pinnedAt WHERE messageId IN (:messageIds)")
-    void updatePinned(List<String> messageIds, boolean pinned, Long pinnedAt);
+    @Query("UPDATE messages SET pinned = :pinned, pinnedAt = :pinnedAt, pinnedBy = :pinnedBy "
+            + "WHERE messageId = :messageId")
+    void updatePinState(String messageId, boolean pinned, Long pinnedAt, String pinnedBy);
 
     @Query("UPDATE messages SET status = :status, readTime = :readTime WHERE messageId IN (:messageIds)")
     void markSeen(List<String> messageIds, String status, long readTime);

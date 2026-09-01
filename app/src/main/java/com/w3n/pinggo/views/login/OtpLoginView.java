@@ -28,13 +28,13 @@ import java.util.Locale;
 
 /** Native-view implementation shared by email, WhatsApp, and SMS OTP verification. */
 public class OtpLoginView extends View {
+  private static final float REFERENCE_WIDTH = 1080f;
   public enum Channel {
     EMAIL,
     WHATSAPP,
     SMS
   }
 
-  private static final float REFERENCE_WIDTH = 1080f;
   private static final int PRIMARY_TEXT_COLOR = 0xFF17233A;
   private static final int MUTED_TEXT_COLOR = 0xFF4E5665;
   private static final int ACCENT_COLOR = 0xFF019CC4;

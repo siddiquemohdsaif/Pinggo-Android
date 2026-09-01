@@ -20,6 +20,8 @@ import java.lang.ref.WeakReference;
 
 /** In-app floating live preview for a minimized video call. */
 public final class FloatingVideoCallController implements Application.ActivityLifecycleCallbacks {
+  private static final com.ogfa.nativeviews.component.FigmaConfig FIGMA_CONFIG =
+      new com.ogfa.nativeviews.component.FigmaConfig(1080f);
   public interface SurfaceTarget { void attach(android.view.Surface surface); }
   private static final FloatingVideoCallController INSTANCE = new FloatingVideoCallController();
   private WeakReference<Activity> previousActivity = new WeakReference<>(null);
@@ -59,9 +61,9 @@ public final class FloatingVideoCallController implements Application.ActivityLi
     if (!active || !minimized || activity instanceof VideoCallActivity) return;
     remove();
     ViewGroup decor = (ViewGroup) activity.getWindow().getDecorView();
-    FrameLayout card = new FrameLayout(activity); card.setElevation(dp(activity, 12));
+    FrameLayout card = new FrameLayout(activity); card.setElevation(px(activity, 33f));
     GradientDrawable bg = new GradientDrawable(); bg.setColor(Color.BLACK);
-    bg.setCornerRadius(dp(activity, 14)); bg.setStroke(dp(activity, 2), Color.WHITE);
+    bg.setCornerRadius(px(activity, 38.5f)); bg.setStroke(px(activity, 5.5f), Color.WHITE);
     card.setBackground(bg); card.setClipToOutline(true);
 
     SurfaceView preview = new SurfaceView(activity);
@@ -80,22 +82,22 @@ public final class FloatingVideoCallController implements Application.ActivityLi
 
     statusView = new TextView(activity); statusView.setText(status); statusView.setTextColor(Color.WHITE);
     statusView.setTextSize(12); statusView.setGravity(Gravity.CENTER); statusView.setBackgroundColor(0x88000000);
-    FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(-1, dp(activity, 32), Gravity.BOTTOM);
+    FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(-1, px(activity, 88f), Gravity.BOTTOM);
     card.addView(statusView, statusParams);
 
     TextView end = new TextView(activity); end.setText("End"); end.setTextColor(Color.WHITE);
     end.setTextSize(12); end.setGravity(Gravity.CENTER);
     GradientDrawable endBg = new GradientDrawable(); endBg.setColor(0xFFE53935);
-    endBg.setCornerRadius(dp(activity, 16)); end.setBackground(endBg);
-    FrameLayout.LayoutParams endParams = new FrameLayout.LayoutParams(dp(activity, 52),
-        dp(activity, 32), Gravity.TOP | Gravity.END); endParams.setMargins(0, dp(activity, 6), dp(activity, 6), 0);
+    endBg.setCornerRadius(px(activity, 44f)); end.setBackground(endBg);
+    FrameLayout.LayoutParams endParams = new FrameLayout.LayoutParams(px(activity, 143f),
+        px(activity, 88f), Gravity.TOP | Gravity.END); endParams.setMargins(0, px(activity, 16.5f), px(activity, 16.5f), 0);
     card.addView(end, endParams);
     end.setOnClickListener(view -> { if (endAction != null) endAction.run(); });
     makeDraggable(card, () -> restore(activity));
 
-    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(activity, 120),
-        dp(activity, 180), Gravity.TOP | Gravity.END);
-    params.setMargins(dp(activity, 12), dp(activity, 72), dp(activity, 16), 0);
+    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(px(activity, 330f),
+        px(activity, 495f), Gravity.TOP | Gravity.END);
+    params.setMargins(px(activity, 33f), px(activity, 198f), px(activity, 44f), 0);
     decor.addView(card, params); overlay = card; overlayHost = new WeakReference<>(activity);
   }
   private void restore(Activity host) {
@@ -115,7 +117,7 @@ public final class FloatingVideoCallController implements Application.ActivityLi
       }
       if (event.getAction() == MotionEvent.ACTION_MOVE) {
         float dx = event.getRawX() - down[0], dy = event.getRawY() - down[1];
-        if (Math.hypot(dx, dy) > dp((Activity) v.getContext(), 8)) moved[0] = true;
+        if (Math.hypot(dx, dy) > px((Activity) v.getContext(), 22f)) moved[0] = true;
         View parent = (View) v.getParent();
         float maxX = Math.max(0, parent.getWidth() - v.getWidth());
         float maxY = Math.max(0, parent.getHeight() - v.getHeight());
@@ -138,8 +140,9 @@ public final class FloatingVideoCallController implements Application.ActivityLi
       ((ViewGroup) overlay.getParent()).removeView(overlay);
     overlay = null; statusView = null; overlayHost.clear();
   }
-  private static int dp(Activity activity, float value) {
-    return Math.round(value * activity.getResources().getDisplayMetrics().density);
+  private static int px(Activity activity, float value) {
+    return Math.round(FIGMA_CONFIG.toRuntime(value,
+        Math.max(1, activity.getResources().getDisplayMetrics().widthPixels)));
   }
   @Override public void onActivityResumed(Activity activity) {
     if (activity instanceof VideoCallActivity) { minimized = false; remove(); }

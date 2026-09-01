@@ -61,7 +61,4 @@ public final class SplashAnimationView extends View {
         layers.release();
     }
 
-    private float dp(float value) {
-        return value * getResources().getDisplayMetrics().density;
-    }
 }

@@ -19,6 +19,8 @@ import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 
 /** Self-contained active video-call screen. */
 public final class VideoActiveCallView extends View {
+  private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
+      new com.ogfa.nativeviews.component.FigmaConfig(1080f);
   private static final int ACCENT = 0xFF019CC4;
   private final ZLayerGroup layers = new ZLayerGroup(this);
   private final ZLayer background = layers.addLayer("background"), content = layers.addLayer("content");
@@ -73,28 +75,28 @@ public final class VideoActiveCallView extends View {
   }
   private void build() {
     background.clear(); content.clear();
-    float w = getWidth(), h = getHeight(), top = topInset + dp(10);
-    button("back", control, "‹", new RectF(dp(10), top, dp(58), top + dp(48)), Color.WHITE,
+    float w = getWidth(), h = getHeight(), top = topInset + px(27.5f);
+    button("back", control, "‹", new RectF(px(27.5f), top, px(159.5f), top + px(132f)), Color.WHITE,
         id -> listener.onBack());
     content.add(new Image.Builder(getContext(), "header_profile", profile,
-        new RectF(dp(68), top + dp(4), dp(108), top + dp(44))).setScaleType(Image.ScaleType.CENTER_CROP));
-    text("phone", phone, new RectF(dp(118), top, w - dp(16), top + dp(48)), sp(17), Color.WHITE,
+        new RectF(px(187f), top + px(11f), px(297f), top + px(121f))).setScaleType(Image.ScaleType.CENTER_CROP));
+    text("phone", phone, new RectF(px(324.5f), top, w - px(44f), top + px(132f)), sp(17), Color.WHITE,
         FontVariation.SEMI_BOLD, Text.Alignment.START);
-    text("status", callStatus, new RectF(dp(24), top + dp(90), w - dp(24), top + dp(150)),
+    text("status", callStatus, new RectF(px(66f), top + px(247.5f), w - px(66f), top + px(412.5f)),
         sp(22), Color.WHITE, FontVariation.SEMI_BOLD, Text.Alignment.CENTER);
     if (remoteMuted) {
-      text("remote_mute", phone + " is muted", new RectF(dp(24), top + dp(145), w - dp(24),
-          top + dp(185)), sp(14), 0xFFCCD3D9, FontVariation.REGULAR, Text.Alignment.CENTER);
+      text("remote_mute", phone + " is muted", new RectF(px(66f), top + px(398.75f), w - px(66f),
+          top + px(508.75f)), sp(14), 0xFFCCD3D9, FontVariation.REGULAR, Text.Alignment.CENTER);
     } else if (muted) {
-      text("local_mute", "You are muted", new RectF(dp(24), top + dp(145), w - dp(24),
-          top + dp(185)), sp(14), 0xFFCCD3D9, FontVariation.REGULAR, Text.Alignment.CENTER);
+      text("local_mute", "You are muted", new RectF(px(66f), top + px(398.75f), w - px(66f),
+          top + px(508.75f)), sp(14), 0xFFCCD3D9, FontVariation.REGULAR, Text.Alignment.CENTER);
     }
     if (incomingPrompt) incomingControls(w, h); else controls(w, h);
     invalidate();
   }
   private void incomingControls(float w, float h) {
-    float bottom = h - bottomInset - dp(28), top = bottom - dp(68), gap = dp(28);
-    float width = Math.min(dp(130), (w - dp(48) - gap) / 2);
+    float bottom = h - bottomInset - px(77f), top = bottom - px(187f), gap = px(77f);
+    float width = Math.min(px(357.5f), (w - px(132f) - gap) / 2);
     float x = (w - width * 2 - gap) / 2;
     button("reject", danger, "Reject", new RectF(x, top, x + width, bottom), Color.WHITE,
         id -> listener.onReject());
@@ -103,8 +105,8 @@ public final class VideoActiveCallView extends View {
         id -> listener.onAccept());
   }
   private void controls(float w, float h) {
-    float bottom = h - bottomInset - dp(24), top = bottom - dp(64), gap = dp(8);
-    float width = Math.min(dp(70), (w - dp(24) - gap * 4) / 5);
+    float bottom = h - bottomInset - px(66f), top = bottom - px(176f), gap = px(22f);
+    float width = Math.min(px(192.5f), (w - px(66f) - gap * 4) / 5);
     float x = (w - (width * 5 + gap * 4)) / 2;
     button("flip", control, "Flip", new RectF(x, top, x + width, bottom), Color.WHITE,
         id -> listener.onFlipCamera());
@@ -132,7 +134,7 @@ public final class VideoActiveCallView extends View {
   private Button button(String id, Bitmap image, String label, RectF rect, int color,
       Button.OnClickListener click) {
     return content.add(new Button.Builder(getContext(), id, image, label, rect)
-        .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(dp(24)).setFont(NativeFonts.INTER)
+        .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(px(66f)).setFont(NativeFonts.INTER)
         .setFontVariations(FontVariation.SEMI_BOLD).setTextSizePx(sp(13)).setTextColor(color)
         .setRippleEnabled(true).setRippleColor(0x33FFFFFF).setOnClickListener(click));
   }
@@ -142,7 +144,7 @@ public final class VideoActiveCallView extends View {
   }
   public void release() { layers.release(); recycle(dark, control, selected, danger, disabled, profile); }
   private Bitmap avatar() {
-    int size = Math.round(dp(180)); Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+    int size = Math.round(px(495f)); Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
     Canvas canvas = new Canvas(bitmap); Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     paint.setColor(0xFF26333E); canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint);
     paint.setColor(Color.WHITE); paint.setTextAlign(Paint.Align.CENTER); paint.setTextSize(size * .26f);
@@ -150,7 +152,9 @@ public final class VideoActiveCallView extends View {
     canvas.drawText("▣", size / 2f, size / 2f - (metrics.ascent + metrics.descent) / 2f, paint);
     return bitmap;
   }
-  private float dp(float v) { return v * getResources().getDisplayMetrics().density; }
+  private float px(float v) {
+    return figmaConfig.toRuntime(v, Math.max(1, getResources().getDisplayMetrics().widthPixels));
+  }
   private float sp(float v) { return v * getResources().getDisplayMetrics().scaledDensity; }
   private static Bitmap color(int c) { Bitmap b = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888); b.eraseColor(c); return b; }
   private static void recycle(Bitmap... values) {

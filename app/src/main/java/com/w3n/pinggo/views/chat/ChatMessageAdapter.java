@@ -9,12 +9,14 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.text.StaticLayout;
 import android.text.TextPaint;
+import android.util.Log;
 import com.ogfa.nativeviews.font.NativeFonts;
 import com.ogfa.nativeviews.image.Image;
 import com.ogfa.nativeviews.list.ComponentList;
 import com.ogfa.nativeviews.text.FontVariation;
 import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.zlayer.ZLayer;
+import com.w3n.pinggo.data.cache.MediaPreviewCache;
 import com.w3n.pinggo.data.local.MessageEntity;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -30,7 +32,11 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /** Owns chat-message presentation, cached measurement, row diffing, and binding. */
 final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
+  private static final String LOCATION_PERF_TAG = "PingGoLocationPerf";
+  private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
+      new com.ogfa.nativeviews.component.FigmaConfig(1080f);
   private static final float MESSAGE_SCALE = 1.15f;
+  private static final float ATTACHMENT_SCALE = 1.15f;
   private static final int ACCENT = 0xFF019CC4;
   private static final int SECONDARY = 0xFF687382;
   private static final int MESSAGE_TEXT_COLOR = 0xFF131D2F;
@@ -51,13 +57,74 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   private static final float MESSAGE_TICK_HEIGHT_PX = 26f * MESSAGE_SCALE;
   private static final float MESSAGE_TICK_BOTTOM_PX = 15f * MESSAGE_SCALE;
   private static final float MESSAGE_PIN_GAP_PX = 10f * MESSAGE_SCALE;
-  private static final float MESSAGE_ROW_GAP_DP = 7f;
-  private static final float MESSAGE_ROW_HALF_GAP_DP = MESSAGE_ROW_GAP_DP / 2f;
-  private static final float MESSAGE_TAIL_WIDTH_DP = 4f;
-  private static final float MESSAGE_ROW_HORIZONTAL_INSET_DP = 12f;
+  private static final float MESSAGE_ROW_GAP_PX = 19.25f;
+  private static final float MESSAGE_ROW_HALF_GAP_PX = MESSAGE_ROW_GAP_PX / 2f;
+  private static final float MESSAGE_TAIL_WIDTH_PX = 11f;
+  private static final float MESSAGE_ROW_HORIZONTAL_INSET_PX = 33f;
+  private static final float IMAGE_BUBBLE_WIDTH_PX = 620f;
+  private static final float IMAGE_BUBBLE_HEIGHT_PX = 460f;
+  private static final float VIDEO_BUBBLE_WIDTH_PX = 620f;
+  private static final float VIDEO_BUBBLE_HEIGHT_PX = 260f;
+  private static final float PORTRAIT_MEDIA_WIDTH_PX = 460f;
+  private static final float PORTRAIT_MEDIA_HEIGHT_PX = 620f;
+  private static final float FILE_BUBBLE_WIDTH_PX = 596f;
+  private static final float FILE_BUBBLE_HEIGHT_PX = 127f + 7f;
+  private static final float LOCATION_BUBBLE_WIDTH_PX = 620f;
+  private static final float LOCATION_BUBBLE_HEIGHT_PX = 300f;
+  private static final float AUDIO_BUBBLE_WIDTH_PX = 620f;
+  private static final float AUDIO_BUBBLE_HEIGHT_PX = 150f;
+  private static final float FILE_TITLE_TEXT_SIZE_PX = 34f;
+  private static final float FILE_TITLE_LINE_SPACING_PX = 4f;
+  private static final float FILE_TITLE_WIDTH_PX = 438f;
+  private static final float MEDIA_PADDING_PX = 12f;
+  private static final float NOTICE_PADDING_PX = 15f;
+  private static final float NOTICE_LEFT_PX = 30f;
+  private static final float NOTICE_ICON_SIZE_PX = 32f;
+  private static final float NOTICE_TEXT_GAP_PX = 5f;
+  private static final float NOTICE_TEXT_SIZE_PX = MESSAGE_TEXT_SIZE_PX * .90f;
+  private static final float FORWARDED_PANEL_INSET_PX = 12f;
+  private static final float FORWARDED_HEADER_HEIGHT_PX =
+      NOTICE_PADDING_PX + NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX;
+  private static final float REPLY_BOX_INSET_PX = 12f;
+  private static final float REPLY_TEXT_LEFT_PX = 27f;
+  private static final float REPLY_TEXT_RIGHT_PX = 18f;
+  private static final float REPLY_TEXT_TOP_PX = 13f;
+  private static final float REPLY_TEXT_BOTTOM_PX = 13f;
+  private static final float REPLY_SENDER_TEXT_SIZE_PX = 32f * .90f;
+  private static final float REPLY_MESSAGE_TEXT_SIZE_PX = MESSAGE_TEXT_SIZE_PX * .90f * .90f;
+  private static final float REPLY_SENDER_MESSAGE_GAP_PX = 5f;
+  private static final float REPLY_MESSAGE_GAP_PX = 12f;
+  private static final float REPLY_IMAGE_LANDSCAPE_HEIGHT_PX = 529f;
+  private static final float REPLY_VIDEO_LANDSCAPE_HEIGHT_PX = 299f;
+  private static final float REPLY_PORTRAIT_MEDIA_HEIGHT_PX = 713f;
+  private static final float REPLY_FULL_ATTACHMENT_HEIGHT_PX = 146f;
+  private static final float REPLY_LOCATION_HEIGHT_PX = 345f;
+  private static final float REPLY_LANDSCAPE_MEDIA_WIDTH_PX = 713f;
+  private static final float REPLY_FULL_ATTACHMENT_WIDTH_PX = 685f;
+  private static final float REPLY_PORTRAIT_MEDIA_WIDTH_PX = 529f;
 
   interface AttachmentStateProvider {
     int attachmentState(MessageEntity message);
+  }
+
+  interface MediaMetricsListener {
+    void onMediaMetricsChanged();
+  }
+
+  interface AudioPlaybackListener {
+    void onAudioPlaybackToggle(String messageId);
+  }
+
+  interface ReplyNavigationListener {
+    void onReplyTargetSelected(String messageId);
+  }
+
+  interface MessageClickListener {
+    void onMessageClick(MessageEntity message);
+  }
+
+  interface MessageLongClickListener {
+    void onMessageLongClick(MessageEntity message);
   }
 
   private final Context context;
@@ -69,7 +136,21 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   private final Bitmap messageDeliveredIcon;
   private final Bitmap messageReadIcon;
   private final Bitmap messagePinnedIcon;
+  private final Bitmap documentIcon;
+  private final Bitmap deletedMessageIcon;
+  private final Bitmap forwardedMessageIcon;
+  private final Bitmap callPhoneIncomingIcon;
+  private final Bitmap callPhoneOutgoingIcon;
+  private final Bitmap callPhoneMissedIcon;
+  private final Bitmap callVideoIncomingIcon;
+  private final Bitmap callVideoOutgoingIcon;
+  private final Bitmap callVideoMissedIcon;
   private final AttachmentStateProvider attachmentStateProvider;
+  private final MediaMetricsListener mediaMetricsListener;
+  private final AudioPlaybackListener audioPlaybackListener;
+  private final ReplyNavigationListener replyNavigationListener;
+  private final MessageClickListener messageClickListener;
+  private final MessageLongClickListener messageLongClickListener;
   private final ChatPerformanceProfiler profiler;
   private final Set<String> selectedMessageIds;
   private final Typeface messageTypeface;
@@ -79,7 +160,16 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   private final List<MessageEntity> messages = new ArrayList<>();
   private final List<String> presentationSignatures = new ArrayList<>();
   private final List<String> dateLabels = new ArrayList<>();
-  private final Map<String, String> texts = new ConcurrentHashMap<>();
+  private final Map<String, String> replySenders = new ConcurrentHashMap<>();
+  private final Map<String, ReplyContent> replyContents = new ConcurrentHashMap<>();
+  private final Map<String, Boolean> mediaPortraits = new ConcurrentHashMap<>();
+  private final Map<String, Long> audioDurations = new ConcurrentHashMap<>();
+  private final Map<String, LocationRenderTiming> locationRenderTimings =
+      new ConcurrentHashMap<>();
+  private Bitmap chatProfile;
+  private String playingAudioMessageId = "";
+  private long playingAudioProgressMs;
+  private long playingAudioDurationMs;
   private final Map<String, MessageRenderModel> renderModelCache =
       new LinkedHashMap<String, MessageRenderModel>(64, .75f, true) {
         @Override
@@ -105,7 +195,21 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       Bitmap messageDeliveredIcon,
       Bitmap messageReadIcon,
       Bitmap messagePinnedIcon,
+      Bitmap documentIcon,
+      Bitmap deletedMessageIcon,
+      Bitmap forwardedMessageIcon,
+      Bitmap callPhoneIncomingIcon,
+      Bitmap callPhoneOutgoingIcon,
+      Bitmap callPhoneMissedIcon,
+      Bitmap callVideoIncomingIcon,
+      Bitmap callVideoOutgoingIcon,
+      Bitmap callVideoMissedIcon,
       AttachmentStateProvider attachmentStateProvider,
+      MediaMetricsListener mediaMetricsListener,
+      AudioPlaybackListener audioPlaybackListener,
+      ReplyNavigationListener replyNavigationListener,
+      MessageClickListener messageClickListener,
+      MessageLongClickListener messageLongClickListener,
       ChatPerformanceProfiler profiler,
       Set<String> selectedMessageIds) {
     this.context = context;
@@ -117,7 +221,21 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     this.messageDeliveredIcon = messageDeliveredIcon;
     this.messageReadIcon = messageReadIcon;
     this.messagePinnedIcon = messagePinnedIcon;
+    this.documentIcon = documentIcon;
+    this.deletedMessageIcon = deletedMessageIcon;
+    this.forwardedMessageIcon = forwardedMessageIcon;
+    this.callPhoneIncomingIcon = callPhoneIncomingIcon;
+    this.callPhoneOutgoingIcon = callPhoneOutgoingIcon;
+    this.callPhoneMissedIcon = callPhoneMissedIcon;
+    this.callVideoIncomingIcon = callVideoIncomingIcon;
+    this.callVideoOutgoingIcon = callVideoOutgoingIcon;
+    this.callVideoMissedIcon = callVideoMissedIcon;
     this.attachmentStateProvider = attachmentStateProvider;
+    this.mediaMetricsListener = mediaMetricsListener;
+    this.audioPlaybackListener = audioPlaybackListener;
+    this.replyNavigationListener = replyNavigationListener;
+    this.messageClickListener = messageClickListener;
+    this.messageLongClickListener = messageLongClickListener;
     this.profiler = profiler;
     this.selectedMessageIds = selectedMessageIds;
     messageTypeface = NativeFonts.load(context, NativeFonts.INTER);
@@ -132,31 +250,72 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         };
   }
 
+  void setChatProfile(Bitmap profile) {
+    chatProfile = profile;
+  }
+
+  void trackLocationRender(
+      String clientMessageId,
+      String traceId,
+      long pressedElapsedMs,
+      long pressedWallMs) {
+    if (clientMessageId == null || clientMessageId.isEmpty() || pressedElapsedMs <= 0L) return;
+    locationRenderTimings.put(
+        clientMessageId,
+        new LocationRenderTiming(traceId, pressedElapsedMs, pressedWallMs));
+  }
+
+  void setAudioPlaybackState(
+      String messageId, boolean playing, long progressMs, long durationMs) {
+    String key = messageId == null ? "" : messageId;
+    String previousKey = playingAudioMessageId;
+    if (durationMs > 0L && !key.isEmpty()) audioDurations.put(key, durationMs);
+    playingAudioMessageId = playing ? key : "";
+    playingAudioProgressMs = playing ? Math.max(0L, progressMs) : 0L;
+    playingAudioDurationMs = Math.max(0L, durationMs);
+    int previousPosition = indexOfMessage(previousKey);
+    int nextPosition = indexOfMessage(key);
+    if (previousPosition >= 0) notifyItemChanged(previousPosition);
+    if (nextPosition >= 0 && nextPosition != previousPosition) notifyItemChanged(nextPosition);
+  }
+
   boolean submit(List<MessageEntity> values) {
     long submitStartedNanos = SystemClock.elapsedRealtimeNanos();
     int oldCount = messages.size();
     int insertedCount = 0, changedCount = 0, removedCount = 0, movedCount = 0;
     List<MessageEntity> nextMessages =
         values == null ? new ArrayList<>() : new ArrayList<>(values);
-    Map<String, String> nextTexts = new HashMap<>();
+    Map<String, String> nextReplySenders = new HashMap<>();
+    Map<String, ReplyContent> nextReplyContents = new HashMap<>();
     List<MessageRenderModel> nextModels = new ArrayList<>(nextMessages.size());
     List<String> nextSignatures = new ArrayList<>(nextMessages.size());
     List<String> nextDateLabels = buildDateLabels(nextMessages);
     for (MessageEntity message : nextMessages) {
       MessageRenderModel model = renderModel(message);
       nextModels.add(model);
-      if (message.messageId != null) nextTexts.put(message.messageId, model.displayText);
+      if (message.messageId != null) {
+        nextReplyContents.put(message.messageId, replyContent(message, model));
+        nextReplySenders.put(message.messageId, String.valueOf(message.senderId));
+      }
     }
     for (int index = 0; index < nextModels.size(); index++) {
       MessageRenderModel model = nextModels.get(index);
-      String repliedText = model.repliedMessageId == null
-          ? null : nextTexts.get(model.repliedMessageId);
-      nextSignatures.add(model.presentationSignature + '\u0001' + String.valueOf(repliedText)
+      ReplyContent repliedContent = model.repliedMessageId == null
+          ? null : nextReplyContents.containsKey(model.repliedMessageId)
+              ? nextReplyContents.get(model.repliedMessageId)
+              : replyContents.get(model.repliedMessageId);
+      String repliedSender = model.repliedMessageId == null
+          ? null : nextReplySenders.containsKey(model.repliedMessageId)
+              ? nextReplySenders.get(model.repliedMessageId)
+              : replySenders.get(model.repliedMessageId);
+      nextSignatures.add(model.presentationSignature + '\u0001'
+          + (repliedContent == null ? "" : repliedContent.signature)
+          + '\u0001' + String.valueOf(repliedSender)
           + '\u0001' + nextDateLabels.get(index));
     }
     boolean changed = !presentationSignatures.equals(nextSignatures);
-    texts.clear();
-    texts.putAll(nextTexts);
+    replyContents.putAll(nextReplyContents);
+    replySenders.putAll(nextReplySenders);
     if (!changed) {
       // Keep the freshest Room entities even when their presentation is unchanged.
       messages.clear();
@@ -261,16 +420,58 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   }
 
   float rowHeight(MessageEntity message, int position, float availableWidth) {
-    float density = context.getResources().getDisplayMetrics().density;
-    float dateHeight = hasDateLabel(position) ? DateNotifierComponent.blockHeight(density) : 0f;
-    return dateHeight + metrics(message, availableWidth).bubbleHeight + dp(MESSAGE_ROW_GAP_DP);
+    float scale = figmaScale();
+    float dateHeight = hasDateLabel(position) ? DateNotifierComponent.blockHeight(scale) : 0f;
+    return dateHeight + metrics(message, availableWidth).bubbleHeight + px(MESSAGE_ROW_GAP_PX);
   }
 
   void prepareMetrics(List<MessageEntity> values, float availableWidth) {
+    indexReplyTargets(values);
     for (MessageEntity message : values) {
       if (Thread.currentThread().isInterrupted()) return;
-      metrics(renderModel(message), availableWidth);
+      MessageRenderModel model = renderModel(message);
+      if ("image".equals(model.mediaType) || "video".equals(model.mediaType)) {
+        boolean video = "video".equals(model.mediaType);
+        Boolean portrait = MediaPreviewCache.prepareOrientation(
+            context, model.attachmentSource, video);
+        if (portrait != null) {
+          Boolean previous = mediaPortraits.put(model.attachmentSource, portrait);
+          if (previous == null || previous != portrait) {
+            synchronized (metricsCache) { metricsCache.clear(); }
+          }
+        }
+      }
+      metrics(model, availableWidth);
     }
+  }
+
+  void indexReplyTargets(List<MessageEntity> values) {
+    boolean changed = false;
+    for (MessageEntity message : values) {
+      if (message.messageId == null) continue;
+      MessageRenderModel model = renderModel(message);
+      ReplyContent preview = replyContent(message, model);
+      String sender = String.valueOf(message.senderId);
+      ReplyContent oldPreview = replyContents.put(message.messageId, preview);
+      String oldSender = replySenders.put(message.messageId, sender);
+      changed |= oldPreview == null || !preview.signature.equals(oldPreview.signature)
+          || !sender.equals(oldSender);
+    }
+    if (changed) synchronized (metricsCache) { metricsCache.clear(); }
+  }
+
+  ReplyContent replyPreviewContent(MessageEntity message) {
+    if (message == null) return ReplyContent.text("Message unavailable");
+    return replyContent(message, renderModel(message));
+  }
+
+  String replyPreviewSender(MessageEntity message) {
+    return replySenderLabel(message == null ? null : message.senderId);
+  }
+
+  float replyPreviewHeight(String sender, ReplyContent content, float boxWidth) {
+    return Math.max(1f,
+        replyBlockHeight(sender, content, Math.max(1f, boxWidth)) - REPLY_MESSAGE_GAP_PX);
   }
 
   @Override
@@ -298,11 +499,11 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     ComponentList.ItemScope scope = item.getScope();
     float width = scope.width();
     float height = scope.height();
-    float horizontalInset = dp(MESSAGE_ROW_HORIZONTAL_INSET_DP);
+    float horizontalInset = px(MESSAGE_ROW_HORIZONTAL_INSET_PX);
     float bubbleWidth = (width - horizontalInset * 2f) * .66f;
     float left = type == 1 ? width - horizontalInset - bubbleWidth : horizontalInset;
     float right = type == 1 ? width - horizontalInset : horizontalInset + bubbleWidth;
-    float tailWidth = dp(MESSAGE_TAIL_WIDTH_DP);
+    float tailWidth = px(MESSAGE_TAIL_WIDTH_PX);
     float bodyLeft = type == 1 ? left : left + tailWidth;
     float bodyRight = type == 1 ? right - tailWidth : right;
     ZLayer row = item.addLayer("row");
@@ -315,33 +516,48 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         new DateNotifierComponent(
             scope.id("date_notifier"),
             messageTypeface,
-            context.getResources().getDisplayMetrics().density));
+            figmaScale()));
     row.add(
         new MessageBubbleComponent(
             scope.id("bubble"),
             new RectF(
                 left,
-                dp(MESSAGE_ROW_HALF_GAP_DP),
+                px(MESSAGE_ROW_HALF_GAP_PX),
                 right,
-                height - dp(MESSAGE_ROW_HALF_GAP_DP)),
-            context.getResources().getDisplayMetrics().density,
+                height - px(MESSAGE_ROW_HALF_GAP_PX)),
+            figmaScale(),
             type == 1));
-    row.add(
-        textBuilder(
-            scope.id("forwarded"),
-            "Forwarded",
-            new RectF(bodyLeft + dp(12), dp(7), bodyRight - dp(12), dp(30)),
-            sp(11),
-            type == 1 ? ACCENT : SECONDARY,
-            FontVariation.REGULAR));
-    row.add(
-        textBuilder(
-            scope.id("reply"),
-            "",
-            new RectF(bodyLeft + dp(12), dp(7), bodyRight - dp(12), dp(30)),
-            sp(11),
-            type == 1 ? ACCENT : SECONDARY,
-            FontVariation.REGULAR));
+    row.add(new MediaPreviewComponent(
+        scope.id("media_preview"), context,
+        figmaScale(),
+        this::onMediaOrientationAvailable));
+    row.add(new FilePreviewComponent(
+        scope.id("file_preview"), documentIcon, messageTypeface,
+        figmaScale()));
+    row.add(new LocationPreviewComponent(
+        scope.id("location_preview"), messageTypeface,
+        figmaScale()));
+    row.add(new AudioMessageComponent(
+        scope.id("audio_preview"), id -> {
+          if (audioPlaybackListener != null) audioPlaybackListener.onAudioPlaybackToggle(id);
+        }));
+    row.add(new CallPreviewComponent(
+        scope.id("call_preview"), messageTypeface,
+        figmaScale()));
+    row.add(new ForwardedMessagePanelComponent(
+        scope.id("forwarded_panel"),
+        figmaScale()));
+    row.add(new ReplyPreviewComponent(
+        context, scope.id("reply_preview"), documentIcon, chatProfile, messageTypeface,
+        REPLY_SENDER_TEXT_SIZE_PX, REPLY_MESSAGE_TEXT_SIZE_PX,
+        replyNavigationListener == null ? null
+            : replyNavigationListener::onReplyTargetSelected));
+    row.add(new MessageNoticeComponent(
+        scope.id("forwarded_notice"), forwardedMessageIcon, messageTypeface,
+        NOTICE_TEXT_SIZE_PX));
+    row.add(new MessageNoticeComponent(
+        scope.id("deleted_notice"), deletedMessageIcon, messageTypeface,
+        NOTICE_TEXT_SIZE_PX));
     row.add(
         textBuilder(
                 scope.id("message"),
@@ -389,48 +605,173 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     float dateOffset = dateLabel.isEmpty()
         ? 0f
         : DateNotifierComponent.blockHeight(
-            context.getResources().getDisplayMetrics().density);
+            figmaScale());
     item.find("date_notifier", DateNotifierComponent.class).bind(dateLabel, rowWidth);
     item.find("selection_background", Image.class)
         .setRegion(new RectF(0f, dateOffset, rowWidth, rowHeight))
         .setVisible(selectedMessageIds.contains(messageKey(message, position)));
-    float horizontalInset = dp(MESSAGE_ROW_HORIZONTAL_INSET_DP);
+    float horizontalInset = px(MESSAGE_ROW_HORIZONTAL_INSET_PX);
     MessageMetrics metrics = metrics(model, Math.max(1f, rowWidth - horizontalInset * 2f));
     float width = metrics.bubbleWidth;
     float left = own ? rowWidth - horizontalInset - width : horizontalInset;
     float right = own ? rowWidth - horizontalInset : horizontalInset + width;
-    float tailWidth = dp(MESSAGE_TAIL_WIDTH_DP);
+    float tailWidth = px(MESSAGE_TAIL_WIDTH_PX);
     float bodyLeft = own ? left : left + tailWidth;
     float bodyRight = own ? right - tailWidth : right;
-    float bubbleTop = dateOffset + dp(MESSAGE_ROW_HALF_GAP_DP);
-    float bubbleBottom = rowHeight - dp(MESSAGE_ROW_HALF_GAP_DP);
-    boolean hasReply = message.repliedMessageId != null && !message.repliedMessageId.isEmpty();
-    item.find("bubble", MessageBubbleComponent.class)
+    float bubbleTop = dateOffset + px(MESSAGE_ROW_HALF_GAP_PX);
+    float bubbleBottom = rowHeight - px(MESSAGE_ROW_HALF_GAP_PX);
+    boolean hasReply = !model.deleted
+        && message.repliedMessageId != null && !message.repliedMessageId.isEmpty();
+    boolean media = isMedia(message);
+    boolean file = isFile(message);
+    boolean location = isLocation(message);
+    boolean audio = isAudio(message);
+    boolean call = isCall(message);
+    boolean attachmentPreview = media || file || location || audio;
+    String mediaSource = attachmentSource(message);
+    float attachmentContentScale = 1f;
+    if (file || call) {
+      attachmentContentScale = width / FILE_BUBBLE_WIDTH_PX;
+    } else if (audio) {
+      attachmentContentScale = width / AUDIO_BUBBLE_WIDTH_PX;
+    } else if (location) {
+      attachmentContentScale = width / LOCATION_BUBBLE_WIDTH_PX;
+    } else if (media) {
+      float baseWidth = Boolean.TRUE.equals(mediaPortraits.get(mediaSource))
+          ? PORTRAIT_MEDIA_WIDTH_PX : IMAGE_BUBBLE_WIDTH_PX;
+      attachmentContentScale = width / baseWidth;
+    }
+    boolean tailLess = (attachmentPreview && !audio) || model.forwarded || hasReply || call;
+    if (tailLess) {
+      bodyLeft = left;
+      bodyRight = right;
+    }
+    MessageBubbleComponent bubble = item.find("bubble", MessageBubbleComponent.class);
+    bubble
         .setOutgoing(own)
+        .setTailEnabled(!tailLess)
+        .setShapeScale(attachmentContentScale)
         .setRegion(left, bubbleTop, right, bubbleBottom);
 
-    float headingTop = bubbleTop + MESSAGE_TOP_PADDING_PX;
-    item.find("forwarded", Text.class)
-        .setRegion(
-            positiveRect(
-                bodyLeft + MESSAGE_HORIZONTAL_PADDING_PX,
-                headingTop,
-                bodyRight - MESSAGE_HORIZONTAL_PADDING_PX,
-                headingTop + metrics.forwardedHeight))
-        .setVisible(model.forwarded);
+    float headingTop = bubbleTop
+        + (model.forwarded || model.deleted || hasReply
+            ? NOTICE_PADDING_PX : MESSAGE_TOP_PADDING_PX);
+    float attachmentTop = (attachmentPreview || call) && (model.forwarded || hasReply)
+        ? headingTop + metrics.forwardedHeight + metrics.replyHeight : bubbleTop;
+    RectF clickRegion = new RectF(left, bubbleTop, right, bubbleBottom);
+    if (media) {
+      clickRegion.set(
+          left + MEDIA_PADDING_PX * attachmentContentScale,
+          attachmentTop + MEDIA_PADDING_PX * attachmentContentScale,
+          right - MEDIA_PADDING_PX * attachmentContentScale,
+          bubbleBottom - MEDIA_PADDING_PX * attachmentContentScale);
+    } else if (file || location) {
+      float inset = MEDIA_PADDING_PX * attachmentContentScale;
+      clickRegion.set(left + inset, attachmentTop + inset,
+          right - inset, bubbleBottom - inset);
+    }
+    bubble
+        .setHitRegion(positiveRect(
+            clickRegion.left, clickRegion.top, clickRegion.right, clickRegion.bottom))
+        .setClickAction(messageClickListener == null
+            ? null : () -> messageClickListener.onMessageClick(message))
+        .setLongClickAction(messageLongClickListener == null
+            ? null : () -> messageLongClickListener.onMessageLongClick(message));
+    MediaPreviewComponent preview = item.find("media_preview", MediaPreviewComponent.class);
+    if (media) {
+      String source = mediaSource;
+      preview.bind(
+          positiveRect(left + MEDIA_PADDING_PX * attachmentContentScale,
+              attachmentTop + MEDIA_PADDING_PX * attachmentContentScale,
+              right - MEDIA_PADDING_PX * attachmentContentScale,
+              bubbleBottom - MEDIA_PADDING_PX * attachmentContentScale),
+          source == null ? "" : source,
+          "video".equals(message.messageType),
+          attachmentContentScale);
+    } else {
+      preview.hide();
+    }
+    FilePreviewComponent filePreview = item.find("file_preview", FilePreviewComponent.class);
+    if (file) {
+      String size = message.attachmentSize == null ? "" : formatSize(message.attachmentSize);
+      String subtitle = fileType(message);
+      if (!size.isEmpty()) subtitle += "  .  " + size;
+      filePreview.bind(new RectF(left, attachmentTop, right, bubbleBottom),
+          message.attachmentName, subtitle);
+    } else {
+      filePreview.hide();
+    }
+    LocationPreviewComponent locationPreview =
+        item.find("location_preview", LocationPreviewComponent.class);
+    if (location) {
+      locationPreview.bind(new RectF(left, attachmentTop, right, bubbleBottom),
+          message.latitude, message.longitude);
+    } else {
+      locationPreview.hide();
+    }
+    AudioMessageComponent audioPreview =
+        item.find("audio_preview", AudioMessageComponent.class);
+    if (audio) {
+      String key = messageKey(message, position);
+      boolean playing = key.equals(playingAudioMessageId);
+      long duration = playing && playingAudioDurationMs > 0L
+          ? playingAudioDurationMs
+          : audioDurations.getOrDefault(key, parseAudioDuration(message.text));
+      audioPreview.bind(new RectF(bodyLeft, attachmentTop, bodyRight, bubbleBottom),
+          chatProfile, key, playing,
+          playing ? playingAudioProgressMs : 0L, duration,
+          parseAudioWaveform(message.text));
+    } else {
+      audioPreview.hide();
+    }
 
-    String replied = message.repliedMessageId == null ? "" : texts.get(message.repliedMessageId);
-    item.find("reply", Text.class)
-        .setText(replied == null ? "Reply" : replied)
-        .setRegion(
-            positiveRect(
-                bodyLeft + MESSAGE_HORIZONTAL_PADDING_PX,
-                headingTop + metrics.forwardedHeight,
-                bodyRight - MESSAGE_HORIZONTAL_PADDING_PX,
-                headingTop + metrics.forwardedHeight + metrics.replyHeight))
-        .setVisible(hasReply);
+    MessageNoticeComponent forwardedNotice =
+        item.find("forwarded_notice", MessageNoticeComponent.class);
+    if (model.forwarded) {
+      forwardedNotice.bind(
+          positiveRect(bodyLeft + NOTICE_LEFT_PX, headingTop,
+              bodyRight - NOTICE_PADDING_PX, headingTop + NOTICE_ICON_SIZE_PX),
+          "Forwarded", NOTICE_ICON_SIZE_PX, NOTICE_TEXT_GAP_PX);
+    } else {
+      forwardedNotice.hide();
+    }
+
+    ReplyContent replied = message.repliedMessageId == null
+        ? null : replyContents.get(message.repliedMessageId);
+    if (replied == null) replied = ReplyContent.text("Message unavailable");
+    String repliedSender = message.repliedMessageId == null
+        ? "" : replySenders.get(message.repliedMessageId);
+    ReplyPreviewComponent replyPreview = item.find("reply_preview", ReplyPreviewComponent.class);
+    if (hasReply) {
+      float replyTop = headingTop + metrics.forwardedHeight;
+      replyPreview.bind(
+          positiveRect(bodyLeft + REPLY_BOX_INSET_PX, replyTop,
+              bodyRight - REPLY_BOX_INSET_PX,
+              replyTop + metrics.replyHeight - REPLY_MESSAGE_GAP_PX),
+          replySenderLabel(repliedSender), replied, message.repliedMessageId);
+    } else {
+      replyPreview.hide();
+    }
 
     float messageTop = headingTop + metrics.forwardedHeight + metrics.replyHeight;
+    CallPreviewComponent callPreview = item.find("call_preview", CallPreviewComponent.class);
+    if (call) {
+      callPreview.bind(new RectF(left, attachmentTop, right, bubbleBottom),
+          callIcon(message, own), model.displayText);
+    } else {
+      callPreview.hide();
+    }
+    ForwardedMessagePanelComponent forwardedPanel =
+        item.find("forwarded_panel", ForwardedMessagePanelComponent.class);
+    if (model.forwarded && !attachmentPreview && !call) {
+      forwardedPanel.bind(positiveRect(
+          bodyLeft + FORWARDED_PANEL_INSET_PX,
+          messageTop - FORWARDED_PANEL_INSET_PX,
+          bodyRight - FORWARDED_PANEL_INSET_PX,
+          bubbleBottom - FORWARDED_PANEL_INSET_PX));
+    } else {
+      forwardedPanel.hide();
+    }
     float textLeft = bodyLeft + MESSAGE_HORIZONTAL_PADDING_PX;
     float fullTextRight = bodyRight - MESSAGE_HORIZONTAL_PADDING_PX;
     float textRight =
@@ -442,45 +783,64 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     float textBottom = messageTop + metrics.textHeight;
     item.find("message", Text.class)
         .setRegion(positiveRect(textLeft, messageTop, textRight, textBottom))
-        .setText(model.displayText);
+        .setText(model.displayText)
+        .setVisible(!attachmentPreview && !model.deleted && !call);
 
     float contentLeft = bodyLeft + MESSAGE_HORIZONTAL_PADDING_PX;
     float metadataRight = bodyRight - MESSAGE_META_RIGHT_PX;
+    if (attachmentPreview || model.forwarded || call) metadataRight -= 10f;
     float tickRight = metadataRight;
     float tickLeft = tickRight - MESSAGE_TICK_WIDTH_PX;
-    float pinRight = model.showDelivery ? tickLeft - MESSAGE_PIN_GAP_PX : metadataRight;
+    float pinRight = model.showDelivery
+        ? tickLeft - MESSAGE_PIN_GAP_PX : metadataRight;
     float pinLeft = pinRight - MESSAGE_TICK_WIDTH_PX;
     float timeRight = model.pinned
         ? pinLeft - MESSAGE_PIN_GAP_PX
-        : model.showDelivery ? tickLeft - MESSAGE_TIME_TICK_GAP_PX : metadataRight;
+        : model.showDelivery
+            ? tickLeft - MESSAGE_TIME_TICK_GAP_PX : metadataRight;
     Text time = item.find("time", Text.class);
     time.setRegion(positiveRect(contentLeft, bubbleTop, timeRight, bubbleBottom))
+        .setTextSizePx(MESSAGE_TIME_SIZE_PX)
         .setText(model.formattedTime);
     float timeLeft = timeRight - metrics.timeWidth;
-    float timeBottom = bubbleBottom - MESSAGE_TIME_BOTTOM_PX;
+    float timeBottom = bubbleBottom
+        - (attachmentPreview || call
+            ? (MEDIA_PADDING_PX + 8f) * attachmentContentScale : MESSAGE_TIME_BOTTOM_PX);
     time.setRegion(
         positiveRect(
             timeLeft - MESSAGE_TIME_RECT_EXTRA_PX,
             timeBottom - metrics.timeHeight,
             timeRight,
             timeBottom));
+    MessageNoticeComponent deletedNotice =
+        item.find("deleted_notice", MessageNoticeComponent.class);
+    if (model.deleted) {
+      deletedNotice.bind(
+          positiveRect(bodyLeft + NOTICE_LEFT_PX, headingTop,
+              bodyRight - NOTICE_PADDING_PX, headingTop + metrics.textHeight),
+          "This Message was deleted", NOTICE_ICON_SIZE_PX, NOTICE_TEXT_GAP_PX);
+    } else {
+      deletedNotice.hide();
+    }
     item.find("delivery", Image.class)
         .setBitmap(messageStatusIcon(message))
         .setRegion(
             positiveRect(
                 tickLeft,
-                bubbleBottom - MESSAGE_TICK_BOTTOM_PX - MESSAGE_TICK_HEIGHT_PX,
+                bubbleBottom - MESSAGE_TICK_BOTTOM_PX * attachmentContentScale
+                    - MESSAGE_TICK_HEIGHT_PX,
                 tickRight,
-                bubbleBottom - MESSAGE_TICK_BOTTOM_PX))
+                bubbleBottom - MESSAGE_TICK_BOTTOM_PX * attachmentContentScale))
         .setVisible(model.showDelivery);
     item.find("pinned", Image.class)
         .setBitmap(messagePinnedIcon)
         .setRegion(
             positiveRect(
                 pinLeft,
-                bubbleBottom - MESSAGE_TICK_BOTTOM_PX - MESSAGE_TICK_HEIGHT_PX,
+                bubbleBottom - MESSAGE_TICK_BOTTOM_PX * attachmentContentScale
+                    - MESSAGE_TICK_HEIGHT_PX,
                 pinRight,
-                bubbleBottom - MESSAGE_TICK_BOTTOM_PX))
+                bubbleBottom - MESSAGE_TICK_BOTTOM_PX * attachmentContentScale))
         .setVisible(model.pinned);
     if (profiler != null) {
       profiler.rowBound(
@@ -488,6 +848,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
           position,
           message.messageId);
     }
+    logLocationRendered(message);
   }
 
   void release() {
@@ -497,7 +858,13 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     synchronized (metricsCache) {
       metricsCache.clear();
     }
+    replySenders.clear();
+    replyContents.clear();
     measurementTools.remove();
+  }
+
+  void refreshMeasuredRows() {
+    notifyDataSetChanged();
   }
 
   private MessageMetrics metrics(MessageEntity message, float availableWidth) {
@@ -506,14 +873,17 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
 
   private MessageMetrics metrics(MessageRenderModel model, float availableWidth) {
     boolean own = model.own;
+    boolean call = isCallType(model.mediaType);
     String value = model.displayText;
     String time = model.formattedTime;
-    String replyValue = model.repliedMessageId == null
-        ? "" : texts.get(model.repliedMessageId);
-    if (replyValue == null) replyValue = "Reply";
+    ReplyContent replyValue = model.repliedMessageId == null
+        ? null : replyContents.get(model.repliedMessageId);
+    if (replyValue == null) replyValue = ReplyContent.text("Message unavailable");
+    String replySender = model.repliedMessageId == null
+        ? "" : replySenderLabel(replySenders.get(model.repliedMessageId));
     MetricKey cacheKey = new MetricKey(
         model.stableMessageId,
-        model.contentVersion ^ stableId(replyValue),
+        model.contentVersion ^ stableId(replyValue.signature) ^ stableId(replySender),
         Float.floatToIntBits(availableWidth));
     MessageMetrics cached;
     synchronized (metricsCache) {
@@ -521,17 +891,134 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     }
     if (cached != null) return cached;
     long metricStartedNanos = SystemClock.elapsedRealtimeNanos();
-    float tailWidth = dp(MESSAGE_TAIL_WIDTH_DP);
+    if (call) {
+      float desiredWidth = FILE_BUBBLE_WIDTH_PX * ATTACHMENT_SCALE;
+      float desiredHeight = FILE_BUBBLE_HEIGHT_PX * ATTACHMENT_SCALE;
+      float scale = Math.min(1f, availableWidth / desiredWidth);
+      float finalWidth = desiredWidth * scale;
+      float replyHeight = model.repliedMessageId == null || model.repliedMessageId.isEmpty()
+          ? 0f : replyBlockHeight(replySender, replyValue,
+              finalWidth - REPLY_BOX_INSET_PX * 2f);
+      float headerHeight = model.forwarded
+          ? FORWARDED_HEADER_HEIGHT_PX
+          : replyHeight > 0f ? NOTICE_PADDING_PX : 0f;
+      Paint callTimePaint = new Paint(measurementTools.get().timePaint);
+      Paint.FontMetrics timeFont = callTimePaint.getFontMetrics();
+      MessageMetrics callMetrics = new MessageMetrics(
+          finalWidth,
+          desiredHeight * scale + headerHeight + replyHeight,
+          1f,
+          1f,
+          model.forwarded ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX : 0f,
+          replyHeight,
+          callTimePaint.measureText(model.formattedTime) + MESSAGE_TIME_RECT_EXTRA_PX,
+          (float) Math.ceil(timeFont.descent - timeFont.ascent),
+          true);
+      synchronized (metricsCache) { metricsCache.put(cacheKey, callMetrics); }
+      return callMetrics;
+    }
+    if (model.mediaType != null && !call) {
+      if ("image".equals(model.mediaType) || "video".equals(model.mediaType)) {
+        Boolean preparedPortrait = mediaPortraits.get(model.attachmentSource);
+        if (preparedPortrait == null) {
+          preparedPortrait = MediaPreviewCache.cachedPortrait(
+              model.attachmentSource, "video".equals(model.mediaType));
+          if (preparedPortrait != null) {
+            mediaPortraits.put(model.attachmentSource, preparedPortrait);
+          }
+        }
+      }
+      float desiredWidth = "audio".equals(model.mediaType)
+          ? AUDIO_BUBBLE_WIDTH_PX
+          : isFileType(model.mediaType)
+          ? FILE_BUBBLE_WIDTH_PX
+          : "location".equals(model.mediaType) ? LOCATION_BUBBLE_WIDTH_PX
+          : "video".equals(model.mediaType) ? VIDEO_BUBBLE_WIDTH_PX : IMAGE_BUBBLE_WIDTH_PX;
+      float desiredHeight = "audio".equals(model.mediaType)
+          ? AUDIO_BUBBLE_HEIGHT_PX
+          : isFileType(model.mediaType)
+          ? FILE_BUBBLE_HEIGHT_PX
+          : "location".equals(model.mediaType) ? LOCATION_BUBBLE_HEIGHT_PX
+          : "video".equals(model.mediaType) ? VIDEO_BUBBLE_HEIGHT_PX : IMAGE_BUBBLE_HEIGHT_PX;
+      if (isFileType(model.mediaType)) {
+        desiredHeight += fileTitleExtraHeight(model.attachmentName);
+      } else if (Boolean.TRUE.equals(mediaPortraits.get(model.attachmentSource))) {
+        desiredWidth = PORTRAIT_MEDIA_WIDTH_PX;
+        desiredHeight = PORTRAIT_MEDIA_HEIGHT_PX;
+      }
+      desiredWidth *= ATTACHMENT_SCALE;
+      desiredHeight *= ATTACHMENT_SCALE;
+      float scale = Math.min(1f, availableWidth / desiredWidth);
+      float finalWidth = desiredWidth * scale;
+      float replyHeight = model.repliedMessageId == null || model.repliedMessageId.isEmpty()
+          ? 0f : replyBlockHeight(replySender, replyValue,
+              finalWidth - REPLY_BOX_INSET_PX * 2f);
+      float headerHeight = model.forwarded
+          ? FORWARDED_HEADER_HEIGHT_PX
+          : replyHeight > 0f ? NOTICE_PADDING_PX : 0f;
+      Paint mediaTimePaint = new Paint(measurementTools.get().timePaint);
+      Paint.FontMetrics timeFont = mediaTimePaint.getFontMetrics();
+      MessageMetrics mediaMetrics = new MessageMetrics(
+          finalWidth,
+          desiredHeight * scale + headerHeight + replyHeight,
+          1f, 1f,
+          model.forwarded ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX : 0f,
+          replyHeight,
+          mediaTimePaint.measureText(model.formattedTime)
+              + MESSAGE_TIME_RECT_EXTRA_PX,
+          (float) Math.ceil(timeFont.descent - timeFont.ascent),
+          true);
+      synchronized (metricsCache) { metricsCache.put(cacheKey, mediaMetrics); }
+      return mediaMetrics;
+    }
+    boolean hasReply = !model.deleted
+        && model.repliedMessageId != null && !model.repliedMessageId.isEmpty();
+    float tailWidth = model.forwarded || hasReply ? 0f : px(MESSAGE_TAIL_WIDTH_PX);
     MeasurementTools tools = measurementTools.get();
     TextPaint paint = tools.messagePaint;
     Paint timePaint = tools.timePaint;
-    float longestLine = Math.max(
-        longestLineWidth(value, paint),
-        longestLineWidth(replyValue, tools.replyPaint));
     float timeWidth = timePaint.measureText(time) + MESSAGE_TIME_RECT_EXTRA_PX;
     float metadataWidth = timeWidth
         + (model.showDelivery ? MESSAGE_TIME_TICK_GAP_PX + MESSAGE_TICK_WIDTH_PX : 0f)
         + (model.pinned ? MESSAGE_PIN_GAP_PX + MESSAGE_TICK_WIDTH_PX : 0f);
+    Paint.FontMetrics timeFont = timePaint.getFontMetrics();
+    float metadataHeight = Math.max(
+        MESSAGE_TICK_HEIGHT_PX, (float) Math.ceil(timeFont.descent - timeFont.ascent));
+    if (model.deleted) {
+      Paint noticePaint = tools.noticePaint;
+      Paint.FontMetrics noticeFont = noticePaint.getFontMetrics();
+      float noticeHeight = Math.max(NOTICE_ICON_SIZE_PX,
+          (float) Math.ceil(noticeFont.descent - noticeFont.ascent));
+      float noticeWidth = NOTICE_ICON_SIZE_PX + NOTICE_TEXT_GAP_PX
+          + noticePaint.measureText("This Message was deleted");
+      float minimumBodyWidth = 170f * MESSAGE_SCALE;
+      float maximumBubbleWidth = availableWidth * .80f;
+      float bodyWidth = Math.max(minimumBodyWidth,
+          Math.max(NOTICE_LEFT_PX + noticeWidth + NOTICE_PADDING_PX,
+              NOTICE_PADDING_PX + metadataWidth + MESSAGE_META_RIGHT_PX));
+      float bubbleWidth = Math.min(maximumBubbleWidth, tailWidth + bodyWidth);
+      float bubbleHeight = NOTICE_PADDING_PX + noticeHeight + NOTICE_PADDING_PX
+          + metadataHeight + MESSAGE_TIME_BOTTOM_PX;
+      MessageMetrics deletedMetrics = new MessageMetrics(
+          bubbleWidth, bubbleHeight, noticeWidth, noticeHeight,
+          0f, 0f, timeWidth, metadataHeight, false);
+      synchronized (metricsCache) { metricsCache.put(cacheKey, deletedMetrics); }
+      return deletedMetrics;
+    }
+    float longestLine = longestLineWidth(value, paint);
+    if (model.forwarded) {
+      longestLine = Math.max(longestLine,
+          NOTICE_ICON_SIZE_PX + NOTICE_TEXT_GAP_PX
+              + tools.noticePaint.measureText("Forwarded"));
+    }
+    float replyDesiredBodyWidth = 0f;
+    if (hasReply) {
+      float replyContentWidth = Math.max(
+          replyPreferredContentWidth(replyValue, tools),
+          tools.replySenderPaint.measureText(replySender));
+      replyDesiredBodyWidth = REPLY_BOX_INSET_PX * 2f + REPLY_TEXT_LEFT_PX
+          + replyContentWidth + REPLY_TEXT_RIGHT_PX;
+    }
     float minimumBodyWidth = 170f * MESSAGE_SCALE;
     float maximumBubbleWidth = availableWidth * .80f;
     float desiredBodyWidth =
@@ -542,12 +1029,20 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
                 + MESSAGE_TEXT_META_GAP_PX
                 + metadataWidth
                 + MESSAGE_META_RIGHT_PX);
+    if (model.forwarded) {
+      float forwardedWidth = NOTICE_ICON_SIZE_PX + NOTICE_TEXT_GAP_PX
+          + tools.noticePaint.measureText("Forwarded");
+      desiredBodyWidth = Math.max(desiredBodyWidth,
+          NOTICE_LEFT_PX + forwardedWidth + NOTICE_PADDING_PX);
+    }
+    desiredBodyWidth = Math.max(desiredBodyWidth, replyDesiredBodyWidth);
     float bubbleWidth =
         Math.max(
             tailWidth + minimumBodyWidth,
             Math.min(maximumBubbleWidth, tailWidth + desiredBodyWidth));
     float bodyWidth = bubbleWidth - tailWidth;
-    float textWidth = Math.max(1f, bodyWidth - MESSAGE_HORIZONTAL_PADDING_PX * 2f);
+    float textWidth = Math.max(1f,
+        bodyWidth - MESSAGE_HORIZONTAL_PADDING_PX * 2f);
     StaticLayout layout =
         StaticLayout.Builder.obtain(
                 value, 0, value.length(), paint, Math.max(1, Math.round(textWidth)))
@@ -560,7 +1055,8 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     for (int line = 0; line < layout.getLineCount(); line++) {
       renderedTextWidth = Math.max(renderedTextWidth, layout.getLineWidth(line));
     }
-    float inlineWidth = bodyWidth - MESSAGE_HORIZONTAL_PADDING_PX - MESSAGE_META_RIGHT_PX;
+    float inlineWidth = bodyWidth - MESSAGE_HORIZONTAL_PADDING_PX
+        - MESSAGE_META_RIGHT_PX;
     boolean metadataInline =
         lastLineWidth + MESSAGE_TEXT_META_GAP_PX + metadataWidth <= inlineWidth;
     if (!metadataInline) {
@@ -571,27 +1067,27 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       float stackedMetadataWidth =
           MESSAGE_HORIZONTAL_PADDING_PX + metadataWidth + MESSAGE_META_RIGHT_PX;
       bodyWidth =
-          Math.max(minimumBodyWidth, Math.max(stackedTextWidth, stackedMetadataWidth));
+          Math.max(minimumBodyWidth,
+              Math.max(replyDesiredBodyWidth, Math.max(stackedTextWidth, stackedMetadataWidth)));
       bubbleWidth = Math.min(maximumBubbleWidth, tailWidth + bodyWidth);
     }
-    Paint.FontMetrics timeFont = timePaint.getFontMetrics();
-    float metadataHeight =
-        Math.max(
-            MESSAGE_TICK_HEIGHT_PX,
-            (float) Math.ceil(timeFont.descent - timeFont.ascent));
-    float replyHeight =
-        model.repliedMessageId == null || model.repliedMessageId.isEmpty()
-            ? 0f
-            : dp(22) * MESSAGE_SCALE;
-    float forwardedHeight = model.forwarded ? dp(22) * MESSAGE_SCALE : 0f;
-    float messageTop = MESSAGE_TOP_PADDING_PX + forwardedHeight + replyHeight;
+    float replyHeight = hasReply
+        ? replyBlockHeight(replySender, replyValue,
+            bodyWidth - REPLY_BOX_INSET_PX * 2f)
+        : 0f;
+    float forwardedHeight = model.forwarded
+        ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX : 0f;
+    float messageTop = (model.forwarded || hasReply
+            ? NOTICE_PADDING_PX : MESSAGE_TOP_PADDING_PX)
+        + forwardedHeight + replyHeight;
     float metadataTop =
         messageTop
             + (metadataInline
                 ? layout.getLineTop(lastLine)
                 : layout.getHeight() + MESSAGE_LINE_SPACING_PX);
     float contentBottom =
-        Math.max(messageTop + layout.getHeight(), metadataTop + metadataHeight);
+        Math.max(
+            messageTop + layout.getHeight(), metadataTop + metadataHeight);
     float bubbleHeight = contentBottom + MESSAGE_BOTTOM_PADDING_PX;
     MessageMetrics result = new MessageMetrics(
         bubbleWidth,
@@ -636,6 +1132,9 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         deleted,
         own && !deleted,
         own,
+        mediaType(message),
+        message.attachmentName,
+        attachmentSource(message),
         sourceSignature,
         stableId(cacheKey),
         stableId(displayed + '\u0001' + formattedTime + '\u0001'
@@ -650,7 +1149,8 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
 
   private int visualAttachmentState(MessageEntity message) {
     String type = message.messageType == null ? "text" : message.messageType;
-    if (!("image".equals(type) || "video".equals(type) || "file".equals(type))) return -1;
+    if (!("image".equals(type) || "video".equals(type)
+        || "audio".equals(type) || "file".equals(type))) return -1;
     return attachmentStateProvider.attachmentState(message);
   }
 
@@ -666,10 +1166,13 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         + String.valueOf(message.messageType) + '\u0001'
         + String.valueOf(message.attachmentName) + '\u0001'
         + String.valueOf(message.attachmentSize) + '\u0001'
+        + String.valueOf(message.attachmentUrl) + '\u0001'
+        + String.valueOf(message.attachmentLocalUri) + '\u0001'
         + String.valueOf(message.latitude) + '\u0001'
         + String.valueOf(message.longitude) + '\u0001'
         + String.valueOf(message.forwardedFrom) + '\u0001'
-        + message.pinned + '\u0001' + String.valueOf(message.deletedText) + '\u0001'
+        + message.pinned + '\u0001' + String.valueOf(message.pinnedBy) + '\u0001'
+        + String.valueOf(message.deletedText) + '\u0001'
         + attachmentState;
   }
 
@@ -683,31 +1186,25 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
               + ", "
               + formatCoordinate(message.longitude)
               + "\nTap to open map";
-    } else if ("image".equals(type) || "video".equals(type) || "file".equals(type)) {
-      String fallback = "file".equals(type) ? "File" : capitalize(type);
-      String name =
-          message.attachmentName == null || message.attachmentName.isEmpty()
-              ? fallback
-              : message.attachmentName;
-      String size =
-          message.attachmentSize == null ? "" : " • " + formatSize(message.attachmentSize);
-      String availability = "";
-      if (!"sending".equals(message.status) && !"failed".equals(message.status)) {
-        if (attachmentState == 1) availability = "\n↓ Download";
-        else if (attachmentState == 2) availability = "\n◷ Downloading";
-      }
-      displayed =
-          "["
-              + type.toUpperCase(Locale.US)
-              + "]\n"
-              + name
-              + size
-              + captionSuffix(message.text)
-              + availability;
+    } else if ("image".equals(type) || "video".equals(type)) {
+      displayed = "";
+    } else if ("file".equals(type) || "audio".equals(type)) {
+      displayed = "";
+    } else if (isCallType(type)) {
+      displayed = stripCallLabel(message.text);
     } else {
       displayed = message.text == null ? "" : message.text;
     }
     return displayed + statusSuffix(message);
+  }
+
+  private static String stripCallLabel(String value) {
+    if (value == null) return "";
+    return value.replace("[Voice Call]", "")
+        .replace("[Video Call]", "")
+        .replace('\n', ' ')
+        .trim()
+        .replaceAll("\\s+", " ");
   }
 
   private String formatMessageTime(long sentTime) {
@@ -794,6 +1291,94 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     return currentUser.equals(normalize(message.senderId));
   }
 
+  private static boolean isMedia(MessageEntity message) {
+    String type = mediaType(message);
+    return "image".equals(type) || "video".equals(type);
+  }
+
+  private static boolean isFile(MessageEntity message) {
+    return isFileType(mediaType(message));
+  }
+
+  private static boolean isFileType(String type) {
+    return "file".equals(type);
+  }
+
+  private static boolean isAudio(MessageEntity message) {
+    return "audio".equals(mediaType(message));
+  }
+
+  private static boolean isLocation(MessageEntity message) {
+    return "location".equals(mediaType(message));
+  }
+
+  private static boolean isCall(MessageEntity message) {
+    return isCallType(mediaType(message));
+  }
+
+  private static boolean isCallType(String type) {
+    return "voice_call".equals(type) || "video_call".equals(type);
+  }
+
+  private static String mediaType(MessageEntity message) {
+    if (message == null || isDeletedMessage(message)) return null;
+    String type = message.messageType;
+    if ("location".equals(type) && message.latitude != null && message.longitude != null) {
+      return "location";
+    }
+    return "image".equals(type) || "video".equals(type) || "audio".equals(type)
+        || "file".equals(type)
+        || "voice_call".equals(type) || "video_call".equals(type) ? type : null;
+  }
+
+  private Bitmap callIcon(MessageEntity message, boolean own) {
+    boolean video = "video_call".equals(message.messageType);
+    String label = message.text == null ? "" : message.text.toLowerCase(Locale.US);
+    boolean missed = label.contains("missed");
+    boolean didntConnect = label.contains("didn't connect") || label.contains("did not connect");
+    if (video) {
+      if (missed) return callVideoMissedIcon;
+      if (didntConnect || !own) return callVideoIncomingIcon;
+      return callVideoOutgoingIcon;
+    }
+    if (missed) return callPhoneMissedIcon;
+    if (didntConnect || !own) return callPhoneIncomingIcon;
+    return callPhoneOutgoingIcon;
+  }
+
+  private static String fileType(MessageEntity message) {
+    String name = message.attachmentName;
+    if (name != null) {
+      int dot = name.lastIndexOf('.');
+      if (dot >= 0 && dot < name.length() - 1) {
+        return name.substring(dot + 1).toUpperCase(Locale.US);
+      }
+    }
+    String mime = message.attachmentMimeType;
+    if (mime != null) {
+      int slash = mime.lastIndexOf('/');
+      if (slash >= 0 && slash < mime.length() - 1) {
+        return mime.substring(slash + 1).toUpperCase(Locale.US);
+      }
+    }
+    return "FILE";
+  }
+
+  private static String attachmentSource(MessageEntity message) {
+    if (message == null) return "";
+    String local = message.attachmentLocalUri;
+    if (local != null && !local.trim().isEmpty()) return local;
+    return message.attachmentUrl == null ? "" : message.attachmentUrl;
+  }
+
+  private void onMediaOrientationAvailable(String source, boolean portrait) {
+    if (source == null || source.isEmpty()) return;
+    Boolean previous = mediaPortraits.put(source, portrait);
+    if (previous != null && previous == portrait) return;
+    synchronized (metricsCache) { metricsCache.clear(); }
+    if (mediaMetricsListener != null) mediaMetricsListener.onMediaMetricsChanged();
+  }
+
   private static boolean isDeletedMessage(MessageEntity message) {
     return message != null && (message.deletedText != null
         || "This Message was deleted".equals(message.text));
@@ -846,6 +1431,44 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     return String.format(Locale.US, "%.1f MB", bytes / (1024f * 1024f));
   }
 
+  private static long parseAudioDuration(String value) {
+    if (value == null) return 0L;
+    String duration = value.trim();
+    int metadataStart = duration.indexOf('|');
+    if (metadataStart >= 0) duration = duration.substring(0, metadataStart).trim();
+    int separator = duration.indexOf(':');
+    if (separator <= 0 || separator >= duration.length() - 1) return 0L;
+    try {
+      long minutes = Long.parseLong(duration.substring(0, separator));
+      long seconds = Long.parseLong(duration.substring(separator + 1));
+      if (minutes < 0L || seconds < 0L || seconds > 59L) return 0L;
+      return (minutes * 60L + seconds) * 1000L;
+    } catch (NumberFormatException ignored) {
+      return 0L;
+    }
+  }
+
+  private static float[] parseAudioWaveform(String value) {
+    if (value == null) return null;
+    String marker = "|waveform=";
+    int start = value.indexOf(marker);
+    if (start < 0) return null;
+    String encoded = value.substring(start + marker.length()).trim();
+    if (encoded.isEmpty()) return null;
+    String[] levels = encoded.split(",");
+    if (levels.length < 2 || levels.length > 64) return null;
+    float[] waveform = new float[levels.length];
+    try {
+      for (int index = 0; index < levels.length; index++) {
+        int level = Integer.parseInt(levels[index].trim());
+        waveform[index] = Math.max(.08f, Math.min(1f, level / 100f));
+      }
+      return waveform;
+    } catch (NumberFormatException ignored) {
+      return null;
+    }
+  }
+
   private String formatCoordinate(double value) {
     return String.format(Locale.US, "%.6f", value);
   }
@@ -861,6 +1484,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   private static String normalize(String value) {
     if (value == null) return "";
     String normalized = value.trim();
+    if (normalized.startsWith("<plus>")) normalized = normalized.substring(6);
     return normalized.startsWith("+") ? normalized.substring(1) : normalized;
   }
 
@@ -878,8 +1502,45 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     return new RectF(left, top, Math.max(left + 1f, right), Math.max(top + 1f, bottom));
   }
 
-  private float dp(float value) {
-    return value * context.getResources().getDisplayMetrics().density;
+  private float px(float value) {
+    return figmaConfig.toRuntime(value,
+        Math.max(1, context.getResources().getDisplayMetrics().widthPixels));
+  }
+
+  private float figmaScale() {
+    return figmaConfig.getScale(
+        Math.max(1, context.getResources().getDisplayMetrics().widthPixels));
+  }
+
+  private void logLocationRendered(MessageEntity message) {
+    if (!isLocation(message)) return;
+    String clientId = message.clientMessageId == null || message.clientMessageId.isEmpty()
+        ? message.messageId : message.clientMessageId;
+    LocationRenderTiming timing = locationRenderTimings.remove(clientId);
+    if (timing == null && message.messageId != null) {
+      timing = locationRenderTimings.remove(message.messageId);
+    }
+    if (timing == null) return;
+    long elapsedMs = SystemClock.elapsedRealtime() - timing.pressedElapsedMs;
+    Log.i(
+        LOCATION_PERF_TAG,
+        "trace=" + timing.traceId
+            + " event=render"
+            + " elapsedMs=" + elapsedMs
+            + " pressedWallTimeMs=" + timing.pressedWallMs
+            + " clientMessageId=" + clientId);
+  }
+
+  private static final class LocationRenderTiming {
+    final String traceId;
+    final long pressedElapsedMs;
+    final long pressedWallMs;
+
+    LocationRenderTiming(String traceId, long pressedElapsedMs, long pressedWallMs) {
+      this.traceId = traceId == null ? "" : traceId;
+      this.pressedElapsedMs = pressedElapsedMs;
+      this.pressedWallMs = pressedWallMs;
+    }
   }
 
   private float sp(float value) {
@@ -898,9 +1559,123 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     return longest;
   }
 
+  private float fileTitleExtraHeight(String title) {
+    String value = title == null || title.trim().isEmpty() ? "File" : title.trim();
+    TextPaint paint = measurementTools.get().fileTitlePaint;
+    StaticLayout wrapped = StaticLayout.Builder.obtain(
+            value, 0, value.length(), paint, Math.round(FILE_TITLE_WIDTH_PX))
+        .setIncludePad(false)
+        .setLineSpacing(FILE_TITLE_LINE_SPACING_PX, 1f)
+        .build();
+    StaticLayout single = StaticLayout.Builder.obtain(
+            "Ag", 0, 2, paint, Math.round(FILE_TITLE_WIDTH_PX))
+        .setIncludePad(false)
+        .setLineSpacing(FILE_TITLE_LINE_SPACING_PX, 1f)
+        .build();
+    return Math.max(0f, wrapped.getHeight() - single.getHeight());
+  }
+
+  private float replyBlockHeight(String sender, ReplyContent content, float boxWidth) {
+    MeasurementTools tools = measurementTools.get();
+    int contentWidth = Math.max(1,
+        Math.round(boxWidth - REPLY_TEXT_LEFT_PX - REPLY_TEXT_RIGHT_PX));
+    String senderValue = sender == null || sender.isEmpty() ? "Unknown" : sender;
+    StaticLayout senderLayout = StaticLayout.Builder.obtain(
+            senderValue, 0, senderValue.length(), tools.replySenderPaint, contentWidth)
+        .setIncludePad(false)
+        .setMaxLines(1)
+        .build();
+    float contentHeight;
+    if (content != null && content.isMedia()) {
+      boolean portrait = Boolean.TRUE.equals(mediaPortraits.get(content.source));
+      contentHeight = portrait ? REPLY_PORTRAIT_MEDIA_HEIGHT_PX
+          : ReplyContent.VIDEO.equals(content.type)
+              ? REPLY_VIDEO_LANDSCAPE_HEIGHT_PX : REPLY_IMAGE_LANDSCAPE_HEIGHT_PX;
+    } else if (content != null && ReplyContent.LOCATION.equals(content.type)) {
+      contentHeight = REPLY_LOCATION_HEIGHT_PX;
+    } else if (content != null && (ReplyContent.AUDIO.equals(content.type)
+        || ReplyContent.FILE.equals(content.type) || content.isCall())) {
+      contentHeight = REPLY_FULL_ATTACHMENT_HEIGHT_PX;
+    } else {
+      String messageValue = content == null || content.text.isEmpty()
+          ? "Message unavailable" : content.text;
+      StaticLayout messageLayout = StaticLayout.Builder.obtain(
+              messageValue, 0, messageValue.length(), tools.replyMessagePaint, contentWidth)
+          .setIncludePad(false)
+          .build();
+      contentHeight = messageLayout.getHeight();
+    }
+    if (content != null && (content.isMedia()
+        || ReplyContent.AUDIO.equals(content.type)
+        || ReplyContent.FILE.equals(content.type)
+        || ReplyContent.LOCATION.equals(content.type) || content.isCall())) {
+      float preferredWidth = replyPreferredContentWidth(content, tools);
+      contentHeight *= Math.min(1f, contentWidth / Math.max(1f, preferredWidth));
+    }
+    float boxHeight = REPLY_TEXT_TOP_PX + senderLayout.getHeight()
+        + REPLY_SENDER_MESSAGE_GAP_PX + contentHeight + REPLY_TEXT_BOTTOM_PX;
+    return boxHeight + REPLY_MESSAGE_GAP_PX;
+  }
+
+  private float replyPreferredContentWidth(
+      ReplyContent content, MeasurementTools tools) {
+    if (content != null && content.isMedia()) {
+      return Boolean.TRUE.equals(mediaPortraits.get(content.source))
+          ? REPLY_PORTRAIT_MEDIA_WIDTH_PX : REPLY_LANDSCAPE_MEDIA_WIDTH_PX;
+    }
+    if (content != null && (ReplyContent.AUDIO.equals(content.type)
+        || ReplyContent.FILE.equals(content.type) || ReplyContent.LOCATION.equals(content.type)
+        || content.isCall())) {
+      return REPLY_FULL_ATTACHMENT_WIDTH_PX;
+    }
+    String value = content == null || content.text.isEmpty()
+        ? "Message unavailable" : content.text;
+    return longestLineWidth(value, tools.replyMessagePaint);
+  }
+
+  private String replySenderLabel(String senderId) {
+    String value = senderId == null || "null".equals(senderId) ? "" : senderId.trim();
+    if (currentUser.equals(normalize(value))) return "You";
+    if (value.startsWith("<plus>")) value = "+" + value.substring(6);
+    return value.isEmpty() ? "Unknown" : value;
+  }
+
+  private ReplyContent replyContent(MessageEntity message, MessageRenderModel model) {
+    if (model.deleted) return ReplyContent.text("This Message was deleted");
+    if ("image".equals(model.mediaType) || "video".equals(model.mediaType)) {
+      return ReplyContent.media(model.mediaType, model.attachmentSource);
+    }
+    if ("audio".equals(model.mediaType)) {
+      return ReplyContent.audio(parseAudioDuration(message.text),
+          parseAudioWaveform(message.text));
+    }
+    if ("file".equals(model.mediaType)) {
+      String title = message.attachmentName == null || message.attachmentName.trim().isEmpty()
+          ? "File" : message.attachmentName.trim();
+      String subtitle = fileType(message);
+      if (message.attachmentSize != null) subtitle += "  .  " + formatSize(message.attachmentSize);
+      return ReplyContent.file(title, subtitle);
+    }
+    if ("location".equals(model.mediaType)
+        && message.latitude != null && message.longitude != null) {
+      return ReplyContent.location(message.latitude, message.longitude);
+    }
+    if ("voice_call".equals(model.mediaType) || "video_call".equals(model.mediaType)) {
+      return ReplyContent.call(model.mediaType, model.displayText, callIcon(message, model.own));
+    }
+    if (model.displayText != null && !model.displayText.trim().isEmpty()) {
+      return ReplyContent.text(model.displayText.trim());
+    }
+    return ReplyContent.text("Message unavailable");
+  }
+
   private static final class MeasurementTools {
     final TextPaint messagePaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
     final TextPaint replyPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+    final TextPaint replySenderPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+    final TextPaint replyMessagePaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+    final TextPaint fileTitlePaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+    final Paint noticePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
     final Paint timePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     MeasurementTools(Typeface typeface, float replyTextSize) {
@@ -908,6 +1683,23 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       messagePaint.setTextSize(MESSAGE_TEXT_SIZE_PX);
       replyPaint.setTypeface(typeface);
       replyPaint.setTextSize(replyTextSize);
+      replySenderPaint.setTypeface(
+          android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P
+              ? Typeface.create(typeface, 600, false)
+              : Typeface.create(typeface, Typeface.BOLD));
+      replySenderPaint.setTextSize(REPLY_SENDER_TEXT_SIZE_PX);
+      replyMessagePaint.setTypeface(
+          android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P
+              ? Typeface.create(typeface, 100, false)
+              : Typeface.create(typeface, Typeface.NORMAL));
+      replyMessagePaint.setTextSize(REPLY_MESSAGE_TEXT_SIZE_PX);
+      fileTitlePaint.setTypeface(typeface);
+      fileTitlePaint.setTextSize(FILE_TITLE_TEXT_SIZE_PX);
+      noticePaint.setTypeface(android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P
+          ? Typeface.create(typeface, 100, false)
+          : Typeface.create(typeface, Typeface.NORMAL));
+      noticePaint.setTextSkewX(-0.22f);
+      noticePaint.setTextSize(NOTICE_TEXT_SIZE_PX);
       timePaint.setTypeface(typeface);
       timePaint.setTextSize(MESSAGE_TIME_SIZE_PX);
     }
@@ -922,6 +1714,9 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     final boolean deleted;
     final boolean showDelivery;
     final boolean own;
+    final String mediaType;
+    final String attachmentName;
+    final String attachmentSource;
     final String sourceSignature;
     final String presentationSignature;
     final long stableMessageId;
@@ -936,6 +1731,9 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         boolean deleted,
         boolean showDelivery,
         boolean own,
+        String mediaType,
+        String attachmentName,
+        String attachmentSource,
         String sourceSignature,
         long stableMessageId,
         long contentVersion) {
@@ -947,6 +1745,9 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       this.deleted = deleted;
       this.showDelivery = showDelivery;
       this.own = own;
+      this.mediaType = mediaType;
+      this.attachmentName = attachmentName;
+      this.attachmentSource = attachmentSource;
       this.sourceSignature = sourceSignature;
       this.presentationSignature = sourceSignature;
       this.stableMessageId = stableMessageId;

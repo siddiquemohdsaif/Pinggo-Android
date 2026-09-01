@@ -37,6 +37,8 @@ import java.util.Map;
 
 public class VideoCallActivity extends AppCompatActivity implements VideoActiveCallView.Listener,
     VideoCallController.Listener {
+  private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
+      new com.ogfa.nativeviews.component.FigmaConfig(1080f);
   private static final String TAG = "PingGoVideoCall";
   private VideoActiveCallView callView;
   private AudioManager audioManager;
@@ -229,10 +231,10 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
       Toast.makeText(this, message, Toast.LENGTH_SHORT).show()); }
   private void showConnectedLayout() {
     if (localSurface == null) return;
-    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(120), dp(180),
+    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(px(330f), px(495f),
         Gravity.TOP | Gravity.END);
-    params.topMargin = dp(72);
-    params.rightMargin = dp(16);
+    params.topMargin = px(198f);
+    params.rightMargin = px(44f);
     localSurface.setLayoutParams(params);
     if (localCameraOffView != null) localCameraOffView.setLayoutParams(new FrameLayout.LayoutParams(params));
     localSurface.bringToFront();
@@ -284,7 +286,9 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
   private String value(String key) {
     String result = getIntent().getStringExtra(key); return result == null ? "" : result.trim();
   }
-  private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
+  private int px(float value) {
+    return Math.round(figmaConfig.toRuntime(value, Math.max(1, getResources().getDisplayMetrics().widthPixels)));
+  }
   private final class SurfaceCallback implements SurfaceHolder.Callback {
     private final boolean local;
     SurfaceCallback(boolean local) { this.local = local; }

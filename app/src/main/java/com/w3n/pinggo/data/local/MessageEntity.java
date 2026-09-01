@@ -41,6 +41,8 @@ public class MessageEntity {
     public Float locationAccuracy;
     public boolean pinned;
     public Long pinnedAt;
+    /** Unit-separator-delimited normalized account ids represented by server `pinned: []`. */
+    public String pinnedBy;
     public String forwardedFrom;
     public String deletedText;
     public boolean invisible;

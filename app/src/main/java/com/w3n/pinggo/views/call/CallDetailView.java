@@ -19,6 +19,8 @@ import java.util.Locale;
 
 /** AAR-native call detail screen. */
 public final class CallDetailView extends View {
+  private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
+      new com.ogfa.nativeviews.component.FigmaConfig(1080f);
   private final ZLayerGroup layers = new ZLayerGroup(this);
   private final ZLayer background = layers.addLayer("background");
   private final ZLayer content = layers.addLayer("content");
@@ -65,7 +67,7 @@ public final class CallDetailView extends View {
     background.clear();
     content.clear();
     float w = getWidth();
-    float top = topInset + dp(10);
+    float top = topInset + px(27.5f);
     background.add(
         new Image.Builder(getContext(), "bg", white, new RectF(0, 0, w, getHeight()))
             .setScaleType(Image.ScaleType.FIT_XY));
@@ -73,29 +75,29 @@ public final class CallDetailView extends View {
         "back",
         white,
         "‹",
-        new RectF(dp(8), top, dp(56), top + dp(48)),
+        new RectF(px(22f), top, px(154f), top + px(132f)),
         0xFF000E1A,
         id -> listener.onBack());
     addText(
         "title",
         "Call details",
-        new RectF(dp(64), top, w - dp(20), top + dp(48)),
+        new RectF(px(176f), top, w - px(55f), top + px(132f)),
         sp(23),
         0xFF000E1A,
         FontVariation.BOLD,
         Text.Alignment.START);
-    float avatarTop = top + dp(84);
+    float avatarTop = top + px(231f);
     content.add(
         new Image.Builder(
                 getContext(),
                 "avatar",
                 avatar(name),
-                new RectF(w / 2 - dp(58), avatarTop, w / 2 + dp(58), avatarTop + dp(116)))
+                new RectF(w / 2 - px(159.5f), avatarTop, w / 2 + px(159.5f), avatarTop + px(319f)))
             .setScaleType(Image.ScaleType.CENTER_CROP));
     addText(
         "name",
         name,
-        new RectF(dp(24), avatarTop + dp(128), w - dp(24), avatarTop + dp(174)),
+        new RectF(px(66f), avatarTop + px(352f), w - px(66f), avatarTop + px(478.5f)),
         sp(24),
         0xFF000E1A,
         FontVariation.BOLD,
@@ -103,16 +105,16 @@ public final class CallDetailView extends View {
     addText(
         "type",
         video ? "Video call" : "Voice call",
-        new RectF(dp(24), avatarTop + dp(180), w - dp(24), avatarTop + dp(216)),
+        new RectF(px(66f), avatarTop + px(495f), w - px(66f), avatarTop + px(594f)),
         sp(16),
         0xFF019CC4,
         FontVariation.SEMI_BOLD,
         Text.Alignment.CENTER);
-    float cardTop = avatarTop + dp(250);
+    float cardTop = avatarTop + px(687.5f);
     addText(
         "date_label",
         "Date and time",
-        new RectF(dp(28), cardTop, w - dp(28), cardTop + dp(28)),
+        new RectF(px(77f), cardTop, w - px(77f), cardTop + px(77f)),
         sp(13),
         0xFF687382,
         FontVariation.REGULAR,
@@ -120,7 +122,7 @@ public final class CallDetailView extends View {
     addText(
         "date",
         dateTime,
-        new RectF(dp(28), cardTop + dp(28), w - dp(28), cardTop + dp(70)),
+        new RectF(px(77f), cardTop + px(77f), w - px(77f), cardTop + px(192.5f)),
         sp(17),
         0xFF000E1A,
         FontVariation.SEMI_BOLD,
@@ -128,7 +130,7 @@ public final class CallDetailView extends View {
     addText(
         "duration_label",
         "Duration",
-        new RectF(dp(28), cardTop + dp(92), w - dp(28), cardTop + dp(120)),
+        new RectF(px(77f), cardTop + px(253f), w - px(77f), cardTop + px(330f)),
         sp(13),
         0xFF687382,
         FontVariation.REGULAR,
@@ -136,7 +138,7 @@ public final class CallDetailView extends View {
     addText(
         "duration",
         duration,
-        new RectF(dp(28), cardTop + dp(120), w - dp(28), cardTop + dp(162)),
+        new RectF(px(77f), cardTop + px(330f), w - px(77f), cardTop + px(445.5f)),
         sp(17),
         0xFF000E1A,
         FontVariation.SEMI_BOLD,
@@ -146,10 +148,10 @@ public final class CallDetailView extends View {
         accent,
         video ? "Start video call" : "Call again",
         new RectF(
-            dp(28),
-            getHeight() - bottomInset - dp(76),
-            w - dp(28),
-            getHeight() - bottomInset - dp(20)),
+            px(77f),
+            getHeight() - bottomInset - px(209f),
+            w - px(77f),
+            getHeight() - bottomInset - px(55f)),
         Color.WHITE,
         id -> listener.onCallAgain(video));
     invalidate();
@@ -179,7 +181,7 @@ public final class CallDetailView extends View {
     content.add(
         new Button.Builder(getContext(), id, bitmap, label, rect)
             .setImageScaleType(Image.ScaleType.FIT_XY)
-            .setCornerRadiusPx(dp(16))
+            .setCornerRadiusPx(px(44f))
             .setFont(NativeFonts.INTER)
             .setFontVariations(FontVariation.SEMI_BOLD)
             .setTextSizePx(sp(16))
@@ -206,7 +208,7 @@ public final class CallDetailView extends View {
   }
 
   private Bitmap avatar(String value) {
-    int size = Math.round(dp(116));
+    int size = Math.round(px(319f));
     Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
     Canvas canvas = new Canvas(bitmap);
     Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -224,8 +226,8 @@ public final class CallDetailView extends View {
     return bitmap;
   }
 
-  private float dp(float v) {
-    return v * getResources().getDisplayMetrics().density;
+  private float px(float v) {
+    return figmaConfig.toRuntime(v, Math.max(1, getResources().getDisplayMetrics().widthPixels));
   }
 
   private float sp(float v) {

@@ -11,6 +11,8 @@ import android.view.MotionEvent;
 import android.view.View;
 
 public class CropImageView extends View {
+  private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
+      new com.ogfa.nativeviews.component.FigmaConfig(1080f);
     private final Paint imagePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Paint dimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint borderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -42,7 +44,7 @@ public class CropImageView extends View {
         dimPaint.setColor(0x99000000);
         borderPaint.setColor(Color.WHITE);
         borderPaint.setStyle(Paint.Style.STROKE);
-        borderPaint.setStrokeWidth(dp(3));
+        borderPaint.setStrokeWidth(px(8.25f));
         handlePaint.setColor(Color.WHITE);
         handlePaint.setStyle(Paint.Style.FILL);
     }
@@ -53,17 +55,17 @@ public class CropImageView extends View {
         invalidate();
     }
 
-    public void setCropBoxSizeDp(int cropBoxSizeDp) {
-        setCropBoxSizeRangeDp(cropBoxSizeDp, cropBoxSizeDp);
+    public void setCropBoxSizePx(int cropBoxSizePx) {
+        setCropBoxSizeRangePx(cropBoxSizePx, cropBoxSizePx);
     }
 
     /** Makes the square crop box responsive within the supplied size range. */
-    public void setCropBoxSizeRangeDp(int minimumSizeDp, int maximumSizeDp) {
-        if (minimumSizeDp < 0 || maximumSizeDp <= 0 || minimumSizeDp > maximumSizeDp) {
+    public void setCropBoxSizeRangePx(int minimumSizePx, int maximumSizePx) {
+        if (minimumSizePx < 0 || maximumSizePx <= 0 || minimumSizePx > maximumSizePx) {
             throw new IllegalArgumentException("Invalid crop box size range");
         }
-        minimumCropBoxSizePx = Math.round(dp(minimumSizeDp));
-        maximumCropBoxSizePx = Math.round(dp(maximumSizeDp));
+        minimumCropBoxSizePx = Math.round(px(minimumSizePx));
+        maximumCropBoxSizePx = Math.round(px(maximumSizePx));
         resetRects();
         invalidate();
     }
@@ -213,7 +215,7 @@ public class CropImageView extends View {
     }
 
     private boolean isNearCropBorder(float x, float y) {
-        float touchTarget = dp(24);
+        float touchTarget = px(66f);
         if (x < cropRect.left - touchTarget || x > cropRect.right + touchTarget
                 || y < cropRect.top - touchTarget || y > cropRect.bottom + touchTarget) {
             return false;
@@ -230,7 +232,7 @@ public class CropImageView extends View {
     }
 
     private void drawResizeHandles(Canvas canvas) {
-        float radius = dp(6);
+        float radius = px(16.5f);
         canvas.drawCircle(cropRect.left, cropRect.top, radius, handlePaint);
         canvas.drawCircle(cropRect.right, cropRect.top, radius, handlePaint);
         canvas.drawCircle(cropRect.left, cropRect.bottom, radius, handlePaint);
@@ -241,7 +243,8 @@ public class CropImageView extends View {
         return Math.max(min, Math.min(value, max));
     }
 
-    private float dp(int value) {
-        return value * getResources().getDisplayMetrics().density;
-    }
+    private float px(float value) {
+    return figmaConfig.toRuntime(value, Math.max(1, getResources().getDisplayMetrics().widthPixels));
+  }
+
 }

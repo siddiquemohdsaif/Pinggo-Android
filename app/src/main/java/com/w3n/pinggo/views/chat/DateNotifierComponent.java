@@ -12,7 +12,7 @@ import com.ogfa.nativeviews.component.ComponentHost;
 final class DateNotifierComponent implements Component {
   private static final float MESSAGE_SCALE = 1.15f;
   static final float HEIGHT_PX = 51f * MESSAGE_SCALE;
-  private static final float VERTICAL_PADDING_DP = 8f;
+  private static final float VERTICAL_PADDING_PX = 22f;
 
   private static final int BACKGROUND_COLOR = 0xFF5C6B85;
   private static final int TEXT_COLOR = 0xFFF9FBFE;
@@ -21,7 +21,7 @@ final class DateNotifierComponent implements Component {
   private static final float CORNER_RADIUS_PX = 20f;
 
   private final String id;
-  private final float density;
+  private final float figmaScale;
   private final RectF bounds = new RectF();
   private final Paint backgroundPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
   private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -30,9 +30,9 @@ final class DateNotifierComponent implements Component {
   private boolean visible;
   private boolean released;
 
-  DateNotifierComponent(String id, Typeface typeface, float density) {
+  DateNotifierComponent(String id, Typeface typeface, float figmaScale) {
     this.id = id;
-    this.density = Math.max(1f, density);
+    this.figmaScale = Math.max(.01f, figmaScale);
     backgroundPaint.setColor(BACKGROUND_COLOR);
     backgroundPaint.setStyle(Paint.Style.FILL);
     textPaint.setColor(TEXT_COLOR);
@@ -48,7 +48,7 @@ final class DateNotifierComponent implements Component {
     float width = nextVisible
         ? (float) Math.ceil(textPaint.measureText(next) + HORIZONTAL_PADDING_PX * 2f)
         : 0f;
-    float verticalPadding = VERTICAL_PADDING_DP * density;
+    float verticalPadding = VERTICAL_PADDING_PX * figmaScale;
     float left = (rowWidth - width) / 2f;
     boolean changed = !label.equals(next)
         || visible != nextVisible
@@ -107,7 +107,7 @@ final class DateNotifierComponent implements Component {
     if (released) throw new IllegalStateException("Date notifier has been released.");
   }
 
-  static float blockHeight(float density) {
-    return HEIGHT_PX + VERTICAL_PADDING_DP * Math.max(1f, density) * 2f;
+  static float blockHeight(float figmaScale) {
+    return HEIGHT_PX + VERTICAL_PADDING_PX * Math.max(.01f, figmaScale) * 2f;
   }
 }

@@ -19,6 +19,8 @@ import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 
 /** Self-contained active voice-call screen. */
 public final class VoiceActiveCallView extends View {
+  private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
+      new com.ogfa.nativeviews.component.FigmaConfig(1080f);
   private static final int ACCENT = 0xFF019CC4;
   private final ZLayerGroup layers = new ZLayerGroup(this);
   private final ZLayer background = layers.addLayer("background"), content = layers.addLayer("content");
@@ -80,22 +82,22 @@ public final class VoiceActiveCallView extends View {
 
   private void build() {
     background.clear(); content.clear();
-    float w = getWidth(), h = getHeight(), top = topInset + dp(10);
+    float w = getWidth(), h = getHeight(), top = topInset + px(27.5f);
     background.add(new Image.Builder(getContext(), "bg", light, new RectF(0, 0, w, h))
         .setScaleType(Image.ScaleType.FIT_XY));
-    button("back", white, "‹", new RectF(dp(10), top, dp(58), top + dp(48)), 0xFF000E1A,
+    button("back", white, "‹", new RectF(px(27.5f), top, px(159.5f), top + px(132f)), 0xFF000E1A,
         id -> listener.onBack());
-    text("phone", phone, new RectF(dp(68), top, w - dp(20), top + dp(48)), sp(20), 0xFF000E1A,
+    text("phone", phone, new RectF(px(187f), top, w - px(55f), top + px(132f)), sp(20), 0xFF000E1A,
         FontVariation.SEMI_BOLD, Text.Alignment.START);
-    float size = Math.min(dp(168), w * .44f), avatarTop = top + dp(126);
+    float size = Math.min(px(462f), w * .44f), avatarTop = top + px(346.5f);
     content.add(new Image.Builder(getContext(), "profile", profile,
         new RectF(w / 2 - size / 2, avatarTop, w / 2 + size / 2, avatarTop + size))
         .setScaleType(Image.ScaleType.CENTER_CROP));
-    text("status", callStatus, new RectF(dp(24), avatarTop + size + dp(22), w - dp(24),
-        avatarTop + size + dp(68)), sp(18), ACCENT, FontVariation.SEMI_BOLD, Text.Alignment.CENTER);
+    text("status", callStatus, new RectF(px(66f), avatarTop + size + px(60.5f), w - px(66f),
+        avatarTop + size + px(187f)), sp(18), ACCENT, FontVariation.SEMI_BOLD, Text.Alignment.CENTER);
     if (remoteMuted) {
       text("remote_mute", "Muted himself",
-          new RectF(dp(24), avatarTop + size + dp(66), w - dp(24), avatarTop + size + dp(104)),
+          new RectF(px(66f), avatarTop + size + px(181.5f), w - px(66f), avatarTop + size + px(286f)),
           sp(14), 0xFF687382, FontVariation.REGULAR, Text.Alignment.CENTER);
     }
     if (incomingPrompt) incomingControls(w, h); else controls(w, h);
@@ -103,7 +105,7 @@ public final class VoiceActiveCallView extends View {
   }
 
   private void incomingControls(float w, float h) {
-    float bottom = h - bottomInset - dp(24), top = bottom - dp(64), width = dp(118), gap = dp(28);
+    float bottom = h - bottomInset - px(66f), top = bottom - px(176f), width = px(324.5f), gap = px(77f);
     float x = (w - width * 2 - gap) / 2;
     button("reject", danger, "Reject", new RectF(x, top, x + width, bottom), Color.WHITE,
         id -> listener.onReject());
@@ -113,8 +115,8 @@ public final class VoiceActiveCallView extends View {
   }
 
   private void controls(float w, float h) {
-    float bottom = h - bottomInset - dp(24), top = bottom - dp(64), gap = dp(18);
-    float width = Math.min(dp(92), (w - dp(48) - gap * 2) / 3);
+    float bottom = h - bottomInset - px(66f), top = bottom - px(176f), gap = px(49.5f);
+    float width = Math.min(px(253f), (w - px(132f) - gap * 2) / 3);
     float x = (w - (width * 3 + gap * 2)) / 2;
     button("speaker", speakerOn ? selected : control, speakerOn ? "Speaker on" : "Speaker",
         new RectF(x, top, x + width, bottom), Color.WHITE, id -> listener.onSpeaker());
@@ -137,7 +139,7 @@ public final class VoiceActiveCallView extends View {
   private Button button(String id, Bitmap image, String label, RectF rect, int color,
       Button.OnClickListener click) {
     return content.add(new Button.Builder(getContext(), id, image, label, rect)
-        .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(dp(24)).setFont(NativeFonts.INTER)
+        .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(px(66f)).setFont(NativeFonts.INTER)
         .setFontVariations(FontVariation.SEMI_BOLD).setTextSizePx(sp(13)).setTextColor(color)
         .setRippleEnabled(true).setRippleColor(0x33FFFFFF).setOnClickListener(click));
   }
@@ -147,7 +149,7 @@ public final class VoiceActiveCallView extends View {
   }
   public void release() { layers.release(); recycle(light, white, control, selected, danger, accept, disabled, profile); }
   private Bitmap avatar() {
-    int size = Math.round(dp(180)); Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+    int size = Math.round(px(495f)); Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
     Canvas canvas = new Canvas(bitmap); Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     paint.setColor(0xFFD9F1F7); canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint);
     paint.setColor(ACCENT); paint.setTextAlign(Paint.Align.CENTER); paint.setTextSize(size * .28f);
@@ -155,7 +157,9 @@ public final class VoiceActiveCallView extends View {
     canvas.drawText("☎", size / 2f, size / 2f - (metrics.ascent + metrics.descent) / 2f, paint);
     return bitmap;
   }
-  private float dp(float v) { return v * getResources().getDisplayMetrics().density; }
+  private float px(float v) {
+    return figmaConfig.toRuntime(v, Math.max(1, getResources().getDisplayMetrics().widthPixels));
+  }
   private float sp(float v) { return v * getResources().getDisplayMetrics().scaledDensity; }
   private static Bitmap color(int c) { Bitmap b = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888); b.eraseColor(c); return b; }
   private static void recycle(Bitmap... values) {

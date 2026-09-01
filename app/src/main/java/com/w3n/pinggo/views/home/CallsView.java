@@ -24,6 +24,8 @@ import java.util.Locale;
 
 /** Scrollable call list implemented with native-views-release.aar components. */
 public final class CallsView extends View {
+  private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
+      new com.ogfa.nativeviews.component.FigmaConfig(1080f);
     private static final int PRIMARY = 0xFF000E1A;
     private static final int SECONDARY = 0xFF687382;
     private static final int ACCENT = 0xFF019CC4;
@@ -55,12 +57,12 @@ public final class CallsView extends View {
         stateLayer.clear();
         list = listLayer.add(new ComponentList.Builder<CallLog>(getContext(), "call_component_list",
                 new RectF(0, 0, width, height)).setOrientation(ComponentList.Orientation.VERTICAL)
-                .setItemSize(dp(76)).setPaddingPx(dp(12), dp(4), dp(12), dp(96))
+                .setItemSize(px(209f)).setPaddingPx(px(33f), px(11f), px(33f), px(264f))
                 .setAdapter(adapter).setClipToBounds(true).setOverscrollEnabled(false)
                 .setOnItemClickListener((componentList, call, position) ->
                         clickListener.onCallClick(call)));
         emptyText = stateLayer.add(new Text.Builder(getContext(), "empty_calls", "No calls found.",
-                new RectF(dp(20), dp(28), width - dp(20), dp(112)))
+                new RectF(px(55f), px(77f), width - px(55f), px(308f)))
                 .setFont(NativeFonts.INTER).setFontVariations(FontVariation.REGULAR)
                 .setTextSizePx(sp(16)).setTextColor(SECONDARY).setAlignment(Text.Alignment.CENTER)
                 .setVerticalAlignment(Text.VerticalAlignment.CENTER));
@@ -105,18 +107,18 @@ public final class CallsView extends View {
             float height = scope.height();
             ZLayer row = item.addLayer("row");
             row.add(new Image.Builder(getContext(), scope.id("avatar"), avatar("?"),
-                    new RectF(dp(8), dp(10), dp(64), dp(66)))
+                    new RectF(px(22f), px(27.5f), px(176f), px(181.5f)))
                     .setScaleType(Image.ScaleType.CENTER_CROP));
-            row.add(rowText(scope.id("name"), new RectF(dp(80), dp(7), width - dp(58), dp(40)),
+            row.add(rowText(scope.id("name"), new RectF(px(220f), px(19.25f), width - px(159.5f), px(110f)),
                     sp(17), PRIMARY, FontVariation.SEMI_BOLD));
-            row.add(rowText(scope.id("time"), new RectF(dp(80), dp(38), width - dp(58), dp(68)),
+            row.add(rowText(scope.id("time"), new RectF(px(220f), px(104.5f), width - px(159.5f), px(187f)),
                     sp(14), SECONDARY, FontVariation.REGULAR));
             row.add(new Text.Builder(getContext(), scope.id("type"), "",
-                    new RectF(width - dp(56), 0, width - dp(8), height)).useDefaultFont()
+                    new RectF(width - px(154f), 0, width - px(22f), height)).useDefaultFont()
                     .setTextSizePx(sp(22)).setTextColor(PRIMARY).setAlignment(Text.Alignment.CENTER)
                     .setVerticalAlignment(Text.VerticalAlignment.CENTER));
             row.add(new Image.Builder(getContext(), scope.id("divider"), dividerBitmap,
-                    new RectF(dp(80), height - dp(1), width, height))
+                    new RectF(px(220f), height - px(2.75f), width, height))
                     .setScaleType(Image.ScaleType.FIT_XY));
         }
         @Override public void onBindItem(ComponentList.Item item, CallLog call, int position) {
@@ -136,7 +138,7 @@ public final class CallsView extends View {
     }
 
     private Bitmap avatar(String value) {
-        int size = Math.max(1, Math.round(dp(56)));
+        int size = Math.max(1, Math.round(px(154f)));
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -153,7 +155,9 @@ public final class CallsView extends View {
         return bitmap;
     }
 
-    private float dp(float value) { return value * getResources().getDisplayMetrics().density; }
+    private float px(float value) {
+    return figmaConfig.toRuntime(value, Math.max(1, getResources().getDisplayMetrics().widthPixels));
+  }
     private float sp(float value) { return value * getResources().getDisplayMetrics().scaledDensity; }
     private static Bitmap colorBitmap(int color) {
         Bitmap bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);

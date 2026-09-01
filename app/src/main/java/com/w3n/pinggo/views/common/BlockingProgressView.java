@@ -18,6 +18,8 @@ import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 
 /** Reusable full-screen modal scrim with a native circular progress indicator. */
 public final class BlockingProgressView extends View {
+  private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
+      new com.ogfa.nativeviews.component.FigmaConfig(1080f);
     private static final int SCRIM_COLOR = 0x99000000;
     private static final int ACCENT_COLOR = 0xFF019CC4;
 
@@ -60,7 +62,7 @@ public final class BlockingProgressView extends View {
                 new RectF(0f, 0f, width, height))
                 .setScaleType(Image.ScaleType.FIT_XY));
 
-        float indicatorSize = dp(72f);
+        float indicatorSize = px(198f);
         float left = (width - indicatorSize) / 2f;
         float top = (height - indicatorSize) / 2f;
         progressLayer.add(new Progress.Builder(getContext(), "circular_progress",
@@ -69,7 +71,7 @@ public final class BlockingProgressView extends View {
                 .setMode(Progress.Mode.INDETERMINATE)
                 .setTrackColor(0x33FFFFFF)
                 .setProgressColor(ACCENT_COLOR)
-                .setThicknessPx(dp(6f))
+                .setThicknessPx(px(16.5f))
                 .setIndeterminateSweepAngle(110f)
                 .setIndeterminateDuration(900L)
                 .setStrokeCap(Progress.StrokeCap.ROUND));
@@ -87,9 +89,9 @@ public final class BlockingProgressView extends View {
         return true;
     }
 
-    private float dp(float value) {
-        return value * getResources().getDisplayMetrics().density;
-    }
+    private float px(float value) {
+    return figmaConfig.toRuntime(value, Math.max(1, getResources().getDisplayMetrics().widthPixels));
+  }
 
     private static Bitmap colorBitmap(int color) {
         Bitmap bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);

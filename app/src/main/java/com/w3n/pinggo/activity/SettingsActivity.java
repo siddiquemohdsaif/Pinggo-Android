@@ -274,10 +274,6 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
         .start();
   }
 
-  private int dp(int v) {
-    return Math.round(v * getResources().getDisplayMetrics().density);
-  }
-
   @Override
   protected void onDestroy() {
     removeCropDialog();

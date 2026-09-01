@@ -15,7 +15,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase;
                 PresenceEntity.class,
                 TransferEntity.class
         },
-        version = 16,
+        version = 17,
         exportSchema = false
 )
 public abstract class PingGoDatabase extends RoomDatabase {
@@ -97,6 +97,11 @@ public abstract class PingGoDatabase extends RoomDatabase {
             db.execSQL("ALTER TABLE `chats` ADD COLUMN `lastMessageStatus` TEXT");
         }
     };
+    private static final Migration MIGRATION_16_17 = new Migration(16, 17) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `pinnedBy` TEXT");
+        }
+    };
 
     public static PingGoDatabase getInstance(Context context) {
         if (instance != null) {
@@ -113,7 +118,7 @@ public abstract class PingGoDatabase extends RoomDatabase {
                                 MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                                 MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
                                 MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
-                                MIGRATION_15_16)
+                                MIGRATION_15_16, MIGRATION_16_17)
                         .fallbackToDestructiveMigration()
                         .build();
             }

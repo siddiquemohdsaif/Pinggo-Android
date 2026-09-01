@@ -18,6 +18,8 @@ import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 
 /** AAR-native profile settings surface. */
 public final class SettingsView extends View {
+  private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
+      new com.ogfa.nativeviews.component.FigmaConfig(1080f);
   private static final int PRIMARY = 0xFF000E1A, SECONDARY = 0xFF687382, ACCENT = 0xFF019CC4;
   private final ZLayerGroup layers = new ZLayerGroup(this);
   private final ZLayer bg = layers.addLayer("background"), content = layers.addLayer("content");
@@ -71,7 +73,7 @@ public final class SettingsView extends View {
   private void build() {
     bg.clear();
     content.clear();
-    float w = getWidth(), top = topInset + dp(10);
+    float w = getWidth(), top = topInset + px(27.5f);
     bg.add(
         new Image.Builder(getContext(), "bg", white, new RectF(0, 0, w, getHeight()))
             .setScaleType(Image.ScaleType.FIT_XY));
@@ -79,36 +81,36 @@ public final class SettingsView extends View {
         "back",
         white,
         "‹",
-        new RectF(dp(8), top, dp(56), top + dp(48)),
+        new RectF(px(22f), top, px(154f), top + px(132f)),
         PRIMARY,
         id -> listener.onBack());
     text(
         "title",
         "Settings",
-        new RectF(dp(64), top, w - dp(20), top + dp(48)),
+        new RectF(px(176f), top, w - px(55f), top + px(132f)),
         sp(24),
         PRIMARY,
         FontVariation.BOLD);
-    float photoTop = top + dp(78);
+    float photoTop = top + px(214.5f);
     profileImage =
         content.add(
             new Image.Builder(
                     getContext(),
                     "photo",
                     profileBitmap == null ? placeholder() : profileBitmap,
-                    new RectF(w / 2 - dp(70), photoTop, w / 2 + dp(70), photoTop + dp(140)))
+                    new RectF(w / 2 - px(192.5f), photoTop, w / 2 + px(192.5f), photoTop + px(385f)))
                 .setScaleType(Image.ScaleType.CENTER_CROP)
                 .setOnClickListener(id -> listener.onPhoto()));
     button(
         "edit_photo",
         accent,
         "Edit photo",
-        new RectF(w / 2 - dp(62), photoTop + dp(150), w / 2 + dp(62), photoTop + dp(196)),
+        new RectF(w / 2 - px(170.5f), photoTop + px(412.5f), w / 2 + px(170.5f), photoTop + px(539f)),
         Color.WHITE,
         id -> listener.onPhoto());
-    float row = photoTop + dp(228);
+    float row = photoTop + px(627f);
     nameValue = addRow("name", "Name", row, id -> listener.onName());
-    row += dp(82);
+    row += px(225.5f);
     phoneValue = addRow("phone", "Phone number", row, id -> listener.onPhone());
     logout =
         button(
@@ -116,10 +118,10 @@ public final class SettingsView extends View {
             danger,
             "Log out",
             new RectF(
-                dp(24),
-                getHeight() - bottomInset - dp(76),
-                w - dp(24),
-                getHeight() - bottomInset - dp(20)),
+                px(66f),
+                getHeight() - bottomInset - px(209f),
+                w - px(66f),
+                getHeight() - bottomInset - px(55f)),
             Color.WHITE,
             id -> listener.onLogout());
     invalidate();
@@ -127,11 +129,11 @@ public final class SettingsView extends View {
 
   private Text addRow(String id, String label, float top, Button.OnClickListener click) {
     float w = getWidth();
-    button(id, white, "", new RectF(dp(16), top, w - dp(16), top + dp(72)), PRIMARY, click);
+    button(id, white, "", new RectF(px(44f), top, w - px(44f), top + px(198f)), PRIMARY, click);
     text(
         id + "_label",
         label,
-        new RectF(dp(28), top + dp(8), w - dp(40), top + dp(32)),
+        new RectF(px(77f), top + px(22f), w - px(110f), top + px(88f)),
         sp(13),
         SECONDARY,
         FontVariation.REGULAR);
@@ -139,7 +141,7 @@ public final class SettingsView extends View {
         text(
             id + "_value",
             "-",
-            new RectF(dp(28), top + dp(31), w - dp(50), top + dp(66)),
+            new RectF(px(77f), top + px(85.25f), w - px(137.5f), top + px(181.5f)),
             sp(17),
             PRIMARY,
             FontVariation.SEMI_BOLD);
@@ -148,7 +150,7 @@ public final class SettingsView extends View {
                 getContext(),
                 id + "_line",
                 line,
-                new RectF(dp(28), top + dp(71), w - dp(28), top + dp(72)))
+                new RectF(px(77f), top + px(195.25f), w - px(77f), top + px(198f)))
             .setScaleType(Image.ScaleType.FIT_XY));
     return value;
   }
@@ -169,7 +171,7 @@ public final class SettingsView extends View {
     return content.add(
         new Button.Builder(getContext(), id, b, label, r)
             .setImageScaleType(Image.ScaleType.FIT_XY)
-            .setCornerRadiusPx(dp(16))
+            .setCornerRadiusPx(px(44f))
             .setFont(NativeFonts.INTER)
             .setFontVariations(FontVariation.SEMI_BOLD)
             .setTextSizePx(sp(16))
@@ -180,7 +182,7 @@ public final class SettingsView extends View {
   }
 
   private Bitmap placeholder() {
-    int s = Math.round(dp(140));
+    int s = Math.round(px(385f));
     Bitmap b = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
     Canvas c = new Canvas(b);
     Paint p = new Paint(1);
@@ -214,8 +216,8 @@ public final class SettingsView extends View {
     return s == null || s.trim().isEmpty() ? "-" : s;
   }
 
-  private float dp(float v) {
-    return v * getResources().getDisplayMetrics().density;
+  private float px(float v) {
+    return figmaConfig.toRuntime(v, Math.max(1, getResources().getDisplayMetrics().widthPixels));
   }
 
   private float sp(float v) {

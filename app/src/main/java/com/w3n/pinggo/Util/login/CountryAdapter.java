@@ -19,9 +19,11 @@ import java.util.Locale;
 
 /** Component-list adapter used by the login country picker. */
 public final class CountryAdapter extends ComponentList.Adapter<CCPCountry> {
-    private static final float ROW_PADDING_DP = 16f;
-    private static final float FLAG_WIDTH_DP = 38f;
-    private static final float FLAG_HEIGHT_DP = 26f;
+  private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
+      new com.ogfa.nativeviews.component.FigmaConfig(1080f);
+    private static final float ROW_PADDING_PX = 44f;
+    private static final float FLAG_WIDTH_PX = 104.5f;
+    private static final float FLAG_HEIGHT_PX = 71.5f;
     private static final float NAME_TEXT_SP = 14f;
     private static final float CODE_TEXT_SP = 12f;
     private static final float DIVIDER_DESIGN_WIDTH = 670f;
@@ -86,11 +88,11 @@ public final class CountryAdapter extends ComponentList.Adapter<CCPCountry> {
         RectF bounds = scope.getBounds();
         float rowWidth = bounds.width();
         float rowHeight = bounds.height();
-        float padding = dp(ROW_PADDING_DP);
-        float flagWidth = dp(FLAG_WIDTH_DP);
-        float flagHeight = dp(FLAG_HEIGHT_DP);
+        float padding = px(ROW_PADDING_PX);
+        float flagWidth = px(FLAG_WIDTH_PX);
+        float flagHeight = px(FLAG_HEIGHT_PX);
         float flagTop = (rowHeight - flagHeight) / 2f;
-        float codeWidth = dp(92f);
+        float codeWidth = px(253f);
         float dividerWidth = Math.min(rowWidth, DIVIDER_DESIGN_WIDTH * designScale);
         float dividerWeight = DIVIDER_DESIGN_WEIGHT * designScale;
         float dividerLeft = (rowWidth - dividerWidth) / 2f;
@@ -100,7 +102,7 @@ public final class CountryAdapter extends ComponentList.Adapter<CCPCountry> {
                 new RectF(padding, flagTop, padding + flagWidth, flagTop + flagHeight))
                 .setScaleType(Image.ScaleType.FIT_XY));
         content.add(new Text.Builder(context, scope.id("name"), "",
-                new RectF(padding + flagWidth + dp(ROW_PADDING_DP), 0f,
+                new RectF(padding + flagWidth + px(ROW_PADDING_PX), 0f,
                         rowWidth - padding - codeWidth, rowHeight))
                 .setFont(NativeFonts.INTER)
                 .setFontVariations(FontVariation.REGULAR)
@@ -125,8 +127,8 @@ public final class CountryAdapter extends ComponentList.Adapter<CCPCountry> {
     @Override
     public void onBindItem(ComponentList.Item item, CCPCountry country, int position) {
         RectF rowBounds = item.getScope().getBounds();
-        float padding = dp(ROW_PADDING_DP);
-        float nameLeft = padding + dp(FLAG_WIDTH_DP) + dp(ROW_PADDING_DP);
+        float padding = px(ROW_PADDING_PX);
+        float nameLeft = padding + px(FLAG_WIDTH_PX) + px(ROW_PADDING_PX);
         String callingCode = "+" + country.getPhoneCode();
         float codeWidth = (float) Math.ceil(codeMeasurePaint.measureText(callingCode));
         float codeLeft = rowBounds.width() - padding - codeWidth;
@@ -143,9 +145,10 @@ public final class CountryAdapter extends ComponentList.Adapter<CCPCountry> {
         item.find("divider", Image.class).setVisible(position < visibleCountries.size() - 1);
     }
 
-    private float dp(float value) {
-        return value * context.getResources().getDisplayMetrics().density;
-    }
+  private float px(float value) {
+    return figmaConfig.toRuntime(value,
+        Math.max(1, context.getResources().getDisplayMetrics().widthPixels));
+  }
 
     private float sp(float value) {
         return value * context.getResources().getDisplayMetrics().scaledDensity;
@@ -158,4 +161,5 @@ public final class CountryAdapter extends ComponentList.Adapter<CCPCountry> {
     public interface MatchCountListener {
         void onMatchCountChanged(int matchCount);
     }
+
 }

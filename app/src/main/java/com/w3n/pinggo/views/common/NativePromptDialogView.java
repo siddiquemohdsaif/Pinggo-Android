@@ -28,6 +28,8 @@ import java.util.List;
 
 /** One-shot AAR-native message, input, or action-list dialog host. */
 public final class NativePromptDialogView extends View {
+  private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
+      new com.ogfa.nativeviews.component.FigmaConfig(1080f);
   public interface InputHandler { boolean onSubmit(String value); }
   public interface ActionHandler { void onAction(int index); }
 
@@ -90,13 +92,14 @@ public final class NativePromptDialogView extends View {
     super.onSizeChanged(width, height, oldWidth, oldHeight);
     if (built || width <= 0 || height <= 0) return;
     built = true;
-    float dialogWidth = Math.min(width - dp(40), dp(390));
+    float dialogWidth = Math.min(width - px(110f), px(1072.5f));
     float dialogHeight = mode == Mode.ACTIONS
-        ? dp(32 + actions.size() * 58) : mode == Mode.INPUT ? dp(250) : dp(230);
+        ? px(88f + actions.size() * 159.5f)
+        : mode == Mode.INPUT ? px(687.5f) : px(632.5f);
     dialog = dialogLayer.add(new Dialog.Builder(getContext(), "native_prompt",
         new RectF(0, 0, dialogWidth, dialogHeight))
         .horizontalCenter(true).verticalCenter(true)
-        .setBackgroundColor(Color.WHITE).setCornerRadiusPx(dp(24))
+        .setBackgroundColor(Color.WHITE).setCornerRadiusPx(px(66f))
         .setDimEnabled(true).setDimAlpha(0.48f)
         .setInitiallyShown(true).setDismissOnBackPressed(true)
         .setOnDismissListener((id, reason) -> { if (dismissHandler != null) dismissHandler.run(); })
@@ -109,7 +112,7 @@ public final class NativePromptDialogView extends View {
       for (int index = 0; index < actions.size(); index++) {
         final int selected = index;
         content.add(button(scope, "action_" + index, secondary, actions.get(index),
-            dp(16), dp(16 + index * 58), width - dp(32), 0xFF000E1A, id -> {
+            px(44f), px(44f + index * 159.5f), width - px(88f), 0xFF000E1A, id -> {
               nativeDialog.dismiss(Dialog.DismissReason.ACTION);
               actionHandler.onAction(selected);
             }));
@@ -117,31 +120,31 @@ public final class NativePromptDialogView extends View {
       return;
     }
     content.add(new Text.Builder(getContext(), scope.id("title"), title,
-        scope.rect(dp(22), dp(18), width - dp(44), dp(42)))
+        scope.rect(px(60.5f), px(49.5f), width - px(121f), px(115.5f)))
         .setFont(NativeFonts.INTER).setFontVariations(FontVariation.BOLD)
-        .setTextSizePx(dp(21)).setTextColor(0xFF000E1A)
+        .setTextSizePx(px(57.75f)).setTextColor(0xFF000E1A)
         .setAlignment(Text.Alignment.CENTER).setVerticalAlignment(Text.VerticalAlignment.CENTER)
         .setMaxLines(1));
     if (mode == Mode.MESSAGE) {
       content.add(new Text.Builder(getContext(), scope.id("message"), message,
-          scope.rect(dp(22), dp(68), width - dp(44), dp(70)))
+          scope.rect(px(60.5f), px(187f), width - px(121f), px(192.5f)))
           .setFont(NativeFonts.INTER).setFontVariations(FontVariation.REGULAR)
-          .setTextSizePx(dp(16)).setTextColor(0xFF656565)
+          .setTextSizePx(px(44f)).setTextColor(0xFF656565)
           .setAlignment(Text.Alignment.CENTER).setVerticalAlignment(Text.VerticalAlignment.CENTER)
           .setMaxLines(3));
     } else {
       field = content.add(new TextField.Builder(getContext(), scope.id("field"),
-          scope.rect(dp(22), dp(78), width - dp(44), dp(58)))
+          scope.rect(px(60.5f), px(214.5f), width - px(121f), px(159.5f)))
           .setFont(NativeFonts.INTER).setFontVariations(FontVariation.REGULAR)
           .setText(initialValue).setInputType(inputType)
-          .setTextSizePx(dp(17)).setTextColor(0xFF000E1A).setHintColor(0xFF7A8792)
+          .setTextSizePx(px(46.75f)).setTextColor(0xFF000E1A).setHintColor(0xFF7A8792)
           .setBackgroundColor(0xFFF7FAFC, Color.WHITE)
           .setStrokeColor(0xFFD5DEE7, 0xFF019CC4)
-          .setCornerRadiusPx(dp(12)).setPaddingPx(dp(14), dp(8)));
+          .setCornerRadiusPx(px(33f)).setPaddingPx(px(38.5f), px(22f)));
     }
-    float buttonTop = scope.height() - dp(70);
+    float buttonTop = scope.height() - px(192.5f);
     if (mode == Mode.INPUT) {
-      float gap = dp(10), pad = dp(22);
+      float gap = px(27.5f), pad = px(60.5f);
       float buttonWidth = (width - pad * 2 - gap) / 2;
       content.add(button(scope, "cancel", secondary, getContext().getString(android.R.string.cancel),
           pad, buttonTop, buttonWidth, 0xFF000E1A,
@@ -155,7 +158,7 @@ public final class NativePromptDialogView extends View {
           }));
     } else {
       content.add(button(scope, "ok", primary, getContext().getString(android.R.string.ok),
-          dp(22), buttonTop, width - dp(44), Color.WHITE,
+          px(60.5f), buttonTop, width - px(121f), Color.WHITE,
           id -> nativeDialog.dismiss(Dialog.DismissReason.ACTION)));
     }
   }
@@ -163,10 +166,10 @@ public final class NativePromptDialogView extends View {
   private Button button(Dialog.Scope scope, String id, Bitmap background, String label,
       float left, float top, float width, int textColor, Button.OnClickListener listener) {
     return new Button.Builder(getContext(), scope.id(id), background, label,
-        scope.rect(left, top, width, dp(50)))
-        .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(dp(13))
+        scope.rect(left, top, width, px(137.5f)))
+        .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(px(35.75f))
         .setFont(NativeFonts.INTER).setFontVariations(FontVariation.MEDIUM)
-        .setTextSizePx(dp(16)).setTextColor(textColor).setRippleEnabled(true)
+        .setTextSizePx(px(44f)).setTextColor(textColor).setRippleEnabled(true)
         .setOnClickListener(listener).build(this);
   }
 
@@ -181,9 +184,12 @@ public final class NativePromptDialogView extends View {
     return layers.onKeyDown(code, event) || super.onKeyDown(code, event);
   }
   public void release() { layers.release(); secondary.recycle(); primary.recycle(); }
-  private float dp(float value) { return value * getResources().getDisplayMetrics().density; }
+  private float px(float value) {
+    return figmaConfig.toRuntime(value, Math.max(1, getResources().getDisplayMetrics().widthPixels));
+  }
   private static Bitmap colorBitmap(int color) {
     Bitmap bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
     bitmap.eraseColor(color); return bitmap;
   }
+
 }

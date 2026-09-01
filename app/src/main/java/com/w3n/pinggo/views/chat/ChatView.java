@@ -9,6 +9,7 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.Shader;
+import android.graphics.Typeface;
 import android.text.InputType;
 import android.text.Layout;
 import android.text.StaticLayout;
@@ -36,23 +37,27 @@ import com.w3n.pinggo.data.local.MessageEntity;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.res.ResourcesCompat;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 
 /** AAR-native conversation screen and message composer. */
 public final class ChatView extends View {
+  private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
+      new com.ogfa.nativeviews.component.FigmaConfig(1080f);
   private static final int PRIMARY = 0xFF000E1A, SECONDARY = 0xFF687382, ACCENT = 0xFF019CC4;
   private static final int MAX_VISIBLE_COMPOSER_LINES = 7;
+  private static final int MAX_VISIBLE_PINNED_ROWS = 3;
   private final ZLayerGroup layers = new ZLayerGroup(this);
   private final ZLayer bg = layers.addLayer("background"),
       content = layers.addLayer("content"),
       overlay = layers.addLayer("overlay"),
       selectionOverlay = layers.addLayer("message_selection");
-  private final Listener listener;
+  private final ChatViewListener listener;
   private final ChatPerformanceProfiler profiler;
   private final ChatMessageAdapter adapter;
+  private final PinnedMessageAdapter pinnedAdapter;
+  private final MessageSelectionHeaderComponent selectionHeader;
+  private final ChatHeaderComponent chatHeader;
   private final TextPaint composerMeasurePaint =
       new TextPaint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
   private final Bitmap white = color(Color.WHITE),
@@ -83,26 +88,41 @@ public final class ChatView extends View {
       messageSendingIcon = resourceBitmap(R.drawable.chat_status_sending_image),
       messageSentIcon = resourceBitmap(R.drawable.chat_status_sent),
       messageDeliveredIcon = resourceBitmap(R.drawable.chat_status_delivered),
-      messageReadIcon = resourceBitmap(R.drawable.chat_status_read);
+      messageReadIcon = resourceBitmap(R.drawable.chat_status_read),
+      documentIcon = resourceBitmap(R.drawable.chat_document),
+      deletedMessageIcon = drawableBitmap(R.drawable.chat_message_deleted),
+      forwardedMessageIcon = drawableBitmap(R.drawable.chat_message_forwarded),
+      callPhoneIncomingIcon = resourceBitmap(R.drawable.chat_phone_incoming),
+      callPhoneOutgoingIcon = resourceBitmap(R.drawable.chat_phone_outgoing),
+      callPhoneMissedIcon = resourceBitmap(R.drawable.chat_phone_missed),
+      callVideoIncomingIcon = resourceBitmap(R.drawable.chat_video_incoming),
+      callVideoOutgoingIcon = resourceBitmap(R.drawable.chat_video_outgoing),
+      callVideoMissedIcon = resourceBitmap(R.drawable.chat_video_missed);
   private final String chatName, currentUser;
-  private final Set<String> selectedMessageIds = new LinkedHashSet<>();
+  private final ChatSelectionController selection = new ChatSelectionController();
   private final Bitmap profile;
   private ComponentList<MessageEntity> list;
-  private Text presence, status, olderStatus, replyText;
+  private ComponentList<MessageEntity> pinnedList;
+  private Text status, olderStatus, replyText;
+  private ComposerReplyPreviewComponent composerReplyPreview;
   private Image olderLoadingBackground, attachmentPreviewBackground;
   private Progress olderProgress;
   private TextField input;
   private Button send, attachmentPreviewRemove, attachmentPreviewSend;
   private Image composerActionIcon;
+  private Text audioRecordingTime;
+  private AudioRecordingComponent audioRecordingWaveform;
   private Text attachmentPreviewTextComponent;
   private ComposerBackgroundComponent composerBackground;
   private int topInset, bottomInset, imeInset;
   private int floatingCallInset;
-  private boolean imeVisible, attachmentPanelVisible;
+  private boolean imeVisible;
+  private final ChatComposerState composer = new ChatComposerState();
   private boolean loadingOlderMessages, canLoadOlderMessages = true;
-  private String draft = "", replyPreview = "";
-  private String attachmentPreviewType = "", attachmentPreviewName = "";
+  private String pendingPinnedScrollMessageId;
+  private String pendingReplyScrollMessageId;
   private String statusValue = "Loading messages...";
+  private final List<MessageEntity> pinnedMessages = new ArrayList<>();
   private float headerBottom, baseListBottom;
   private float renderedComposerHeight = -1f;
   private boolean composerResizePosted;
@@ -119,7 +139,7 @@ public final class ChatView extends View {
       String name,
       String currentUser,
       String photoPath,
-      Listener l,
+      ChatViewListener l,
       ChatPerformanceProfiler profiler) {
     super(c);
     chatName = name;
@@ -128,6 +148,13 @@ public final class ChatView extends View {
     this.profiler = profiler;
     composerMeasurePaint.setTextSize(sp(16));
     composerMeasurePaint.setTypeface(ResourcesCompat.getFont(c, NativeFonts.INTER));
+    pinnedAdapter = new PinnedMessageAdapter(
+        c, this.currentUser, white, divider, selectionPinIcon);
+    selectionHeader = new MessageSelectionHeaderComponent(
+        c, listener, this::clearMessageSelection, pinnedAdapter::isPinnedByCurrentUser,
+        selectionBackground, selectionStatusBarBackground, transparent, backIcon,
+        selectionReplyIcon, selectionCopyIcon, selectionForwardIcon, selectionPinIcon,
+        selectionUnpinIcon, selectionDeleteIcon);
     adapter =
         new ChatMessageAdapter(
             c,
@@ -139,9 +166,23 @@ public final class ChatView extends View {
             messageDeliveredIcon,
             messageReadIcon,
             selectionPinIcon,
+            documentIcon,
+            deletedMessageIcon,
+            forwardedMessageIcon,
+            callPhoneIncomingIcon,
+            callPhoneOutgoingIcon,
+            callPhoneMissedIcon,
+            callVideoIncomingIcon,
+            callVideoOutgoingIcon,
+            callVideoMissedIcon,
             listener::attachmentState,
+            this::onMediaMetricsChanged,
+            listener::onAudioPlaybackToggle,
+            this::scrollToMessageId,
+            this::handleMessageClick,
+            this::toggleMessageSelection,
             profiler,
-            selectedMessageIds);
+            selection.ids());
     Bitmap b =
         photoPath == null || photoPath.trim().isEmpty()
             ? null
@@ -152,6 +193,10 @@ public final class ChatView extends View {
       profile = circleCrop(b);
       b.recycle();
     }
+    adapter.setChatProfile(profile);
+    chatHeader = new ChatHeaderComponent(
+        c, chatName, listener, white, headerBackground, transparent, profile, backIcon,
+        voiceCallIcon, videoCallIcon, moreIcon);
     setBackgroundColor(0xFFF7F9FB);
     setClickable(true);
     setFocusableInTouchMode(true);
@@ -178,8 +223,7 @@ public final class ChatView extends View {
   }
 
   public void setPresence(String value) {
-    if (presence != null)
-      presence.setText(value == null ? "" : value).setVisible(value != null && !value.isEmpty());
+    chatHeader.setPresence(value);
     invalidate();
   }
 
@@ -205,8 +249,7 @@ public final class ChatView extends View {
     String oldLastId = adapter.messageIdAt(oldCount - 1);
     boolean wasNearBottom = oldCount == 0 || lastVisible >= oldCount - 2;
     boolean changed = adapter.submit(values);
-    boolean selectionChanged = selectedMessageIds.removeIf(
-        messageId -> adapter.indexOfMessage(messageId) < 0);
+    boolean selectionChanged = selection.retainLoaded(adapter);
     if (selectionChanged) refreshMessageSelectionHeader();
     boolean empty = adapter.getItemCount() == 0;
     statusValue = "";
@@ -232,17 +275,100 @@ public final class ChatView extends View {
           if (Math.abs(delta) >= .5f) list.scrollBy(0f, delta);
         }
       }
+      if (pendingPinnedScrollMessageId != null) {
+        int pinnedPosition = adapter.indexOfMessage(pendingPinnedScrollMessageId);
+        if (pinnedPosition >= 0) {
+          list.stopScroll();
+          list.scrollToPosition(pinnedPosition);
+          pendingPinnedScrollMessageId = null;
+        }
+      }
+      if (pendingReplyScrollMessageId != null) {
+        int replyPosition = adapter.indexOfMessage(pendingReplyScrollMessageId);
+        if (replyPosition >= 0) {
+          list.stopScroll();
+          list.scrollToPosition(replyPosition);
+          pendingReplyScrollMessageId = null;
+        } else {
+          String requestedId = pendingReplyScrollMessageId;
+          post(() -> {
+            if (requestedId.equals(pendingReplyScrollMessageId)) {
+              listener.onReplyTargetRequested(requestedId);
+            }
+          });
+        }
+      }
     }
     invalidate();
     return changed;
   }
 
   public float getMessageLayoutWidth() {
-    return Math.max(1f, getWidth() - dp(24));
+    return Math.max(1f, getWidth() - px(66f));
+  }
+
+  /** Keeps the composer workflow anchored to the newest message. */
+  public void scrollToBottom() {
+    if (list == null || adapter.getItemCount() == 0) return;
+    list.stopScroll();
+    list.scrollToPosition(adapter.getItemCount() - 1);
+    invalidate();
+  }
+
+  private void onMediaMetricsChanged() {
+    if (list == null || adapter.getItemCount() == 0) {
+      adapter.refreshMeasuredRows();
+      return;
+    }
+    int firstVisible = list.getFirstVisiblePosition();
+    int lastVisible = list.getLastVisiblePosition();
+    boolean keepBottom = !list.canScrollForward()
+        || lastVisible >= adapter.getItemCount() - 1;
+    float availableWidth = getMessageLayoutWidth();
+    float oldOffset = list.getScrollOffset();
+    float oldAnchorStart = firstVisible < 0
+        ? 0f : adapter.contentStartAt(firstVisible, availableWidth);
+    float anchorPixelOffset = oldOffset - oldAnchorStart;
+    String anchorId = adapter.messageIdAt(firstVisible);
+
+    adapter.refreshMeasuredRows();
+    if (keepBottom) {
+      list.scrollToPosition(adapter.getItemCount() - 1);
+    } else {
+      int anchorPosition = adapter.indexOfMessage(anchorId);
+      if (anchorPosition >= 0) {
+        float desiredOffset = adapter.contentStartAt(anchorPosition, availableWidth)
+            + anchorPixelOffset;
+        list.scrollBy(0f, desiredOffset - list.getScrollOffset());
+      }
+    }
+    invalidate();
   }
 
   public void prepareMessageMetrics(List<MessageEntity> values, float availableWidth) {
     adapter.prepareMetrics(values, availableWidth);
+  }
+
+  public void indexReplyTargets(List<MessageEntity> values) {
+    adapter.indexReplyTargets(values);
+  }
+
+  public void trackLocationRender(
+      String clientMessageId,
+      String traceId,
+      long pressedElapsedMs,
+      long pressedWallMs) {
+    adapter.trackLocationRender(
+        clientMessageId, traceId, pressedElapsedMs, pressedWallMs);
+  }
+
+  /** Displays newest pins first and reserves header space only while pins exist. */
+  public void setPinnedMessages(List<MessageEntity> values) {
+    if (!pinnedAdapter.submit(values)) return;
+    pinnedMessages.clear();
+    if (values != null) pinnedMessages.addAll(values);
+    if (getWidth() > 0 && getHeight() > 0) build();
+    else invalidate();
   }
 
   public void setOlderMessagesState(boolean loading, boolean canLoad) {
@@ -252,33 +378,45 @@ public final class ChatView extends View {
   }
 
   public String getDraft() {
-    return input == null ? draft : input.getText().trim();
+    return input == null ? composer.draft : input.getText().trim();
   }
 
   public void clearDraft() {
-    draft = "";
+    composer.draft = "";
     if (input != null) input.clear();
     updateComposerActionIcon();
   }
 
   public void showReply(String value) {
-    replyPreview = value == null ? "" : value;
+    composer.replyPreview = value == null ? "" : value;
+    composer.replySender = "";
+    composer.replyTargetId = "";
+    composer.replyContent = ReplyContent.text(composer.replyPreview);
+    updateReply();
+  }
+
+  public void showReply(MessageEntity message) {
+    composer.replySender = adapter.replyPreviewSender(message);
+    composer.replyTargetId = message == null ? "" : message.messageId;
+    composer.replyContent = message == null ? null : adapter.replyPreviewContent(message);
+    composer.replyPreview = composer.replyContent == null ? ""
+        : ReplyContent.TEXT.equals(composer.replyContent.type)
+            ? composer.replyContent.text : "attachment";
     updateReply();
   }
 
   public void clearReply() {
-    replyPreview = "";
+    composer.clearReply();
     updateReply();
   }
 
   public boolean isSelectingMessages() {
-    return !selectedMessageIds.isEmpty();
+    return selection.isSelecting();
   }
 
   public boolean clearMessageSelection() {
-    if (selectedMessageIds.isEmpty()) return false;
-    List<String> previousIds = new ArrayList<>(selectedMessageIds);
-    selectedMessageIds.clear();
+    if (!selection.isSelecting()) return false;
+    List<String> previousIds = selection.clear();
     for (String id : previousIds) {
       int position = adapter.indexOfMessage(id);
       if (position >= 0) adapter.notifyItemChanged(position);
@@ -290,56 +428,56 @@ public final class ChatView extends View {
   }
 
   private void toggleMessageSelection(MessageEntity message) {
-    String id = selectionId(message);
-    if (id.isEmpty()) return;
-    if (!selectedMessageIds.add(id)) selectedMessageIds.remove(id);
+    if (!selection.toggle(message)) return;
+    String id = ChatSelectionController.idOf(message);
     int position = adapter.indexOfMessage(id);
     if (position >= 0) adapter.notifyItemChanged(position);
     refreshMessageSelectionHeader();
   }
 
+  private void handleMessageClick(MessageEntity message) {
+    if (isSelectingMessages()) toggleMessageSelection(message);
+    else listener.onMessageClick(message);
+  }
+
   private void refreshMessageSelectionHeader() {
     selectionOverlay.clear();
     if (isSelectingMessages() && getWidth() > 0) {
-      buildMessageSelectionHeader(
-          getWidth(), topInset + floatingCallInset, getWidth() / 1080f);
+      selectionHeader.build(selectionOverlay, selectedMessages(), getWidth(),
+          topInset + floatingCallInset, getWidth() / 1080f);
     }
     listener.onMessageSelectionChanged(isSelectingMessages());
     invalidate();
   }
 
   private List<MessageEntity> selectedMessages() {
-    List<MessageEntity> selected = new ArrayList<>();
-    for (int index = 0; index < adapter.getItemCount(); index++) {
-      MessageEntity message = adapter.getItem(index);
-      if (selectedMessageIds.contains(selectionId(message))) selected.add(message);
-    }
-    return selected;
-  }
-
-  private static String selectionId(MessageEntity message) {
-    if (message == null) return "";
-    if (message.messageId != null && !message.messageId.isEmpty()) return message.messageId;
-    return message.clientMessageId == null ? "" : message.clientMessageId;
+    return selection.selectedMessages(adapter);
   }
 
   public void showAttachmentPreview(String type, String name) {
-    attachmentPreviewType = type == null ? "File" : type;
-    attachmentPreviewName = name == null || name.trim().isEmpty() ? "Attachment" : name;
+    composer.attachmentType = type == null ? "File" : type;
+    composer.attachmentName = name == null || name.trim().isEmpty() ? "Attachment" : name;
     if (getWidth() > 0) build();
   }
 
   public void clearAttachmentPreview() {
-    attachmentPreviewType = "";
-    attachmentPreviewName = "";
+    composer.clearAttachment();
     if (getWidth() > 0) build();
   }
 
+  public boolean dismissAttachmentPanel() {
+    if (!composer.attachmentPanelVisible) return false;
+    if (input != null) composer.draft = input.getText();
+    composer.attachmentPanelVisible = false;
+    build();
+    return true;
+  }
+
   public void setDraft(String value) {
-    draft = value == null ? "" : value;
+    composer.draft = value == null ? "" : value;
     if (input != null) {
-      input.setText(draft);
-      input.setSelection(draft.length());
+      input.setText(composer.draft);
+      input.setSelection(composer.draft.length());
       input.requestFocus();
     }
     updateComposerActionIcon();
@@ -353,13 +491,26 @@ public final class ChatView extends View {
     }
   }
 
+  private float composerReplyHeight(float scale) {
+    if (!composer.hasReply()) return 0f;
+    ReplyContent content = composer.replyContent == null
+        ? ReplyContent.text(composer.replyPreview) : composer.replyContent;
+    float boxWidth = composerReplyWidth();
+    return adapter.replyPreviewHeight(composer.replySender, content, boxWidth);
+  }
+
+  private float composerReplyWidth() {
+    if (!composer.hasReply()) return 0f;
+    return Math.max(1f, getWidth() - px(88f));
+  }
+
   private void toggleAttachmentPanel() {
-    attachmentPanelVisible = !attachmentPanelVisible;
+    composer.attachmentPanelVisible = !composer.attachmentPanelVisible;
     build();
   }
 
   private void selectAttachment(String type) {
-    attachmentPanelVisible = false;
+    composer.attachmentPanelVisible = false;
     build();
     listener.onAttachmentSelected(type);
   }
@@ -376,110 +527,72 @@ public final class ChatView extends View {
     int previousLastVisible = list == null ? -1 : list.getLastVisiblePosition();
     String previousAnchorId = adapter.messageIdAt(previousFirstVisible);
     boolean wasNearBottom = previousCount == 0 || previousLastVisible >= previousCount - 2;
-    if (input != null) draft = input.getText();
+    if (input != null) composer.draft = input.getText();
     bg.clear();
     content.clear();
     overlay.clear();
     selectionOverlay.clear();
     composerActionIcon = null;
+    input = null;
+    audioRecordingTime = null;
+    audioRecordingWaveform = null;
+    composerReplyPreview = null;
     attachmentPreviewBackground = null;
     attachmentPreviewTextComponent = null;
     attachmentPreviewRemove = null;
     attachmentPreviewSend = null;
-    float attachmentPanelHeight = attachmentPanelVisible ? dp(112) : 0;
+    pinnedList = null;
+    float attachmentPanelHeight = composer.attachmentPanelVisible ? px(308f) : 0;
     float w = getWidth();
     float scale = w / 1080f;
     float top = topInset + floatingCallInset;
     float screenBottom = getHeight() - bottomInset;
     float attachmentPanelTop = screenBottom - attachmentPanelHeight;
     float composerBottom = attachmentPanelTop - 40f * scale;
-    float composerHeight = composerHeightForText(draft, scale);
+    float composerHeight = composer.recording
+        ? 134f * scale : composerHeightForText(composer.draft, scale);
     float composerTop = composerBottom - composerHeight;
     float microphoneBottom = attachmentPanelTop - 40f * scale;
     float microphoneTop = microphoneBottom - 134f * scale;
-    float nextHeaderBottom = top + 170f * scale;
     renderedComposerHeight = composerHeight;
-    headerBottom = nextHeaderBottom;
+    headerBottom = top + 170f * scale;
     bg.add(
         new Image.Builder(
                 getContext(), "conversation_background", conversationBackground,
                 new RectF(0, headerBottom, w, getHeight()))
             .setScaleType(Image.ScaleType.FIT_XY));
-    bg.add(
-        new Image.Builder(getContext(), "status_bar_background", white, new RectF(0, 0, w, top))
-            .setScaleType(Image.ScaleType.FIT_XY));
-    bg.add(
-        new Image.Builder(
-                getContext(), "header_background", headerBackground,
-                new RectF(0, top, w, headerBottom))
-            .setScaleType(Image.ScaleType.FIT_XY));
-    iconButton(
-        content,
-        "back",
-        backIcon,
-        new RectF(51f * scale, top + 60f * scale,
-            102f * scale, top + 111f * scale),
-        new RectF(25f * scale, top + 34f * scale,
-            128f * scale, top + 137f * scale),
-        id -> listener.onBack());
-    content.add(
-        new Image.Builder(
-                getContext(),
-                "profile",
-                profile,
-                new RectF(152f * scale, top + 34f * scale,
-                    254f * scale, top + 136f * scale))
-            .setScaleType(Image.ScaleType.CENTER_CROP));
-    text(
-        content,
-        "name",
-        chatName,
-        new RectF(285f * scale, top + 42f * scale,
-            742f * scale, top + 91f * scale),
-        38f * scale,
-        PRIMARY,
-        FontVariation.MEDIUM,
-        Text.Alignment.START);
-    presence =
-        text(
-            content,
-            "presence",
-            "connecting...",
-            new RectF(285f * scale, top + 95f * scale,
-                742f * scale, top + 139f * scale),
-            31f * scale,
-            SECONDARY,
-            FontVariation.REGULAR,
-            Text.Alignment.START);
-    iconButton(
-        content,
-        "video_call",
-        videoCallIcon,
-        new RectF(869f * scale, top + 55f * scale,
-            926f * scale, top + 112f * scale),
-        new RectF(844f * scale, top + 30f * scale,
-            951f * scale, top + 137f * scale),
-        id -> listener.onVideoCall());
-    iconButton(
-        content,
-        "voice_call",
-        voiceCallIcon,
-        new RectF(750f * scale, top + 55f * scale,
-            807f * scale, top + 112f * scale),
-        new RectF(725f * scale, top + 30f * scale,
-            832f * scale, top + 137f * scale),
-        id -> listener.onVoiceCall());
-    iconButton(
-        content,
-        "more",
-        moreIcon,
-        new RectF(1000f * scale, top + 55f * scale,
-            1032f * scale, top + 112f * scale),
-        new RectF(972f * scale, top + 27f * scale,
-            1060f * scale, top + 140f * scale),
-        id -> listener.onMore());
-    float replyHeight = replyPreview.isEmpty() ? 0 : dp(42);
-    float previewHeight = attachmentPreviewType.isEmpty() ? 0 : dp(72);
+    headerBottom = chatHeader.build(bg, content, w, top, scale);
+    float pinnedHeight = pinnedTabHeight();
+    if (pinnedHeight > 0f) {
+      float pinnedTop = headerBottom;
+      float pinnedBottom = pinnedTop + pinnedHeight;
+      content.add(
+          new Image.Builder(
+                  getContext(), "pinned_tab_background", white,
+                  new RectF(0f, pinnedTop, w, pinnedBottom))
+              .setScaleType(Image.ScaleType.FIT_XY));
+      content.add(
+          new Image.Builder(
+                  getContext(), "pinned_tab_divider", divider,
+                  new RectF(0f, pinnedBottom - px(2.75f), w, pinnedBottom))
+              .setScaleType(Image.ScaleType.FIT_XY));
+      pinnedList =
+          content.add(
+              new ComponentList.Builder<MessageEntity>(
+                      getContext(), "pinned_messages",
+                      new RectF(0f, pinnedTop + px(16.5f), w, pinnedBottom - px(16.5f)))
+                  .setOrientation(ComponentList.Orientation.VERTICAL)
+                  .setItemSize(px(154f))
+                  .setPaddingPx(0f, 0f, 0f, 0f)
+                  .setAdapter(pinnedAdapter)
+                  .setClipToBounds(true)
+                  .setScrollBarEnabled(pinnedMessages.size() > MAX_VISIBLE_PINNED_ROWS)
+                  .setOverscrollEnabled(false)
+                  .setOnItemClickListener(
+                      (componentList, message, position) -> scrollToPinnedMessage(message)));
+    }
+    float replyHeight = composerReplyHeight(scale);
+    float previewHeight = composer.hasAttachment() ? px(198f) : 0f;
     float messageComposerGap = 20f;
     float listBottom = composerTop - replyHeight - previewHeight - messageComposerGap;
     baseListBottom = listBottom;
@@ -490,43 +603,35 @@ public final class ChatView extends View {
                     getContext(), "messages", new RectF(0, messageListTop, w, listBottom))
                 .setOrientation(ComponentList.Orientation.VERTICAL)
                 .setItemSizeProvider(
-                    (message, position) -> adapter.rowHeight(message, position, w - dp(24)))
-                .setPaddingPx(0, dp(8), 0, dp(12))
+                    (message, position) -> adapter.rowHeight(message, position, w - px(66f)))
+                .setPaddingPx(0, px(22f), 0, px(33f))
                 .setAdapter(adapter)
                 .setClipToBounds(true)
                 .setScrollBarEnabled(true)
                 .setOverscrollEnabled(false)
-                .setOnItemLongClickListener(
-                    (componentList, message, position) -> {
-                      toggleMessageSelection(message);
-                      return true;
-                    })
-                .setOnItemClickListener(
-                    (componentList, message, position) -> {
-                      if (isSelectingMessages()) toggleMessageSelection(message);
-                      else listener.onMessageClick(message);
-                    }));
+                );
     status =
         text(
             content,
             "status",
             statusValue,
-            new RectF(dp(20), headerBottom + dp(20), w - dp(20), headerBottom + dp(120)),
+            new RectF(px(55f), messageListTop + px(55f), w - px(55f), messageListTop + px(330f)),
             sp(16),
             SECONDARY,
             FontVariation.REGULAR,
             Text.Alignment.CENTER);
     float olderLoadingHeight = olderLoadingHeight();
+    float olderLoadingTop = headerBottom + pinnedTabHeight();
     olderLoadingBackground =
         overlay.add(
             new Image.Builder(
                     getContext(), "older_loading_background", white,
-                    new RectF(0, headerBottom, w, headerBottom + olderLoadingHeight))
+                    new RectF(0, olderLoadingTop, w, olderLoadingTop + olderLoadingHeight))
                 .setScaleType(Image.ScaleType.FIT_XY));
-    float olderProgressSize = dp(18);
-    float olderGroupWidth = dp(218);
+    float olderProgressSize = px(49.5f);
+    float olderGroupWidth = px(599.5f);
     float olderGroupLeft = (w - olderGroupWidth) / 2f;
-    float olderProgressTop = headerBottom + (olderLoadingHeight - olderProgressSize) / 2f;
+    float olderProgressTop = olderLoadingTop + (olderLoadingHeight - olderProgressSize) / 2f;
     olderProgress =
         overlay.add(
             new Progress.Builder(
@@ -538,35 +643,48 @@ public final class ChatView extends View {
                 .setMode(Progress.Mode.INDETERMINATE)
                 .setProgressColor(ACCENT)
                 .setTrackColor(0x22019CC4)
-                .setThickness(dp(2))
+                .setThickness(px(5.5f))
                 .setIndeterminateDuration(850L));
     olderStatus =
         text(
             overlay,
             "older_status",
             loadingOlderMessages ? "Loading older messages..." : "",
-            new RectF(olderGroupLeft + olderProgressSize + dp(10), headerBottom,
-                olderGroupLeft + olderGroupWidth, headerBottom + olderLoadingHeight),
+            new RectF(olderGroupLeft + olderProgressSize + px(27.5f), olderLoadingTop,
+                olderGroupLeft + olderGroupWidth, olderLoadingTop + olderLoadingHeight),
             sp(13),
             SECONDARY,
             FontVariation.MEDIUM,
             Text.Alignment.START);
     updateOlderLoadingChrome();
-    float replyTop = replyPreview.isEmpty()
+    float replyTop = !composer.hasReply()
         ? composerTop - previewHeight
         : listBottom + messageComposerGap;
     replyText =
         text(
             overlay,
             "reply",
-            replyPreview,
-            new RectF(dp(16), replyTop, w - dp(16), replyTop + Math.max(dp(1), replyHeight)),
+            composer.replyPreview,
+            new RectF(px(44f), replyTop, w - px(44f), replyTop + Math.max(px(2.75f), replyHeight)),
             sp(13),
             SECONDARY,
             FontVariation.REGULAR,
             Text.Alignment.START);
-    replyText.setVisible(!replyPreview.isEmpty());
-    if (!attachmentPreviewType.isEmpty()) {
+    replyText.setVisible(composer.hasReply());
+    if (composer.replyContent != null) {
+      Typeface typeface = ResourcesCompat.getFont(getContext(), NativeFonts.INTER);
+      if (typeface == null) typeface = Typeface.DEFAULT;
+      composerReplyPreview = overlay.add(new ComposerReplyPreviewComponent(
+          getContext(), "composer_reply_preview", documentIcon, profile, typeface,
+          28.8f, 31.671f, this::scrollToMessageId));
+      float composerReplyWidth = composerReplyWidth();
+      composerReplyPreview.bind(
+          new RectF(px(44f), replyTop, px(44f) + composerReplyWidth,
+              replyTop + replyHeight),
+          composer.replySender, composer.replyContent, composer.replyTargetId);
+      replyText.setVisible(false);
+    }
+    if (composer.hasAttachment()) {
       float previewTop = composerTop - previewHeight;
       attachmentPreviewBackground = overlay.add(
           new Image.Builder(
@@ -576,8 +694,8 @@ public final class ChatView extends View {
       attachmentPreviewTextComponent = text(
           overlay,
           "attachment_preview_text",
-          attachmentPreviewType + "\n" + attachmentPreviewName,
-          new RectF(dp(16), previewTop + dp(8), w - dp(132), composerTop - dp(8)),
+          composer.attachmentType + "\n" + composer.attachmentName,
+          new RectF(px(44f), previewTop + px(22f), w - px(363f), composerTop - px(22f)),
           sp(13),
           PRIMARY,
           FontVariation.SEMI_BOLD,
@@ -587,7 +705,7 @@ public final class ChatView extends View {
           "attachment_preview_remove",
           white,
           "×",
-          new RectF(w - dp(128), previewTop + dp(12), w - dp(82), composerTop - dp(12)),
+          new RectF(w - px(352f), previewTop + px(33f), w - px(225.5f), composerTop - px(33f)),
           SECONDARY,
           id -> {
             clearAttachmentPreview();
@@ -598,7 +716,7 @@ public final class ChatView extends View {
           "attachment_preview_send",
           accent,
           "Send",
-          new RectF(w - dp(78), previewTop + dp(12), w - dp(8), composerTop - dp(12)),
+          new RectF(w - px(214.5f), previewTop + px(33f), w - px(22f), composerTop - px(33f)),
           Color.WHITE,
           id -> listener.onSend());
     }
@@ -608,14 +726,39 @@ public final class ChatView extends View {
             new RectF(30f * scale, composerTop, 898f * scale, composerBottom),
             64f * scale,
             3f * scale));
-    input =
+    if (composer.recording) {
+      iconButton(
+          overlay,
+          "recording_cancel",
+          selectionDeleteIcon,
+          new RectF(65f * scale, composerBottom - 94f * scale,
+              122f * scale, composerBottom - 37f * scale),
+          new RectF(43f * scale, composerBottom - 116f * scale,
+              144f * scale, composerBottom - 15f * scale),
+          id -> listener.onAudioRecordingCancel());
+      audioRecordingWaveform = overlay.add(
+          new AudioRecordingComponent("audio_recording_waveform")
+              .bind(new RectF(155f * scale, composerTop + 8f * scale,
+                  860f * scale, composerBottom - 8f * scale), composer.recordingElapsedMs));
+      audioRecordingTime = text(
+          overlay,
+          "audio_recording_time",
+          formatRecordingElapsed(composer.recordingElapsedMs),
+          new RectF(180f * scale, composerTop + 8f * scale,
+              300f * scale, composerBottom - 8f * scale),
+          34f * scale,
+          PRIMARY,
+          FontVariation.REGULAR,
+          Text.Alignment.START);
+    } else {
+      input =
         overlay.add(
             new TextField.Builder(
                     getContext(),
                     "composer",
                     new RectF(155f * scale, composerTop + 8f * scale,
                         885f * scale, composerBottom - 8f * scale))
-                .setText(draft)
+                .setText(composer.draft)
                 .setHint("Message")
                 .setMaxLength(4000)
                 .setInputType(InputType.TYPE_CLASS_TEXT
@@ -633,16 +776,16 @@ public final class ChatView extends View {
                 .setStrokeColor(Color.TRANSPARENT, Color.TRANSPARENT)
                 .setStrokeWidthPx(0)
                 .setCornerRadiusPx(0)
-                .setPaddingPx(0, dp(8))
+                .setPaddingPx(0, px(22f))
                 .setOnTextChangedListener(
                     (id, value) -> {
-                      draft = value;
+                      composer.draft = value;
                       listener.onTypingChanged(value);
                       updateComposerActionIcon();
                       scheduleComposerResize();
                     }));
-    input.setMultilineBottomEndInsetPx(189f * scale);
-    iconButton(
+      input.setMultilineBottomEndInsetPx(189f * scale);
+      iconButton(
         overlay,
         "emoji",
         emojiIcon,
@@ -651,7 +794,7 @@ public final class ChatView extends View {
         new RectF(46f * scale, composerBottom - 116f * scale,
             145f * scale, composerBottom - 17f * scale),
         id -> openEmojiKeyboard());
-    iconButton(
+      iconButton(
         overlay,
         "attachment",
         attachmentIcon,
@@ -660,7 +803,7 @@ public final class ChatView extends View {
         new RectF(690f * scale, composerBottom - 116f * scale,
             789f * scale, composerBottom - 17f * scale),
         id -> toggleAttachmentPanel());
-    iconButton(
+      iconButton(
         overlay,
         "camera",
         cameraIcon,
@@ -668,12 +811,13 @@ public final class ChatView extends View {
             860f * scale, composerBottom - 39f * scale),
         new RectF(783f * scale, composerBottom - 116f * scale,
             882f * scale, composerBottom - 17f * scale),
-        id -> selectAttachment("Image"));
+        id -> listener.onCameraSelected());
+    }
     composerActionIcon =
         overlay.add(
             new Image.Builder(
                     getContext(), "send_icon",
-                    hasComposerContent() ? sendIcon : microphoneIcon,
+                    composer.recording || hasComposerContent() ? sendIcon : microphoneIcon,
                     new RectF(916f * scale, microphoneTop,
                         1050f * scale, microphoneBottom))
                 .setScaleType(Image.ScaleType.FIT_CENTER));
@@ -687,8 +831,12 @@ public final class ChatView extends View {
                 .setCornerRadiusPx(0)
                 .setRippleEnabled(true)
                 .setRippleColor(0x16019CC4)
-                .setOnClickListener(id -> listener.onSend()));
-    if (attachmentPanelVisible) {
+                .setOnClickListener(id -> {
+                  if (composer.recording) listener.onAudioRecordingSend();
+                  else if (hasComposerContent()) listener.onSend();
+                  else listener.onAudioRecordingStart();
+                }));
+    if (composer.attachmentPanelVisible) {
       overlay.add(
           new Image.Builder(
                   getContext(),
@@ -701,10 +849,10 @@ public final class ChatView extends View {
                   getContext(),
                   "attachment_panel_line",
                   divider,
-                  new RectF(0, attachmentPanelTop, w, attachmentPanelTop + dp(1)))
+                  new RectF(0, attachmentPanelTop, w, attachmentPanelTop + px(2.75f)))
               .setScaleType(Image.ScaleType.FIT_XY));
       String[] attachmentTypes = {"Image", "Video", "File", "Location"};
-      float gap = dp(8), side = dp(10), optionWidth = (w - side * 2 - gap * 3) / 4f;
+      float gap = px(22f), side = px(27.5f), optionWidth = (w - side * 2 - gap * 3) / 4f;
       for (int i = 0; i < attachmentTypes.length; i++) {
         String type = attachmentTypes[i];
         float left = side + i * (optionWidth + gap);
@@ -713,12 +861,14 @@ public final class ChatView extends View {
             "attachment_" + type.toLowerCase(Locale.US),
             attachmentOption,
             type,
-            new RectF(left, attachmentPanelTop + dp(16), left + optionWidth, screenBottom - dp(16)),
+            new RectF(left, attachmentPanelTop + px(44f), left + optionWidth, screenBottom - px(44f)),
             ACCENT,
             id -> selectAttachment(type));
       }
     }
-    if (isSelectingMessages()) buildMessageSelectionHeader(w, top, scale);
+    if (isSelectingMessages()) {
+      selectionHeader.build(selectionOverlay, selectedMessages(), w, top, scale);
+    }
     boolean empty = adapter.getItemCount() == 0;
     list.setVisible(!empty);
     status.setVisible(empty && !statusValue.isEmpty());
@@ -731,81 +881,12 @@ public final class ChatView extends View {
     invalidate();
   }
 
-  private void buildMessageSelectionHeader(float width, float top, float scale) {
-    List<MessageEntity> selected = selectedMessages();
-    selectionOverlay.add(
-        new Image.Builder(
-                getContext(), "message_selection_status_bar", selectionStatusBarBackground,
-                new RectF(0f, 0f, width, top))
-            .setScaleType(Image.ScaleType.FIT_XY));
-    selectionOverlay.add(
-        new Image.Builder(
-                getContext(), "message_selection_header", selectionBackground,
-                new RectF(0f, top, width, top + 170f * scale))
-            .setScaleType(Image.ScaleType.FIT_XY));
-    selectionOverlay.add(
-        new Button.Builder(
-                getContext(), "message_selection_header_touch", transparent, "",
-                new RectF(0f, top, width, top + 170f * scale))
-            .setImageScaleType(Image.ScaleType.FIT_XY)
-            .setRippleEnabled(false)
-            .setOnClickListener(id -> { }));
-    iconButton(
-        selectionOverlay,
-        "message_selection_back",
-        backIcon,
-        new RectF(51f * scale, top + 60f * scale, 102f * scale, top + 111f * scale),
-        new RectF(25f * scale, top + 34f * scale, 128f * scale, top + 137f * scale),
-        id -> clearMessageSelection());
-    text(
-        selectionOverlay,
-        "message_selection_count",
-        String.valueOf(selected.size()),
-        new RectF(165f * scale, top + 57f * scale, 300f * scale, top + 117f * scale),
-        50f * scale,
-        SECONDARY,
-        FontVariation.MEDIUM,
-        Text.Alignment.START);
-    if (selected.size() == 1) {
-      selectionAction("reply", selectionReplyIcon, 535f, top, scale,
-          () -> listener.onReplySelected(selected.get(0)));
-    }
-    selectionAction("copy", selectionCopyIcon, 645f, top, scale,
-        () -> listener.onCopySelected(selected));
-    selectionAction("forward", selectionForwardIcon, 755f, top, scale,
-        () -> listener.onForwardSelected(selected));
-    boolean allPinned = !selected.isEmpty();
-    for (MessageEntity message : selected) allPinned &= message.pinned;
-    final boolean unpin = allPinned;
-    selectionAction(unpin ? "unpin" : "pin",
-        unpin ? selectionUnpinIcon : selectionPinIcon, 865f, top, scale,
-        () -> {
-          if (unpin) listener.onUnpinSelected(selected);
-          else listener.onPinSelected(selected);
-        });
-    selectionAction("delete", selectionDeleteIcon, 975f, top, scale,
-        () -> listener.onDeleteSelected(selected));
-  }
-
-  private void selectionAction(
-      String id, Bitmap icon, float centerX, float top, float scale, Runnable action) {
-    float half = 25.5f;
-    iconButton(
-        selectionOverlay,
-        "message_selection_" + id,
-        icon,
-        new RectF((centerX - half) * scale, top + 60f * scale,
-            (centerX + half) * scale, top + 111f * scale),
-        new RectF((centerX - 49f) * scale, top + 35f * scale,
-            (centerX + 49f) * scale, top + 136f * scale),
-        value -> action.run());
-  }
 
   private void applyKeyboardInsets() {
     if (list == null || getWidth() <= 0) return;
     float shift = imeVisible ? -Math.max(0, imeInset - bottomInset) : 0;
     overlay.setTranslationY(shift);
-    float listBottom = Math.max(headerBottom + dp(1), baseListBottom + shift);
+    float listBottom = Math.max(headerBottom + px(2.75f), baseListBottom + shift);
     RectF nextBounds = new RectF(0, messageListTop(), getWidth(), listBottom);
     RectF currentBounds = list.getBounds();
     if (!sameBounds(currentBounds, nextBounds)) list.setRegion(nextBounds);
@@ -823,16 +904,16 @@ public final class ChatView extends View {
       visibleTextHeight = layout.getLineBottom(MAX_VISIBLE_COMPOSER_LINES - 1);
     }
     float desiredHeight =
-        (float) Math.ceil(visibleTextHeight + dp(16) + 16f * scale);
+        (float) Math.ceil(visibleTextHeight + px(44f) + 16f * scale);
 
     float top = topInset + floatingCallInset;
     float screenBottom = getHeight() - bottomInset;
-    float attachmentPanelHeight = attachmentPanelVisible ? dp(112) : 0f;
+    float attachmentPanelHeight = composer.attachmentPanelVisible ? px(308f) : 0f;
     float composerBottom = screenBottom - attachmentPanelHeight - 40f * scale;
     float headerEdge = top + 170f * scale;
-    float composerChromeAbove = dp(72) + 20f;
-    if (!replyPreview.isEmpty()) composerChromeAbove += dp(42);
-    if (!attachmentPreviewType.isEmpty()) composerChromeAbove += dp(72);
+    float composerChromeAbove = px(198f) + 20f;
+    composerChromeAbove += composerReplyHeight(scale);
+    if (composer.hasAttachment()) composerChromeAbove += px(198f);
     float maximumHeight = Math.max(
         minimumHeight, composerBottom - headerEdge - composerChromeAbove);
     return Math.min(maximumHeight, Math.max(minimumHeight, desiredHeight));
@@ -857,7 +938,7 @@ public final class ChatView extends View {
 
   private void scheduleComposerResize() {
     if (getWidth() <= 0 || getHeight() <= 0) return;
-    float desiredHeight = composerHeightForText(draft, getWidth() / 1080f);
+    float desiredHeight = composerHeightForText(composer.draft, getWidth() / 1080f);
     if (Math.abs(desiredHeight - renderedComposerHeight) < .5f) {
       invalidate();
       return;
@@ -873,23 +954,64 @@ public final class ChatView extends View {
         () -> {
           composerResizePosted = false;
           if (input == null || getWidth() <= 0 || getHeight() <= 0) return;
-          draft = input.getText();
-          float currentDesiredHeight = composerHeightForText(draft, getWidth() / 1080f);
+          composer.draft = input.getText();
+          float currentDesiredHeight =
+              composerHeightForText(composer.draft, getWidth() / 1080f);
           if (Math.abs(currentDesiredHeight - renderedComposerHeight) < .5f) return;
           applyComposerHeight(currentDesiredHeight);
         });
   }
 
   private boolean hasComposerContent() {
-    return (draft != null && !draft.isEmpty())
-        || (attachmentPreviewType != null && !attachmentPreviewType.isEmpty());
+    return !composer.draft.isEmpty() || composer.hasAttachment();
   }
 
   private void updateComposerActionIcon() {
     if (composerActionIcon != null) {
-      composerActionIcon.setBitmap(hasComposerContent() ? sendIcon : microphoneIcon);
+      composerActionIcon.setBitmap(composer.recording || hasComposerContent()
+          ? sendIcon : microphoneIcon);
       invalidate();
     }
+  }
+
+  public void startAudioRecording() {
+    if (composer.recording) return;
+    composer.recording = true;
+    composer.recordingElapsedMs = 0L;
+    composer.attachmentPanelVisible = false;
+    InputMethodManager keyboard =
+        (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+    if (keyboard != null) keyboard.hideSoftInputFromWindow(getWindowToken(), 0);
+    build();
+  }
+
+  public void updateAudioRecordingState(long elapsedMs, int amplitude) {
+    composer.recordingElapsedMs = Math.max(0L, elapsedMs);
+    if (audioRecordingTime != null) {
+      audioRecordingTime.setText(formatRecordingElapsed(composer.recordingElapsedMs));
+    }
+    if (audioRecordingWaveform != null) {
+      audioRecordingWaveform.setRecordingSample(composer.recordingElapsedMs, amplitude);
+    }
+    invalidate();
+  }
+
+  public void stopAudioRecording() {
+    if (!composer.recording) return;
+    composer.recording = false;
+    composer.recordingElapsedMs = 0L;
+    build();
+  }
+
+  public void setAudioPlaybackState(
+      String messageId, boolean playing, long progressMs, long durationMs) {
+    adapter.setAudioPlaybackState(messageId, playing, progressMs, durationMs);
+    invalidate();
+  }
+
+  private static String formatRecordingElapsed(long elapsedMs) {
+    long totalSeconds = Math.max(0L, elapsedMs / 1000L);
+    return String.format(Locale.US, "%d:%02d", totalSeconds / 60L, totalSeconds % 60L);
   }
 
   private void applyComposerHeight(float composerHeight) {
@@ -897,12 +1019,12 @@ public final class ChatView extends View {
     float width = getWidth();
     float scale = width / 1080f;
     float screenBottom = getHeight() - bottomInset;
-    float attachmentPanelHeight = attachmentPanelVisible ? dp(112) : 0f;
+    float attachmentPanelHeight = composer.attachmentPanelVisible ? px(308f) : 0f;
     float attachmentPanelTop = screenBottom - attachmentPanelHeight;
     float composerBottom = attachmentPanelTop - 40f * scale;
     float composerTop = composerBottom - composerHeight;
-    float replyHeight = replyPreview.isEmpty() ? 0f : dp(42);
-    float previewHeight = attachmentPreviewType.isEmpty() ? 0f : dp(72);
+    float replyHeight = composerReplyHeight(scale);
+    float previewHeight = composer.hasAttachment() ? px(198f) : 0f;
     float listBottom = composerTop - replyHeight - previewHeight - 20f;
 
     renderedComposerHeight = composerHeight;
@@ -914,30 +1036,38 @@ public final class ChatView extends View {
         .setMultilineBottomEndInsetPx(189f * scale);
 
     baseListBottom = listBottom;
-    if (replyText != null && !replyPreview.isEmpty()) {
+    if (replyText != null && composer.hasReply()) {
       float replyTop = listBottom + 20f;
       replyText.setRegion(
-          new RectF(dp(16), replyTop, width - dp(16), replyTop + replyHeight));
+          new RectF(px(44f), replyTop, width - px(44f), replyTop + replyHeight));
+    }
+    if (composerReplyPreview != null && composer.replyContent != null) {
+      float replyTop = listBottom + 20f;
+      float composerReplyWidth = composerReplyWidth();
+      composerReplyPreview.bind(
+          new RectF(px(44f), replyTop, px(44f) + composerReplyWidth,
+              replyTop + replyHeight),
+          composer.replySender, composer.replyContent, composer.replyTargetId);
     }
     if (attachmentPreviewBackground != null) {
       float previewTop = composerTop - previewHeight;
       attachmentPreviewBackground.setRegion(new RectF(0, previewTop, width, composerTop));
       attachmentPreviewTextComponent.setRegion(
-          new RectF(dp(16), previewTop + dp(8), width - dp(132), composerTop - dp(8)));
+          new RectF(px(44f), previewTop + px(22f), width - px(363f), composerTop - px(22f)));
       attachmentPreviewRemove.setRegion(
-          new RectF(width - dp(128), previewTop + dp(12),
-              width - dp(82), composerTop - dp(12)));
+          new RectF(width - px(352f), previewTop + px(33f),
+              width - px(225.5f), composerTop - px(33f)));
       attachmentPreviewSend.setRegion(
-          new RectF(width - dp(78), previewTop + dp(12),
-              width - dp(8), composerTop - dp(12)));
+          new RectF(width - px(214.5f), previewTop + px(33f),
+              width - px(22f), composerTop - px(33f)));
     }
     applyKeyboardInsets();
   }
 
   private void openEmojiKeyboard() {
-    if (attachmentPanelVisible) {
-      if (input != null) draft = input.getText();
-      attachmentPanelVisible = false;
+    if (composer.attachmentPanelVisible) {
+      if (input != null) composer.draft = input.getText();
+      composer.attachmentPanelVisible = false;
       build();
     }
     if (input == null) return;
@@ -979,12 +1109,46 @@ public final class ChatView extends View {
   }
 
   private float messageListTop() {
-    return headerBottom + (shouldShowOlderLoading() ? olderLoadingHeight() : 0f);
+    return headerBottom + pinnedTabHeight()
+        + (shouldShowOlderLoading() ? olderLoadingHeight() : 0f);
+  }
+
+  private float pinnedTabHeight() {
+    if (pinnedMessages.isEmpty()) return 0f;
+    return px(33f + Math.min(MAX_VISIBLE_PINNED_ROWS, pinnedMessages.size()) * 154f);
+  }
+
+  private void scrollToPinnedMessage(MessageEntity message) {
+    if (list == null || message == null) return;
+    int position = adapter.indexOfMessage(message.messageId);
+    if (position < 0) {
+      pendingPinnedScrollMessageId = message.messageId;
+      return;
+    }
+    pendingPinnedScrollMessageId = null;
+    list.stopScroll();
+    list.scrollToPosition(position);
+    invalidate();
+  }
+
+  private void scrollToMessageId(String messageId) {
+    if (list == null || messageId == null || messageId.trim().isEmpty()) return;
+    int position = adapter.indexOfMessage(messageId);
+    if (position < 0) {
+      pendingReplyScrollMessageId = messageId;
+      listener.onReplyTargetRequested(messageId);
+      return;
+    }
+    pendingReplyScrollMessageId = null;
+    list.stopScroll();
+    list.scrollToPosition(position);
+    invalidate();
   }
 
   private float olderLoadingHeight() {
-    return dp(48);
+    return px(132f);
   }
+
 
   private Text.Builder textBuilder(String id, String v, RectF r, float sz, int c, FontVariation f) {
     return new Text.Builder(getContext(), id, v, r)
@@ -1006,7 +1170,7 @@ public final class ChatView extends View {
     return l.add(
         new Button.Builder(getContext(), id, b, label, r)
             .setImageScaleType(Image.ScaleType.FIT_XY)
-            .setCornerRadiusPx(dp(16))
+            .setCornerRadiusPx(px(44f))
             .setFont(NativeFonts.INTER)
             .setFontVariations(FontVariation.SEMI_BOLD)
             .setTextSizePx(sp(18))
@@ -1137,11 +1301,14 @@ public final class ChatView extends View {
         selectionReplyIcon,
         selectionCopyIcon, selectionForwardIcon, selectionPinIcon, selectionUnpinIcon,
         selectionDeleteIcon,
-        messageSendingIcon, messageSentIcon, messageDeliveredIcon, messageReadIcon);
+        messageSendingIcon, messageSentIcon, messageDeliveredIcon, messageReadIcon,
+        documentIcon, deletedMessageIcon, forwardedMessageIcon,
+        callPhoneIncomingIcon, callPhoneOutgoingIcon, callPhoneMissedIcon,
+        callVideoIncomingIcon, callVideoOutgoingIcon, callVideoMissedIcon);
   }
 
   private Bitmap avatar(String value) {
-    int s = Math.round(dp(48));
+    int s = Math.round(px(132f));
     Bitmap b = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
     Canvas c = new Canvas(b);
     Paint p = new Paint(1);
@@ -1182,8 +1349,8 @@ public final class ChatView extends View {
     return n.startsWith("+") ? n.substring(1) : n;
   }
 
-  private float dp(float v) {
-    return v * getResources().getDisplayMetrics().density;
+  private float px(float v) {
+    return figmaConfig.toRuntime(v, Math.max(1, getResources().getDisplayMetrics().widthPixels));
   }
 
   private float sp(float v) {
@@ -1221,42 +1388,4 @@ public final class ChatView extends View {
     for (Bitmap b : bs) if (b != null && !b.isRecycled()) b.recycle();
   }
 
-  public interface Listener {
-    void onBack();
-
-    void onVideoCall();
-
-    void onVoiceCall();
-
-    void onMore();
-
-    void onSend();
-
-    void onAttachmentSelected(String type);
-
-    void onAttachmentPreviewRemoved();
-
-    void onTypingChanged(String value);
-
-    void onMessageClick(MessageEntity message);
-
-    void onReplySelected(MessageEntity message);
-
-    void onCopySelected(List<MessageEntity> messages);
-
-    void onForwardSelected(List<MessageEntity> messages);
-
-    void onPinSelected(List<MessageEntity> messages);
-
-    void onUnpinSelected(List<MessageEntity> messages);
-
-    void onDeleteSelected(List<MessageEntity> messages);
-
-    void onMessageSelectionChanged(boolean selected);
-
-    void onLoadOlderMessages();
-
-    /** 0 = locally available, 1 = needs download, 2 = downloading. */
-    int attachmentState(MessageEntity message);
-  }
 }

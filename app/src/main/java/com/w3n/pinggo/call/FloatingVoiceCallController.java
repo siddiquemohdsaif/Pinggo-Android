@@ -22,6 +22,8 @@ import java.lang.ref.WeakReference;
 
 /** In-app floating card for a minimized active voice call. */
 public final class FloatingVoiceCallController implements Application.ActivityLifecycleCallbacks {
+  private static final com.ogfa.nativeviews.component.FigmaConfig FIGMA_CONFIG =
+      new com.ogfa.nativeviews.component.FigmaConfig(1080f);
   private static final FloatingVoiceCallController INSTANCE = new FloatingVoiceCallController();
   private Application application;
   private WeakReference<Activity> resumedActivity = new WeakReference<>(null);
@@ -73,20 +75,20 @@ public final class FloatingVoiceCallController implements Application.ActivityLi
     LinearLayout card = new LinearLayout(activity);
     card.setOrientation(LinearLayout.HORIZONTAL);
     card.setGravity(Gravity.CENTER_VERTICAL);
-    card.setPadding(dp(activity, 12), dp(activity, 8), dp(activity, 8), dp(activity, 8));
-    card.setElevation(dp(activity, 10));
+    card.setPadding(px(activity, 33f), px(activity, 22f), px(activity, 22f), px(activity, 22f));
+    card.setElevation(px(activity, 27.5f));
     GradientDrawable bg = new GradientDrawable();
-    bg.setColor(Color.WHITE); bg.setCornerRadius(dp(activity, 18)); bg.setStroke(dp(activity, 1), 0x22000000);
+    bg.setColor(Color.WHITE); bg.setCornerRadius(px(activity, 49.5f)); bg.setStroke(px(activity, 2.75f), 0x22000000);
     card.setBackground(bg);
 
     ImageView avatar = new ImageView(activity);
     if (profilePath != null && !profilePath.trim().isEmpty()) avatar.setImageBitmap(BitmapFactory.decodeFile(profilePath));
     else { GradientDrawable fallback = new GradientDrawable(); fallback.setShape(GradientDrawable.OVAL); fallback.setColor(0xFFD9F1F7); avatar.setBackground(fallback); }
     avatar.setScaleType(ImageView.ScaleType.CENTER_CROP);
-    card.addView(avatar, new LinearLayout.LayoutParams(dp(activity, 48), dp(activity, 48)));
+    card.addView(avatar, new LinearLayout.LayoutParams(px(activity, 132f), px(activity, 132f)));
 
     LinearLayout labels = new LinearLayout(activity);
-    labels.setOrientation(LinearLayout.VERTICAL); labels.setPadding(dp(activity, 12), 0, dp(activity, 8), 0);
+    labels.setOrientation(LinearLayout.VERTICAL); labels.setPadding(px(activity, 33f), 0, px(activity, 22f), 0);
     TextView phoneView = new TextView(activity);
     phoneView.setText(phone); phoneView.setTextColor(0xFF000E1A); phoneView.setTextSize(16); phoneView.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
     labels.addView(phoneView);
@@ -97,21 +99,21 @@ public final class FloatingVoiceCallController implements Application.ActivityLi
 
     TextView end = new TextView(activity);
     end.setText("End"); end.setTextColor(Color.WHITE); end.setTextSize(14); end.setTypeface(Typeface.DEFAULT, Typeface.BOLD); end.setGravity(Gravity.CENTER);
-    GradientDrawable endBg = new GradientDrawable(); endBg.setColor(0xFFE53935); endBg.setCornerRadius(dp(activity, 22)); end.setBackground(endBg);
+    GradientDrawable endBg = new GradientDrawable(); endBg.setColor(0xFFE53935); endBg.setCornerRadius(px(activity, 60.5f)); end.setBackground(endBg);
     end.setOnClickListener(view -> { if (endAction != null) endAction.run(); });
-    card.addView(end, new LinearLayout.LayoutParams(dp(activity, 64), dp(activity, 44)));
+    card.addView(end, new LinearLayout.LayoutParams(px(activity, 176f), px(activity, 121f)));
     card.setOnClickListener(view -> {
       Intent intent = new Intent(activity, VoiceCallActivity.class);
       intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
       activity.startActivity(intent);
     });
-    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(activity, 72), Gravity.TOP);
-    params.setMargins(dp(activity, 12), dp(activity, 44), dp(activity, 12), 0);
+    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, px(activity, 198f), Gravity.TOP);
+    params.setMargins(px(activity, 33f), px(activity, 121f), px(activity, 33f), 0);
     decor.addView(card, params);
     overlay = card;
     overlayHost = new WeakReference<>(activity);
     if (activity instanceof ChatActivity) {
-      ((ChatActivity) activity).setFloatingCallInset(dp(activity, 92));
+      ((ChatActivity) activity).setFloatingCallInset(px(activity, 253f));
     }
   }
   private void remove() {
@@ -120,7 +122,10 @@ public final class FloatingVoiceCallController implements Application.ActivityLi
     if (overlay != null && overlay.getParent() instanceof ViewGroup) ((ViewGroup) overlay.getParent()).removeView(overlay);
     overlay = null; statusView = null; overlayHost.clear();
   }
-  private static int dp(Activity activity, float value) { return Math.round(value * activity.getResources().getDisplayMetrics().density); }
+  private static int px(Activity activity, float value) {
+    return Math.round(FIGMA_CONFIG.toRuntime(value,
+        Math.max(1, activity.getResources().getDisplayMetrics().widthPixels)));
+  }
 
   @Override public void onActivityResumed(Activity activity) {
     resumedActivity = new WeakReference<>(activity);

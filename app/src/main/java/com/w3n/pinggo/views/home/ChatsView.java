@@ -62,8 +62,8 @@ import java.util.concurrent.Executors;
 
 /** Scrollable chat list implemented with native-views-release.aar components. */
 public final class ChatsView extends View {
-    private static final String PERF_TAG = "ChatsViewPerf";
     private static final float FIGMA_WIDTH = 1080f;
+    private static final String PERF_TAG = "ChatsViewPerf";
     private static final int PRIMARY = 0xFF000E1A;
     private static final int SECONDARY = 0xFF687382;
     private static final int UNREAD_PREVIEW = 0xFF855C5C;
@@ -104,6 +104,7 @@ public final class ChatsView extends View {
     private final Bitmap videoBitmap = resourceBitmap(R.drawable.chat_video_neutral);
     private final Bitmap documentBitmap = resourceBitmap(R.drawable.chat_document);
     private final Bitmap locationBitmap = resourceBitmap(R.drawable.chat_location);
+    private final Bitmap audioBitmap = resourceBitmap(R.drawable.chat_audio);
     private final Bitmap phoneIncomingBitmap = resourceBitmap(R.drawable.chat_phone_incoming);
     private final Bitmap phoneOutgoingBitmap = resourceBitmap(R.drawable.chat_phone_outgoing);
     private final Bitmap phoneMissedBitmap = resourceBitmap(R.drawable.chat_phone_missed);
@@ -289,7 +290,7 @@ public final class ChatsView extends View {
                     else clickListener.onChatClick(chat);
                 }));
         status = stateLayer.add(new Text.Builder(getContext(), "chat_status", statusMessage,
-                new RectF(dp(20), dp(28), width - dp(20), dp(112)))
+                new RectF(px(55f), px(77f), width - px(55f), px(308f)))
                 .setFont(NativeFonts.INTER).setFontVariations(FontVariation.REGULAR)
                 .setTextSizePx(sp(16)).setTextColor(SECONDARY).setAlignment(Text.Alignment.CENTER)
                 .setVerticalAlignment(Text.VerticalAlignment.CENTER).setMaxLines(2));
@@ -380,8 +381,8 @@ public final class ChatsView extends View {
                 .setVisible(false));
         initialLoadingText = stateLayer.add(new Text.Builder(getContext(),
                 "chat_initial_loading_text", "Loading chats...",
-                new RectF(dp(20), (height + initialProgressSize) / 2f + dp(10),
-                        width - dp(20), (height + initialProgressSize) / 2f + dp(54)))
+                new RectF(px(55f), (height + initialProgressSize) / 2f + px(27.5f),
+                        width - px(55f), (height + initialProgressSize) / 2f + px(148.5f)))
                 .setFont(NativeFonts.INTER).setFontVariations(FontVariation.MEDIUM)
                 .setTextSizePx(sp(14)).setTextColor(SECONDARY)
                 .setAlignment(Text.Alignment.CENTER)
@@ -422,7 +423,7 @@ public final class ChatsView extends View {
         paginationLoadingText.setVisible(false);
         refreshErrorText = stateLayer.add(new Text.Builder(getContext(),
                 "chat_refresh_error", "Couldn't refresh chats. Showing saved chats.",
-                new RectF(dp(20), height - dp(64), width - dp(20), height - dp(12)))
+                new RectF(px(55f), height - px(176f), width - px(55f), height - px(33f)))
                 .setFont(NativeFonts.INTER).setFontVariations(FontVariation.MEDIUM)
                 .setTextSizePx(sp(13)).setTextColor(UNREAD_PREVIEW)
                 .setAlignment(Text.Alignment.CENTER)
@@ -583,7 +584,7 @@ public final class ChatsView extends View {
                 unreadBadgeBitmap,
                 selectionBackgroundBitmap, selectionCheckBitmap,
                 pinnedBitmap, mutedBitmap, sendingBitmap, deliveredBitmap, sentBitmap, readBitmap);
-        recycle(pictureBitmap, videoBitmap, documentBitmap, locationBitmap);
+        recycle(pictureBitmap, videoBitmap, documentBitmap, locationBitmap, audioBitmap);
         recycle(phoneIncomingBitmap, phoneOutgoingBitmap, phoneMissedBitmap,
                 videoIncomingBitmap, videoOutgoingBitmap, videoMissedBitmap);
     }
@@ -871,8 +872,9 @@ public final class ChatsView extends View {
             boolean received = !chat.isLastMessageOutgoing();
             String type = chat.getLastMessageType() == null ? "text" : chat.getLastMessageType();
             boolean video = "video".equals(type);
+            boolean audio = "audio".equals(type) || "voice".equals(type);
             boolean squareMedia = "image".equals(type) || "file".equals(type)
-                    || "location".equals(type);
+                    || "location".equals(type) || audio;
             boolean voiceCall = "voice_call".equals(type);
             boolean videoCall = "video_call".equals(type);
             boolean call = voiceCall || videoCall;
@@ -904,6 +906,7 @@ public final class ChatsView extends View {
                         .setTextColor(previewColor).setVisible(true);
             } else if (video || squareMedia) {
                 String mediaName = chat.getLastMessageAttachmentName();
+                if (audio) mediaName = "Voice message";
                 if (mediaName == null || mediaName.trim().isEmpty()) mediaName = preview;
                 String direction = received ? "received_" : "sent_";
                 String kind = video ? "video" : "square";
@@ -911,7 +914,8 @@ public final class ChatsView extends View {
                 String textId = direction + kind + "_text";
                 if (squareMedia) {
                     Bitmap icon = "image".equals(type) ? pictureBitmap
-                            : "location".equals(type) ? locationBitmap : documentBitmap;
+                            : "location".equals(type) ? locationBitmap
+                            : audio ? audioBitmap : documentBitmap;
                     item.find(iconId, Image.class).setBitmap(icon);
                 }
                 item.find(iconId, Image.class).setVisible(true);
@@ -1075,7 +1079,7 @@ public final class ChatsView extends View {
     }
 
     private Bitmap avatar(String value) {
-        int size = Math.max(1, Math.round(dp(56)));
+        int size = Math.max(1, Math.round(px(154f)));
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -1152,7 +1156,9 @@ public final class ChatsView extends View {
         return normalized.startsWith("+") ? normalized.substring(1) : normalized;
     }
 
-    private float dp(float value) { return value * getResources().getDisplayMetrics().density; }
+    private float px(float value) {
+    return figmaConfig.toRuntime(value, Math.max(1, getResources().getDisplayMetrics().widthPixels));
+  }
     private float sp(float value) { return value * getResources().getDisplayMetrics().scaledDensity; }
     private boolean isDebugBuild() {
         return (getContext().getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;

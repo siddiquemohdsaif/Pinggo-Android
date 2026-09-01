@@ -36,8 +36,8 @@ import java.io.InputStream;
 public class SignUpActivity extends AppCompatActivity {
   public static final String EXTRA_PHONE_NUMBER = "com.w3n.pinggo.extra.PHONE_NUMBER";
   public static final String EXTRA_EMAIL = "com.w3n.pinggo.extra.EMAIL";
-  private static final int MIN_CROP_BOX_SIZE_DP = 180;
-  private static final int MAX_CROP_BOX_SIZE_DP = 420;
+  private static final int MIN_CROP_BOX_SIZE_PX = 495;
+  private static final int MAX_CROP_BOX_SIZE_PX = 1155;
 
   private final ActivityResultLauncher<String> photoPicker =
       registerForActivityResult(new ActivityResultContracts.GetContent(), this::onPhotoSelected);
@@ -127,7 +127,7 @@ public class SignUpActivity extends AppCompatActivity {
 
   private void showCropDialog(Bitmap bitmap) {
     cropDialog = new NativeCropDialogView(this, bitmap,
-        MIN_CROP_BOX_SIZE_DP, MAX_CROP_BOX_SIZE_DP,
+        MIN_CROP_BOX_SIZE_PX, MAX_CROP_BOX_SIZE_PX,
         new NativeCropDialogView.Listener() {
           @Override public void onRetry() { photoPicker.launch("image/*"); }
           @Override public void onConfirm(Bitmap cropped) {
@@ -240,10 +240,6 @@ public class SignUpActivity extends AppCompatActivity {
 
   private boolean inactive() {
     return isFinishing() || isDestroyed();
-  }
-
-  private int dp(int value) {
-    return Math.round(value * getResources().getDisplayMetrics().density);
   }
 
   @Override

@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <external-path name="pinggo_downloads" path="Download/PingGo/" />
+    <external-path name="pinggo_media" path="PingGo/" />
 </paths>

@@ -47,7 +47,6 @@ import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.hbb20.CCPCountry;
 import com.hbb20.CountryCodePicker;
 import com.w3n.pinggo.R;
-import com.w3n.pinggo.views.common.NativeTextFieldImeController;
 import com.w3n.pinggo.views.common.NativeMessageView;
 import com.w3n.pinggo.Util.login.CountryAdapter;
 import com.w3n.pinggo.Util.login.CountryCardLayout;
@@ -70,7 +69,7 @@ public class PhoneNumberLoginView extends View {
     private static final float COUNTRY_CARD_WIDTH = 806f;
     private static final float COUNTRY_CARD_HEIGHT = 787f;
     private static final float COUNTRY_EMPTY_HEIGHT = 150f;
-    private static final float COUNTRY_ROW_HEIGHT_DP = 58f;
+    private static final float COUNTRY_ROW_HEIGHT_PX = 159.5f;
     private static final int COUNTRY_DISPLAY_NAME_LIMIT = 25;
     private static final float COUNTRY_CARD_BOTTOM_RADIUS = 50f;
     private static final int COUNTRY_DIVIDER_COLOR = 0xFFE5E8EC;
@@ -627,7 +626,7 @@ public class PhoneNumberLoginView extends View {
         int maximumHeight = Math.round(COUNTRY_CARD_HEIGHT * scale);
         int contentHeight = matchCount == 0
                 ? Math.round(COUNTRY_EMPTY_HEIGHT * scale)
-                : Math.round(matchCount * dpValue(COUNTRY_ROW_HEIGHT_DP));
+                : Math.round(matchCount * px(COUNTRY_ROW_HEIGHT_PX));
         return Math.max(1, Math.min(maximumHeight, contentHeight));
     }
 
@@ -754,12 +753,9 @@ public class PhoneNumberLoginView extends View {
         }
     }
 
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
-    }
-
-    private float dpValue(float value) {
-        return value * getResources().getDisplayMetrics().density;
+    private float px(float value) {
+        return figmaConfig.toRuntime(value,
+                Math.max(1, getResources().getDisplayMetrics().widthPixels));
     }
 
     private void addCenteredText(String id, CharSequence value, float top, float width,
@@ -909,8 +905,6 @@ public class PhoneNumberLoginView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        NativeTextFieldImeController.dismissOnOutsideDown(
-                this, layerGroup, loginCardLayer, event);
         return layerGroup.onTouchEvent(event) || super.onTouchEvent(event);
     }
 

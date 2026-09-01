@@ -69,6 +69,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     private static final String TESTING_TAG = "PARVEZ_TESTING";
     private static final long ATTACHMENT_CHUNK_SIZE = 3L * 1024L * 1024L;
     private static final int CHAT_LIST_PAGE_SIZE = 20;
+    private static final String PIN_USER_SEPARATOR = "\u001F";
     public static final int MESSAGE_PAGE_SIZE = 50;
     public interface EventListener {
         void onTyping(String chatId, String userId, boolean typing);
@@ -101,6 +102,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     public interface MessagePageCallback {
         void onLoaded(String nextCursor, boolean hasMore, int loadedCount);
         void onError(String message);
+    }
+
+    public interface ReplyTargetsCallback {
+        void onLoaded(List<MessageEntity> messages);
     }
 
     /** Pagination state retained only while this application process is alive. */
@@ -142,6 +147,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     private final Set<String> pendingDeliveredAcks =
             Collections.synchronizedSet(new HashSet<>());
     private final Map<String, MessageSessionState> messageSessionStates = new HashMap<>();
+    private final Map<String, Map<String, MessageEntity>> temporaryReplyTargets =
+            new java.util.LinkedHashMap<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ChatWebSocketClient socketClient;
     private EventListener eventListener;
@@ -266,6 +273,82 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     public LiveData<List<MessageEntity>> observeMessages(String chatId, int limit) {
         return messageDao.observeLatestMessages(chatId, Math.max(1, limit));
+    }
+
+    /** Loads quoted messages outside the visible Room page without adding them to the timeline. */
+    public void loadReplyTargets(String chatId, List<MessageEntity> visibleMessages,
+                                 ReplyTargetsCallback callback) {
+        if (callback == null) return;
+        List<MessageEntity> snapshot = visibleMessages == null
+                ? Collections.emptyList() : new ArrayList<>(visibleMessages);
+        ioExecutor.execute(() -> {
+            Set<String> availableIds = new HashSet<>();
+            for (MessageEntity message : snapshot) {
+                if (message == null) continue;
+                if (message.messageId != null && !message.messageId.trim().isEmpty()) {
+                    availableIds.add(message.messageId);
+                }
+                if (message.clientMessageId != null && !message.clientMessageId.trim().isEmpty()) {
+                    availableIds.add(message.clientMessageId);
+                }
+            }
+            Set<String> requestedIds = new HashSet<>();
+            for (MessageEntity message : snapshot) {
+                if (message == null || message.repliedMessageId == null) continue;
+                String repliedMessageId = message.repliedMessageId.trim();
+                if (!repliedMessageId.isEmpty() && !availableIds.contains(repliedMessageId)) {
+                    requestedIds.add(repliedMessageId);
+                }
+            }
+            List<MessageEntity> targets = new ArrayList<>();
+            synchronized (temporaryReplyTargets) {
+                Map<String, MessageEntity> cached = temporaryReplyTargets.get(chatId);
+                if (cached != null) {
+                    List<String> cachedIds = new ArrayList<>(requestedIds);
+                    for (String requestedId : cachedIds) {
+                        MessageEntity target = cached.get(requestedId);
+                        if (target == null) continue;
+                        targets.add(target);
+                        requestedIds.remove(requestedId);
+                    }
+                }
+            }
+            try {
+                if (!requestedIds.isEmpty()) {
+                    targets.addAll(messageDao.findReplyTargets(
+                            chatId, new ArrayList<>(requestedIds)));
+                }
+            } catch (RuntimeException error) {
+                Log.e(TESTING_TAG, "reply_targets source=room_cache phase=load_error", error);
+            }
+            mainHandler.post(() -> callback.onLoaded(targets));
+        });
+    }
+
+    private void cacheTemporaryReplyTargets(String chatId, List<MessageEntity> messages,
+                                            boolean replace) {
+        synchronized (temporaryReplyTargets) {
+            Map<String, MessageEntity> cache = replace
+                    ? null : temporaryReplyTargets.remove(chatId);
+            if (cache == null) {
+                cache = new java.util.LinkedHashMap<>();
+            }
+            temporaryReplyTargets.put(chatId, cache);
+            for (MessageEntity message : messages) {
+                if (message == null || message.messageId == null
+                        || message.messageId.trim().isEmpty()) continue;
+                cache.put(message.messageId, message);
+            }
+            while (cache.size() > 256) {
+                String oldestId = cache.keySet().iterator().next();
+                cache.remove(oldestId);
+            }
+            while (temporaryReplyTargets.size() > 8) {
+                String oldestChatId = temporaryReplyTargets.keySet().iterator().next();
+                if (oldestChatId.equals(chatId) && temporaryReplyTargets.size() == 1) break;
+                temporaryReplyTargets.remove(oldestChatId);
+            }
+        }
     }
 
     public LiveData<List<ChatEntity>> observeChats() {
@@ -407,13 +490,14 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         sendTypedMessage(chatId, receiverId, text, repliedMessageId, "text", null, null);
     }
 
-    public void sendLocation(String chatId, String receiverId, double latitude, double longitude,
-                             float accuracy, String repliedMessageId) {
+    public String sendLocation(String chatId, String receiverId, double latitude, double longitude,
+                               float accuracy, String repliedMessageId) {
         JsonObject location = new JsonObject();
         location.addProperty("latitude", latitude);
         location.addProperty("longitude", longitude);
         location.addProperty("accuracy", accuracy);
-        sendTypedMessage(chatId, receiverId, "", repliedMessageId, "location", null, location);
+        return sendTypedMessage(
+                chatId, receiverId, "", repliedMessageId, "location", null, location);
     }
 
     public void uploadAndSendAttachment(String chatId, String receiverId, String caption,
@@ -709,9 +793,9 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         }
     }
 
-    private void sendTypedMessage(String chatId, String receiverId, String text,
-                                  String repliedMessageId, String messageType,
-                                  JsonObject attachment, JsonObject location) {
+    private String sendTypedMessage(String chatId, String receiverId, String text,
+                                    String repliedMessageId, String messageType,
+                                    JsonObject attachment, JsonObject location) {
         String senderId = currentUserId == null || currentUserId.isEmpty()
                 ? normalizeAccountId(LoginStateManager.getInstance().getUID(appContext))
                 : currentUserId;
@@ -751,6 +835,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
         sendExistingMessage(clientMessageId, chatId, senderId, normalizedReceiverId, text,
                 repliedMessageId, messageType, attachment, location);
+        return clientMessageId;
     }
 
     private void sendExistingMessage(String clientMessageId, String chatId, String senderId,
@@ -780,7 +865,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         if (message == null || !MessageStatus.FAILED.equals(message.status)) return;
         String clientId = message.clientMessageId == null ? message.messageId : message.clientMessageId;
         if (("image".equals(message.messageType) || "video".equals(message.messageType)
-                || "file".equals(message.messageType)) && message.attachmentId == null
+                || "audio".equals(message.messageType) || "file".equals(message.messageType))
+                && message.attachmentId == null
                 && message.attachmentLocalUri != null) {
             AttachmentCallback mainCallback = onMainThread(new AttachmentCallback() {
                         @Override public void onSent() {}
@@ -1116,12 +1202,19 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             List<String> pending = new ArrayList<>();
             for (String messageId : ids) {
                 MessageEntity message = stored.get(messageId);
-                if (message != null && message.pinned) continue;
+                if (message != null && pinnedUsers(message).contains(currentUserId)) continue;
                 pending.add(messageId);
             }
             if (pending.isEmpty()) return;
             long pinnedAt = System.currentTimeMillis();
-            messageDao.updatePinned(pending, true, pinnedAt);
+            for (String messageId : pending) {
+                MessageEntity message = stored.get(messageId);
+                List<String> users = pinnedUsers(message);
+                if (!currentUserId.isEmpty() && !users.contains(currentUserId)) {
+                    users.add(currentUserId);
+                }
+                messageDao.updatePinState(messageId, true, pinnedAt, encodePinnedUsers(users));
+            }
             JsonObject event = new JsonObject();
             event.addProperty("type", "pin_messages");
             event.addProperty("chatId", chatId);
@@ -1145,11 +1238,21 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             List<String> pending = new ArrayList<>();
             for (String messageId : ids) {
                 MessageEntity message = stored.get(messageId);
-                if (message != null && !message.pinned) continue;
+                List<String> users = pinnedUsers(message);
+                boolean legacyPin = message != null && message.pinned && users.isEmpty();
+                if (message != null && !legacyPin && !users.contains(currentUserId)) continue;
                 pending.add(messageId);
             }
             if (pending.isEmpty()) return;
-            messageDao.updatePinned(pending, false, null);
+            for (String messageId : pending) {
+                MessageEntity message = stored.get(messageId);
+                List<String> users = pinnedUsers(message);
+                users.remove(currentUserId);
+                boolean remainsPinned = !users.isEmpty();
+                messageDao.updatePinState(messageId, remainsPinned,
+                        remainsPinned && message != null ? message.pinnedAt : null,
+                        encodePinnedUsers(users));
+            }
             JsonObject event = new JsonObject();
             event.addProperty("type", "unpin_messages");
             event.addProperty("chatId", chatId);
@@ -1568,6 +1671,15 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     return;
                 }
                 JsonObject response = (JsonObject) object;
+                List<MessageEntity> pinnedMessages = new ArrayList<>();
+                JsonElement pinnedElement = response.get("pinnedMessages");
+                if (pinnedElement != null && pinnedElement.isJsonArray()) {
+                    for (JsonElement element : pinnedElement.getAsJsonArray()) {
+                        if (element == null || !element.isJsonObject()) continue;
+                        MessageEntity entity = toMessageEntity(element.getAsJsonObject());
+                        if (entity != null) pinnedMessages.add(entity);
+                    }
+                }
                 List<MessageEntity> messages = new ArrayList<>();
                 JsonElement pageElement = response.get("messages");
                 if (pageElement != null && pageElement.isJsonArray()) {
@@ -1583,7 +1695,19 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                         messages = parseChatDocument(chatElement.getAsJsonObject(), chatId);
                     }
                 }
+                List<MessageEntity> replyMessages = new ArrayList<>();
+                JsonElement replyElement = response.get("replyMessages");
+                if (replyElement != null && replyElement.isJsonArray()) {
+                    for (JsonElement element : replyElement.getAsJsonArray()) {
+                        if (element == null || !element.isJsonObject()) continue;
+                        MessageEntity entity = toMessageEntity(element.getAsJsonObject());
+                        if (entity != null) replyMessages.add(entity);
+                    }
+                }
+                cacheTemporaryReplyTargets(
+                        chatId, replyMessages, cursor == null || cursor.isEmpty());
                 final List<MessageEntity> page = messages;
+                final List<MessageEntity> pinnedPage = pinnedMessages;
                 final String nextCursor = response.has("nextCursor")
                         && !response.get("nextCursor").isJsonNull()
                         ? response.get("nextCursor").getAsString() : null;
@@ -1597,7 +1721,9 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                         + " hasMore=" + hasMore
                         + " hasNextCursor=" + (nextCursor != null && !nextCursor.isEmpty()));
                 ioExecutor.execute(() -> {
+                    preserveLocalAttachmentUris(pinnedPage);
                     preserveLocalAttachmentUris(page);
+                    if (!pinnedPage.isEmpty()) messageDao.upsertAll(pinnedPage);
                     if (!page.isEmpty()) messageDao.upsertAll(page);
                     Log.d(TESTING_TAG, "message_list source=routes phase=room_write_complete chatId="
                             + chatId + " messages=" + page.size());
@@ -1700,6 +1826,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 }
                 if (("image".equals(message.messageType)
                         || "video".equals(message.messageType)
+                        || "audio".equals(message.messageType)
                         || "file".equals(message.messageType))
                         && message.attachmentId == null) {
                     // WorkManager owns uploads and retries them when connectivity returns.
@@ -2021,9 +2148,38 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     private void handleMessagesPinned(JsonObject event) {
         List<String> messageIds = messageIds(event);
         if (messageIds.isEmpty()) return;
-        boolean pinned = !event.has("pinned") || event.get("pinned").getAsBoolean();
-        Long pinnedAt = getNullableLong(event, "pinned_at");
-        ioExecutor.execute(() -> messageDao.updatePinned(messageIds, pinned, pinnedAt));
+        JsonObject pinStates = event.has("pin_states") && event.get("pin_states").isJsonObject()
+                ? event.getAsJsonObject("pin_states") : null;
+        String eventType = JsonParserUtil.getString(event, "type");
+        boolean unpinEvent = eventType.contains("unpin");
+        String actor = normalizeAccountId(JsonParserUtil.getString(event, "pinned_by"));
+        ioExecutor.execute(() -> {
+            for (String messageId : messageIds) {
+                MessageEntity stored = messageDao.findByMessageId(messageId);
+                JsonObject state = pinStates != null && pinStates.has(messageId)
+                        && pinStates.get(messageId).isJsonObject()
+                        ? pinStates.getAsJsonObject(messageId) : null;
+                List<String> users = state == null
+                        ? pinnedUsers(stored) : pinnedUsers(state.get("pinned"));
+                if (state == null && !actor.isEmpty()) {
+                    if (unpinEvent) users.remove(actor);
+                    else if (!users.contains(actor)) users.add(actor);
+                }
+                boolean pinned;
+                if (state != null || !actor.isEmpty()) {
+                    pinned = !users.isEmpty();
+                } else {
+                    JsonElement legacy = event.get("pinned");
+                    pinned = legacy == null || legacy.isJsonNull() || legacy.getAsBoolean();
+                }
+                Long pinnedAt = state == null
+                        ? getNullableLong(event, "pinned_at")
+                        : getNullableLong(state, "pinned_at");
+                if (pinned && pinnedAt == null && stored != null) pinnedAt = stored.pinnedAt;
+                messageDao.updatePinState(messageId, pinned, pinned ? pinnedAt : null,
+                        encodePinnedUsers(users));
+            }
+        });
     }
 
     private void handleForwardedMessages(JsonObject event) {
@@ -2044,6 +2200,37 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     private static List<String> messageIds(JsonObject event) {
         return stringList(event, "messageIds");
+    }
+
+    private static List<String> pinnedUsers(MessageEntity message) {
+        List<String> users = new ArrayList<>();
+        if (message == null || message.pinnedBy == null || message.pinnedBy.isEmpty()) return users;
+        for (String value : message.pinnedBy.split(PIN_USER_SEPARATOR, -1)) {
+            if (!value.isEmpty() && !users.contains(value)) users.add(value);
+        }
+        return users;
+    }
+
+    private List<String> pinnedUsers(JsonElement element) {
+        List<String> users = new ArrayList<>();
+        if (element == null || element.isJsonNull() || !element.isJsonArray()) return users;
+        for (JsonElement value : element.getAsJsonArray()) {
+            if (value == null || value.isJsonNull()) continue;
+            String accountId = normalizeAccountId(value.getAsString());
+            if (!accountId.isEmpty() && !users.contains(accountId)) users.add(accountId);
+        }
+        return users;
+    }
+
+    private static String encodePinnedUsers(List<String> users) {
+        if (users == null || users.isEmpty()) return null;
+        StringBuilder encoded = new StringBuilder();
+        for (String user : users) {
+            if (user == null || user.isEmpty()) continue;
+            if (encoded.length() > 0) encoded.append(PIN_USER_SEPARATOR);
+            encoded.append(user);
+        }
+        return encoded.length() == 0 ? null : encoded.toString();
     }
 
     private static List<String> stringList(JsonObject event, String key) {
@@ -2124,9 +2311,17 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         );
         entity.attachmentSha256 = attachment == null ? null
                 : JsonParserUtil.getString(attachment, "sha256");
-        entity.pinned = JsonParserUtil.getBoolean(message, "pinned");
+        JsonElement pinnedElement = message.get("pinned");
+        List<String> pinnedUsers = pinnedUsers(pinnedElement);
+        entity.pinned = !pinnedUsers.isEmpty()
+                || (pinnedElement != null && !pinnedElement.isJsonNull()
+                && !pinnedElement.isJsonArray() && pinnedElement.getAsBoolean());
         entity.pinnedAt = getNullableLong(message, "pinned_at");
+        entity.pinnedBy = encodePinnedUsers(pinnedUsers);
         entity.forwardedFrom = JsonParserUtil.getString(message, "forwarded_from");
+        if (entity.forwardedFrom.isEmpty()) {
+            entity.forwardedFrom = JsonParserUtil.getString(message, "forwardedFrom");
+        }
         entity.deletedText = message.has("deletedText") && !message.get("deletedText").isJsonNull()
                 ? JsonParserUtil.getString(message, "deletedText") : null;
         entity.invisible = invisible;
@@ -2288,12 +2483,13 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     private String getMessagePreview(JsonObject message) {
+        String messageType = JsonParserUtil.getString(message, "messageType");
+        if ("audio".equals(messageType) || "voice".equals(messageType)) return "Voice message";
         String text = JsonParserUtil.getString(message, "text").trim();
         if (!text.isEmpty()) {
             return text;
         }
 
-        String messageType = JsonParserUtil.getString(message, "messageType");
         switch (messageType) {
             case "image":
                 return "Photo";
@@ -2369,9 +2565,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     private String getMessagePreview(MessageEntity message) {
+        String messageType = message.messageType == null ? "" : message.messageType;
+        if ("audio".equals(messageType) || "voice".equals(messageType)) return "Voice message";
         String text = message.text == null ? "" : message.text.trim();
         if (!text.isEmpty()) return text;
-        String messageType = message.messageType == null ? "" : message.messageType;
         switch (messageType) {
             case "image": return "Photo";
             case "video": return "Video";

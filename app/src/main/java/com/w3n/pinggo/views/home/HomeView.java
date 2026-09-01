@@ -10,7 +10,6 @@ import android.text.InputType;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
-import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
@@ -27,8 +26,8 @@ import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.textfield.TextField;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
+import com.ogfa.nativeviews.zlayer.ZLayerViewGroup;
 import com.w3n.pinggo.R;
-import com.w3n.pinggo.views.common.NativeTextFieldImeController;
 import com.w3n.pinggo.modals.CallLog;
 import com.w3n.pinggo.modals.Chat;
 
@@ -36,14 +35,14 @@ import java.util.ArrayList;
 import java.util.List;
 
 /** Home screen rendered entirely with components from native-views-release.aar. */
-public final class HomeView extends ViewGroup {
+public final class HomeView extends ZLayerViewGroup {
     private static final float FIGMA_WIDTH = 1080f;
     private static final int BACKGROUND = 0xFFF7F9FB;
     private static final int PRIMARY = 0xFF000E1A;
     private static final int SECONDARY = 0xFF687382;
     private static final int ACCENT = 0xFF019CC4;
 
-    private final ZLayerGroup layers = new ZLayerGroup(this);
+    private final ZLayerGroup layers = getNativeLayers();
     private final FigmaConfig figmaConfig = new FigmaConfig(FIGMA_WIDTH);
     private final ZLayer backgroundLayer = layers.addLayer("background");
     private final ZLayer contentLayer = layers.addLayer("content");
@@ -160,7 +159,7 @@ public final class HomeView extends ViewGroup {
         setMeasuredDimension(resolveSize(width, widthMeasureSpec), resolveSize(height, heightMeasureSpec));
         int navHeight = bottomNavigationView.contentHeightForWidth(getMeasuredWidth()) + bottomInset;
         int chatsTop = chatsContentTop(getMeasuredWidth());
-        int secondaryTop = Math.round(topInset + dp(68));
+        int secondaryTop = Math.round(topInset + px(187f));
         int exactWidth = MeasureSpec.makeMeasureSpec(getMeasuredWidth(), MeasureSpec.EXACTLY);
         chatsView.measure(exactWidth, MeasureSpec.makeMeasureSpec(
                 Math.max(0, getMeasuredHeight() - navHeight - chatsTop), MeasureSpec.EXACTLY));
@@ -177,7 +176,7 @@ public final class HomeView extends ViewGroup {
         int height = bottom - top;
         int navHeight = bottomNavigationView.contentHeightForWidth(width) + bottomInset;
         int chatsTop = chatsContentTop(width);
-        int secondaryTop = Math.round(topInset + dp(68));
+        int secondaryTop = Math.round(topInset + px(187f));
         int navTop = height - navHeight;
         chatsView.layout(0, chatsTop, width, navTop);
         callsView.layout(0, secondaryTop, width, navTop);
@@ -261,8 +260,8 @@ public final class HomeView extends ViewGroup {
                 }));
 
         action = addButton(contentLayer, "action", accentBitmap, getString(R.string.new_chat),
-                new RectF(width - dp(156), navTop - dp(72), width - dp(20), navTop - dp(16)),
-                Color.WHITE, dp(18), id -> {
+                new RectF(width - px(429f), navTop - px(198f), width - px(55f), navTop - px(44f)),
+                Color.WHITE, px(49.5f), id -> {
                     if (showingChats) listener.onNewChat(); else listener.onMakeCall();
                 });
 
@@ -421,11 +420,6 @@ public final class HomeView extends ViewGroup {
         super.dispatchDraw(canvas);
         contentLayer.draw(canvas);
     }
-    @Override public boolean dispatchTouchEvent(MotionEvent event) {
-        NativeTextFieldImeController.dismissOnOutsideDown(
-                this, layers, contentLayer, event);
-        return super.dispatchTouchEvent(event);
-    }
     @Override public boolean onTouchEvent(MotionEvent event) {
         return layers.onTouchEvent(event) || super.onTouchEvent(event);
     }
@@ -465,7 +459,9 @@ public final class HomeView extends ViewGroup {
     private int chatsContentTop(int width) {
         return Math.round(topInset + 331f * figmaConfig.getScale(width));
     }
-    private float dp(float value) { return value * getResources().getDisplayMetrics().density; }
+    private float px(float value) {
+    return figmaConfig.toRuntime(value, Math.max(1, getResources().getDisplayMetrics().widthPixels));
+  }
     private float sp(float value) { return value * getResources().getDisplayMetrics().scaledDensity; }
     private static Bitmap colorBitmap(int color) {
         Bitmap bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);

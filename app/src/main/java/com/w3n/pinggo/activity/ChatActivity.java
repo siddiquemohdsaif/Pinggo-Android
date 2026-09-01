@@ -10,13 +10,19 @@ import android.database.Cursor;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.media.AudioAttributes;
+import android.media.MediaPlayer;
+import android.media.MediaRecorder;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.CancellationSignal;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Environment;
 import android.os.SystemClock;
 import android.provider.OpenableColumns;
+import android.provider.Settings;
 import android.util.Log;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
@@ -35,8 +41,10 @@ import androidx.lifecycle.LiveData;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.local.PresenceEntity;
+import com.w3n.pinggo.data.cache.MediaPreviewCache;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.views.chat.ChatView;
+import com.w3n.pinggo.views.chat.ChatViewListener;
 import com.w3n.pinggo.views.chat.ChatPerformanceProfiler;
 import com.w3n.pinggo.views.chat.ConversationMenuDialogView;
 import com.w3n.pinggo.call.ActiveCallRegistry;
@@ -56,9 +64,14 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.IOException;
 
-public class ChatActivity extends AppCompatActivity implements ChatView.Listener {
+public class ChatActivity extends AppCompatActivity implements ChatViewListener {
   private static final String TESTING_TAG = "PARVEZ_TESTING";
+  private static final String LOCATION_PERF_TAG = "PingGoLocationPerf";
+  private static final long LOCATION_CACHE_MAX_AGE_MS = 30_000L;
+  private static final long LOCATION_FALLBACK_MAX_AGE_MS = 120_000L;
+  private static final float LOCATION_ACCEPTABLE_ACCURACY_M = 100f;
   private static final int SELECTION_STATUS_BAR_COLOR = 0xFFE9EDF0;
   private static final int DEFAULT_STATUS_BAR_COLOR = 0xFFFFFFFF;
   private static final int INITIAL_RENDER_WINDOW_SIZE = 15;
@@ -75,33 +88,127 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
       EXTRA_OPEN_REQUEST_NANOS = "com.w3n.pinggo.EXTRA_OPEN_REQUEST_NANOS";
   private final Handler typingHandler = new Handler(Looper.getMainLooper());
   private long lastSocketErrorToastAt;
+  private ChatView chatView;
+  private String selectedAttachmentType;
+  private Uri selectedAttachmentUri;
   private final ActivityResultLauncher<String[]> attachmentPicker =
-      registerForActivityResult(new ActivityResultContracts.OpenDocument(), this::onAttachmentPicked);
+      registerForActivityResult(
+          new ActivityResultContracts.OpenMultipleDocuments(), this::onAttachmentsPicked);
+  private final ActivityResultLauncher<Intent> cameraCapture =
+      registerForActivityResult(
+          new ActivityResultContracts.StartActivityForResult(), result -> {
+            if (result.getResultCode() != RESULT_OK || result.getData() == null) return;
+            Intent data = result.getData();
+            handleSelectedMediaResult(data);
+          });
+  private final ActivityResultLauncher<Intent> attachmentPreview =
+      registerForActivityResult(
+          new ActivityResultContracts.StartActivityForResult(), result -> {
+            if (result.getResultCode() != RESULT_OK || result.getData() == null) return;
+            handleSelectedMediaResult(result.getData());
+          });
+
+  private void handleSelectedMediaResult(Intent data) {
+            if (data == null) return;
+            List<Uri> uris = new ArrayList<>();
+            ClipData clip = data.getClipData();
+            if (clip != null) {
+              for (int index = 0; index < clip.getItemCount(); index++) {
+                Uri uri = clip.getItemAt(index).getUri();
+                if (uri != null && !uris.contains(uri)) uris.add(uri);
+              }
+            }
+            if (uris.isEmpty() && data.getData() != null) uris.add(data.getData());
+            if (uris.isEmpty()) return;
+            ArrayList<String> types = data.getStringArrayListExtra(
+                CameraCaptureActivity.EXTRA_MEDIA_TYPES);
+            if (types == null || types.size() != uris.size()) {
+              String fallback = data.getStringExtra(CameraCaptureActivity.EXTRA_MEDIA_TYPE);
+              if (fallback == null) fallback = "Image";
+              types = new ArrayList<>(Collections.nCopies(uris.size(), fallback));
+            }
+            sendSelectedAttachments(uris, types);
+  }
   private final ActivityResultLauncher<String[]> locationPermission =
       registerForActivityResult(
           new ActivityResultContracts.RequestMultiplePermissions(), this::onLocationPermission);
+  private final ActivityResultLauncher<String> audioRecordingPermission =
+      registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
+        if (granted) startAudioRecorder();
+        else Toast.makeText(this, "Microphone permission is required.",
+            Toast.LENGTH_SHORT).show();
+      });
   private final ActivityResultLauncher<String> storagePermission =
       registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
         if (granted && pendingDownloadMessage != null) startAttachmentDownload(pendingDownloadMessage);
         else if (!granted) Toast.makeText(this, "Storage permission is required.", Toast.LENGTH_SHORT).show();
         pendingDownloadMessage = null;
       });
+  private final ActivityResultLauncher<Intent> allFilesAccess =
+      registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+            && !Environment.isExternalStorageManager()) {
+          Toast.makeText(this,
+              "All files access is required to store media in /storage/emulated/0/PingGo.",
+              Toast.LENGTH_LONG).show();
+        }
+      });
   private final Set<String> pendingSeen = new HashSet<>();
   private final Map<String, Integer> attachmentStates = new ConcurrentHashMap<>();
   private final ExecutorService messagePreparationExecutor =
       Executors.newSingleThreadExecutor();
-  private ChatView chatView;
   private ChatPerformanceProfiler profiler;
   private ChatRepository repository;
   private NativePromptDialogView promptDialog;
   private ConversationMenuDialogView conversationMenuDialog;
   private String chatId, currentUser, receiverId, replyingId, editingId;
   private String profilePhotoPath;
-  private String selectedAttachmentType;
-  private Uri selectedAttachmentUri;
   private boolean typingStarted, peerTyping, locationPending, attachmentSending;
+  private MediaRecorder audioRecorder;
+  private File recordedAudioFile;
+  private long audioRecordingStartedAt;
+  private final List<Integer> audioRecordingSamples = new ArrayList<>();
+  private final Runnable updateAudioRecordingTime = new Runnable() {
+    @Override public void run() {
+      if (audioRecorder == null || chatView == null) return;
+      int amplitude = 0;
+      try {
+        amplitude = Math.max(0, audioRecorder.getMaxAmplitude());
+        audioRecordingSamples.add(amplitude);
+      } catch (RuntimeException ignored) {
+      }
+      chatView.updateAudioRecordingState(
+          SystemClock.elapsedRealtime() - audioRecordingStartedAt, amplitude);
+      typingHandler.postDelayed(this, 80L);
+    }
+  };
+  private MediaPlayer audioPlayer;
+  private String playingAudioMessageId = "";
+  private String pendingAudioPlaybackMessageId = "";
+  private long playingAudioDurationMs;
+  private boolean audioPlaybackPrepared;
+  private final Runnable updateAudioPlayback = new Runnable() {
+    @Override public void run() {
+      MediaPlayer player = audioPlayer;
+      if (player == null || chatView == null || !audioPlaybackPrepared) return;
+      try {
+        chatView.setAudioPlaybackState(playingAudioMessageId, true,
+            player.getCurrentPosition(), playingAudioDurationMs);
+        typingHandler.postDelayed(this, 250L);
+      } catch (IllegalStateException error) {
+        stopAudioPlayback();
+      }
+    }
+  };
   private LocationManager locationManager;
-  private LocationListener locationListener;
+  private LocationListener networkLocationListener;
+  private LocationListener gpsLocationListener;
+  private CancellationSignal networkLocationCancellation;
+  private CancellationSignal gpsLocationCancellation;
+  private Location bestPendingLocation;
+  private long locationPressedElapsedMs;
+  private long locationPressedWallMs;
+  private String locationTraceId = "";
   private PresenceEntity latestPresence;
   private List<MessageEntity> latestMessages = Collections.emptyList();
   private List<MessageEntity> availableMessages = Collections.emptyList();
@@ -111,6 +218,7 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
   // the first useful frame on all 50 variable-height rows.
   private int messageLimit = ChatRepository.MESSAGE_PAGE_SIZE;
   private int renderedMessageCount;
+  private int replyTargetLoadGeneration;
   private int messagePreparationGeneration;
   private boolean messagePreparationRunning;
   private boolean localPageLoading;
@@ -140,9 +248,18 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
   private final Runnable locationTimeout =
       () -> {
         if (!locationPending) return;
-        locationPending = false;
-        removeLocationUpdates();
-        Toast.makeText(this, "Unable to get current location.", Toast.LENGTH_SHORT).show();
+        Location fallback = bestPendingLocation;
+        if (fallback != null && locationAgeMs(fallback) <= LOCATION_FALLBACK_MAX_AGE_MS) {
+          logLocationPerf(
+              "timeout_fallback",
+              locationDetails(fallback) + " limitMs=15000");
+          completeLocation(fallback, "timeout_fallback");
+        } else {
+          locationPending = false;
+          removeLocationUpdates();
+          logLocationPerf("timeout", "limitMs=15000");
+          Toast.makeText(this, "Unable to get current location.", Toast.LENGTH_SHORT).show();
+        }
       };
 
   @Override
@@ -168,6 +285,7 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
             this,
             profiler);
     setContentView(chatView);
+    ensurePingGoStorageAccess();
     conversationMenuDialog =
         new ConversationMenuDialogView(
             this,
@@ -181,6 +299,7 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
         new OnBackPressedCallback(true) {
           @Override
           public void handleOnBackPressed() {
+            if (chatView != null && chatView.dismissAttachmentPanel()) return;
             if (chatView != null && chatView.clearMessageSelection()) return;
             if (conversationMenuDialog != null
                 && conversationMenuDialog.dismissIfShowing()) return;
@@ -232,6 +351,25 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
         });
     observe();
     profiler.activityCreated(createStartedNanos);
+  }
+
+  private void ensurePingGoStorageAccess() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      if (Environment.isExternalStorageManager()) return;
+      try {
+        allFilesAccess.launch(new Intent(
+            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+            Uri.parse("package:" + getPackageName())));
+      } catch (RuntimeException unavailable) {
+        allFilesAccess.launch(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
+      }
+      return;
+    }
+    if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
+        && ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        != PackageManager.PERMISSION_GRANTED) {
+      storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+    }
   }
 
   private void observe() {
@@ -328,6 +466,9 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
 
   @Override
   protected void onStop() {
+    if (audioRecorder != null) finishAudioRecording(false);
+    pendingAudioPlaybackMessageId = "";
+    stopAudioPlayback();
     saveMessageSessionState();
     if (repository != null && chatId != null) repository.clearActiveChat(chatId);
     super.onStop();
@@ -338,7 +479,43 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
   }
 
   private void messages(List<MessageEntity> values) {
-    availableMessages = values == null ? Collections.emptyList() : values;
+    List<MessageEntity> snapshot = values == null
+        ? Collections.emptyList() : new ArrayList<>(values);
+    int generation = ++replyTargetLoadGeneration;
+    repository.loadReplyTargets(chatId, snapshot, replyTargets -> {
+      if (generation != replyTargetLoadGeneration || isFinishing() || isDestroyed()) return;
+      messagesHydrated(snapshot, replyTargets);
+    });
+  }
+
+  private void messagesHydrated(
+      List<MessageEntity> values, List<MessageEntity> replyTargets) {
+    availableMessages = values;
+    if (!pendingAudioPlaybackMessageId.isEmpty()) {
+      MessageEntity pendingAudio = findMessageByKey(pendingAudioPlaybackMessageId);
+      if (pendingAudio != null && pendingAudio.attachmentLocalUri != null) {
+        Uri pendingUri = Uri.parse(pendingAudio.attachmentLocalUri);
+        if (canRead(pendingUri)) {
+          String pendingKey = pendingAudioPlaybackMessageId;
+          pendingAudioPlaybackMessageId = "";
+          typingHandler.post(() -> startAudioPlayback(pendingKey, pendingUri));
+        }
+      }
+    }
+    if (chatView != null) {
+      chatView.indexReplyTargets(availableMessages);
+      if (replyTargets != null && !replyTargets.isEmpty()) {
+        chatView.indexReplyTargets(replyTargets);
+      }
+      List<MessageEntity> pinnedMessages = new ArrayList<>();
+      for (MessageEntity message : availableMessages) {
+        if (message != null && message.pinned) pinnedMessages.add(message);
+      }
+      pinnedMessages.sort((first, second) -> Long.compare(
+          second.pinnedAt == null ? second.sentTime : second.pinnedAt,
+          first.pinnedAt == null ? first.sentTime : first.pinnedAt));
+      chatView.setPinnedMessages(pinnedMessages);
+    }
     localPageLoading = false;
     localHasMore = availableMessages.size() >= messageLimit;
     boolean completedLocalExpansion = localExpansionRequested;
@@ -366,8 +543,7 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
     } else {
       renderedMessageCount = Math.min(renderedMessageCount, availableMessages.size());
     }
-    renderAvailableMessages("room");
-    scheduleProgressiveRender();
+    prepareAndRenderAvailableMessages("room");
     if (completedLocalExpansion && !revealedOlderCachedMessages
         && !messagePageLoading && messageNetworkHasMore
         && (!firstMessagePageLoaded || nextMessageCursor != null)) {
@@ -379,11 +555,56 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
   }
 
   private void renderAvailableMessages(String phase) {
-    long operationStartedNanos = SystemClock.elapsedRealtimeNanos();
+    submitPreparedMessages(renderedMessagesSnapshot(), phase);
+  }
+
+  /** Measures attachment orientation and final row heights before the list sees this data set. */
+  private void prepareAndRenderAvailableMessages(String phase) {
+    List<MessageEntity> messagesToPrepare = renderedMessagesSnapshot();
+    int generation = ++messagePreparationGeneration;
+    if (messagesToPrepare.isEmpty()) {
+      messagePreparationRunning = false;
+      submitPreparedMessages(messagesToPrepare, phase);
+      updateOlderMessagesState();
+      return;
+    }
+    ChatView view = chatView;
+    if (view == null) return;
+    float availableWidth = view.getMessageLayoutWidth();
+    messagePreparationRunning = true;
+    updateOlderMessagesState();
+    messagePreparationExecutor.execute(() -> {
+      long preparationStartedNanos = SystemClock.elapsedRealtimeNanos();
+      view.prepareMessageMetrics(messagesToPrepare, availableWidth);
+      profiler.operation(
+          "prepare_visible",
+          preparationStartedNanos,
+          "count=" + messagesToPrepare.size());
+      typingHandler.post(() -> {
+        if (chatView == null || generation != messagePreparationGeneration) return;
+        messagePreparationRunning = false;
+        submitPreparedMessages(messagesToPrepare, phase);
+        updateOlderMessagesState();
+        scheduleProgressiveRender();
+      });
+    });
+  }
+
+  /** Keeps every pinned target addressable while progressively revealing the recent timeline. */
+  private List<MessageEntity> renderedMessagesSnapshot() {
+    if (availableMessages.isEmpty()) return Collections.emptyList();
     int firstRendered = Math.max(0, availableMessages.size() - renderedMessageCount);
-    latestMessages = availableMessages.isEmpty()
-        ? Collections.emptyList()
-        : new ArrayList<>(availableMessages.subList(firstRendered, availableMessages.size()));
+    List<MessageEntity> result = new ArrayList<>();
+    for (int index = 0; index < availableMessages.size(); index++) {
+      MessageEntity message = availableMessages.get(index);
+      if (index >= firstRendered || message.pinned) result.add(message);
+    }
+    return result;
+  }
+
+  private void submitPreparedMessages(List<MessageEntity> preparedMessages, String phase) {
+    long operationStartedNanos = SystemClock.elapsedRealtimeNanos();
+    latestMessages = preparedMessages;
     long renderStarted = System.nanoTime();
     boolean changed = chatView.submitMessages(latestMessages);
     profiler.contentSubmitted(latestMessages.size());
@@ -538,6 +759,7 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
       Toast.makeText(this, "Chat information missing.", Toast.LENGTH_SHORT).show();
       return;
     }
+    chatView.scrollToBottom();
     if (editingId != null) {
       if (text.isEmpty()) {
         Toast.makeText(this, "Message required.", Toast.LENGTH_SHORT).show();
@@ -585,6 +807,337 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
     finishComposeAction();
   }
 
+  private void sendSelectedAttachments(List<Uri> uris, List<String> types) {
+    if (uris == null || uris.isEmpty() || attachmentSending) return;
+    if (chatId == null || chatId.isEmpty() || receiverId.isEmpty()) {
+      Toast.makeText(this, "Chat information missing.", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    attachmentSending = true;
+    selectedAttachmentUri = null;
+    selectedAttachmentType = null;
+    chatView.clearAttachmentPreview();
+    chatView.scrollToBottom();
+    uploadCameraAttachment(
+        new ArrayList<>(uris), new ArrayList<>(types), 0,
+        chatView.getDraft(), replyingId);
+  }
+
+  private void uploadCameraAttachment(
+      List<Uri> uris, List<String> types, int index, String caption, String replyId) {
+    if (index >= uris.size()) {
+      attachmentSending = false;
+      finishComposeAction();
+      return;
+    }
+    String type = index < types.size() && types.get(index) != null
+        ? types.get(index).toLowerCase() : "image";
+    repository.uploadAndSendAttachment(
+        chatId, receiverId, index == 0 ? caption : "", index == 0 ? replyId : null,
+        uris.get(index), type, new ChatRepository.AttachmentCallback() {
+          @Override public void onSent() {
+            uploadCameraAttachment(uris, types, index + 1, caption, replyId);
+          }
+
+          @Override public void onError(String message) {
+            Toast.makeText(ChatActivity.this, message, Toast.LENGTH_SHORT).show();
+            uploadCameraAttachment(uris, types, index + 1, caption, replyId);
+          }
+        });
+  }
+
+  @Override
+  public void onReplyTargetRequested(String messageId) {
+    if (messageId == null || messageId.trim().isEmpty()) return;
+    for (int index = 0; index < availableMessages.size(); index++) {
+      MessageEntity message = availableMessages.get(index);
+      if (!messageId.equals(message.messageId)) continue;
+      int requiredCount = availableMessages.size() - index;
+      if (renderedMessageCount < requiredCount) {
+        renderedMessageCount = requiredCount;
+        prepareAndRenderAvailableMessages("reply_target");
+      }
+      return;
+    }
+    if (isProgressiveRendering()) {
+      renderedMessageCount = availableMessages.size();
+      prepareAndRenderAvailableMessages("reply_target_expand");
+      return;
+    }
+    onLoadOlderMessages();
+  }
+
+  @Override
+  public void onAudioRecordingStart() {
+    if (attachmentSending || audioRecorder != null) return;
+    if (chatId == null || chatId.isEmpty() || receiverId.isEmpty()) {
+      Toast.makeText(this, "Chat information missing.", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+        == PackageManager.PERMISSION_GRANTED) {
+      startAudioRecorder();
+    } else {
+      audioRecordingPermission.launch(Manifest.permission.RECORD_AUDIO);
+    }
+  }
+
+  private void startAudioRecorder() {
+    if (audioRecorder != null) return;
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+        && !Environment.isExternalStorageManager()) {
+      ensurePingGoStorageAccess();
+      Toast.makeText(this,
+          "Allow all files access, then tap the microphone again.", Toast.LENGTH_LONG).show();
+      return;
+    }
+    File audioDirectory = new File(Environment.getExternalStorageDirectory(), "PingGo/Audio");
+    if ((!audioDirectory.exists() && !audioDirectory.mkdirs()) || !audioDirectory.isDirectory()) {
+      Toast.makeText(this, "Unable to create the PingGo audio folder.",
+          Toast.LENGTH_SHORT).show();
+      return;
+    }
+    File output = new File(audioDirectory,
+        "AUD_" + System.currentTimeMillis() + ".m4a");
+    MediaRecorder recorder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+        ? new MediaRecorder(this) : new MediaRecorder();
+    try {
+      recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+      recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+      recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+      recorder.setAudioSamplingRate(44_100);
+      recorder.setAudioEncodingBitRate(128_000);
+      recorder.setOutputFile(output.getAbsolutePath());
+      recorder.prepare();
+      recorder.start();
+      audioRecorder = recorder;
+      recordedAudioFile = output;
+      audioRecordingStartedAt = SystemClock.elapsedRealtime();
+      audioRecordingSamples.clear();
+      stopTyping.run();
+      chatView.startAudioRecording();
+      typingHandler.post(updateAudioRecordingTime);
+    } catch (IOException | RuntimeException error) {
+      try { recorder.release(); } catch (RuntimeException ignored) {}
+      if (output.exists()) output.delete();
+      Toast.makeText(this, "Unable to start audio recording.", Toast.LENGTH_SHORT).show();
+    }
+  }
+
+  @Override
+  public void onAudioRecordingSend() {
+    finishAudioRecording(true);
+  }
+
+  @Override
+  public void onAudioRecordingCancel() {
+    finishAudioRecording(false);
+  }
+
+  private void finishAudioRecording(boolean sendRecording) {
+    MediaRecorder recorder = audioRecorder;
+    File output = recordedAudioFile;
+    long duration = audioRecordingStartedAt == 0L
+        ? 0L : SystemClock.elapsedRealtime() - audioRecordingStartedAt;
+    List<Integer> amplitudeSamples = new ArrayList<>(audioRecordingSamples);
+    audioRecordingSamples.clear();
+    audioRecorder = null;
+    recordedAudioFile = null;
+    audioRecordingStartedAt = 0L;
+    typingHandler.removeCallbacks(updateAudioRecordingTime);
+    if (recorder == null) {
+      if (chatView != null) chatView.stopAudioRecording();
+      return;
+    }
+    boolean stopped = false;
+    try {
+      recorder.stop();
+      stopped = true;
+    } catch (RuntimeException ignored) {
+    } finally {
+      try { recorder.release(); } catch (RuntimeException ignored) {}
+    }
+    if (chatView != null) chatView.stopAudioRecording();
+    if (!sendRecording || !stopped || duration < 500L || output == null || !output.isFile()) {
+      if (output != null && output.exists()) output.delete();
+      if (sendRecording) Toast.makeText(this, "Record a longer audio message.",
+          Toast.LENGTH_SHORT).show();
+      return;
+    }
+    attachmentSending = true;
+    Uri audioUri = FileProvider.getUriForFile(
+        this, getPackageName() + ".files", output);
+    chatView.scrollToBottom();
+    repository.uploadAndSendAttachment(
+        chatId, receiverId, buildAudioMetadata(duration, amplitudeSamples),
+        replyingId, audioUri, "audio",
+        new ChatRepository.AttachmentCallback() {
+          @Override public void onSent() {
+            attachmentSending = false;
+            finishComposeAction();
+          }
+
+          @Override public void onError(String message) {
+            attachmentSending = false;
+            Toast.makeText(ChatActivity.this, message, Toast.LENGTH_SHORT).show();
+          }
+        });
+  }
+
+  @Override
+  public void onAudioPlaybackToggle(String messageId) {
+    String key = messageId == null ? "" : messageId;
+    if (key.isEmpty()) return;
+    if (key.equals(playingAudioMessageId) && audioPlayer != null) {
+      stopAudioPlayback();
+      return;
+    }
+    MessageEntity message = findMessageByKey(key);
+    if (message == null) {
+      Toast.makeText(this, "This audio message does not exist.", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    Uri local = message.attachmentLocalUri == null
+        ? null : Uri.parse(message.attachmentLocalUri);
+    if (local != null && canRead(local)) {
+      startAudioPlayback(key, local);
+      return;
+    }
+    if (message.attachmentUrl == null || message.attachmentUrl.trim().isEmpty()) {
+      Toast.makeText(this, "This file does not exist.", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    if (attachmentStates.getOrDefault(
+        attachmentKey(message), ATTACHMENT_DOWNLOAD_REQUIRED) == ATTACHMENT_DOWNLOADING) return;
+    attachmentStates.put(attachmentKey(message), ATTACHMENT_DOWNLOADING);
+    pendingAudioPlaybackMessageId = key;
+    refreshAttachmentRows();
+    repository.downloadAttachment(message, new ChatRepository.DownloadCallback() {
+      @Override public void onAvailable(Uri uri) {
+        pendingAudioPlaybackMessageId = "";
+        attachmentStates.put(attachmentKey(message), ATTACHMENT_AVAILABLE);
+        refreshAttachmentRows();
+        startAudioPlayback(key, uri);
+      }
+
+      @Override public void onQueued() {
+        attachmentStates.put(attachmentKey(message), ATTACHMENT_DOWNLOADING);
+        refreshAttachmentRows();
+      }
+
+      @Override public void onError(String error) {
+        pendingAudioPlaybackMessageId = "";
+        attachmentStates.put(attachmentKey(message), ATTACHMENT_DOWNLOAD_REQUIRED);
+        refreshAttachmentRows();
+        Toast.makeText(ChatActivity.this,
+            error == null || error.trim().isEmpty() ? "This file does not exist." : error,
+            Toast.LENGTH_SHORT).show();
+      }
+    });
+  }
+
+  private void startAudioPlayback(String messageId, Uri uri) {
+    pendingAudioPlaybackMessageId = "";
+    stopAudioPlayback();
+    MediaPlayer player = new MediaPlayer();
+    audioPlayer = player;
+    playingAudioMessageId = messageId;
+    playingAudioDurationMs = 0L;
+    audioPlaybackPrepared = false;
+    chatView.setAudioPlaybackState(messageId, true, 0L, 0L);
+    try {
+      player.setAudioAttributes(new AudioAttributes.Builder()
+          .setUsage(AudioAttributes.USAGE_MEDIA)
+          .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+          .build());
+      player.setDataSource(this, uri);
+      player.setOnPreparedListener(prepared -> {
+        if (prepared != audioPlayer) return;
+        audioPlaybackPrepared = true;
+        playingAudioDurationMs = Math.max(0, prepared.getDuration());
+        prepared.start();
+        chatView.setAudioPlaybackState(messageId, true, 0L, playingAudioDurationMs);
+        typingHandler.post(updateAudioPlayback);
+      });
+      player.setOnCompletionListener(completed -> stopAudioPlayback());
+      player.setOnErrorListener((failed, what, extra) -> {
+        if (failed == audioPlayer) {
+          Toast.makeText(this, "Unable to play this audio message.",
+              Toast.LENGTH_SHORT).show();
+          stopAudioPlayback();
+        }
+        return true;
+      });
+      player.prepareAsync();
+    } catch (IOException | RuntimeException error) {
+      Toast.makeText(this, "Unable to play this audio message.", Toast.LENGTH_SHORT).show();
+      stopAudioPlayback();
+    }
+  }
+
+  private void stopAudioPlayback() {
+    MediaPlayer player = audioPlayer;
+    String previousId = playingAudioMessageId;
+    long previousDuration = playingAudioDurationMs;
+    audioPlayer = null;
+    playingAudioMessageId = "";
+    playingAudioDurationMs = 0L;
+    audioPlaybackPrepared = false;
+    typingHandler.removeCallbacks(updateAudioPlayback);
+    if (player != null) {
+      try { player.stop(); } catch (RuntimeException ignored) {}
+      try { player.release(); } catch (RuntimeException ignored) {}
+    }
+    if (chatView != null && !previousId.isEmpty()) {
+      chatView.setAudioPlaybackState(previousId, false, 0L, previousDuration);
+    }
+  }
+
+  private MessageEntity findMessageByKey(String key) {
+    for (MessageEntity message : availableMessages) {
+      if (message != null
+          && (key.equals(message.messageId) || key.equals(message.clientMessageId))) return message;
+    }
+    for (MessageEntity message : latestMessages) {
+      if (message != null
+          && (key.equals(message.messageId) || key.equals(message.clientMessageId))) return message;
+    }
+    return null;
+  }
+
+  private static String formatAudioDuration(long milliseconds) {
+    long seconds = Math.max(0L, milliseconds / 1000L);
+    return String.format(java.util.Locale.US,
+        "%d:%02d", seconds / 60L, seconds % 60L);
+  }
+
+  private static String buildAudioMetadata(long durationMs, List<Integer> samples) {
+    final int barCount = 22;
+    int[] bars = new int[barCount];
+    int maximum = 0;
+    if (samples != null && !samples.isEmpty()) {
+      for (int bar = 0; bar < barCount; bar++) {
+        int start = bar * samples.size() / barCount;
+        int end = Math.max(start + 1, (bar + 1) * samples.size() / barCount);
+        int peak = 0;
+        for (int index = start; index < end && index < samples.size(); index++) {
+          peak = Math.max(peak, samples.get(index));
+        }
+        bars[bar] = peak;
+        maximum = Math.max(maximum, peak);
+      }
+    }
+    StringBuilder metadata = new StringBuilder(formatAudioDuration(durationMs));
+    metadata.append("|waveform=");
+    for (int index = 0; index < bars.length; index++) {
+      if (index > 0) metadata.append(',');
+      float normalized = maximum <= 0 ? .16f : (float) Math.sqrt(bars[index] / (float) maximum);
+      int level = Math.max(12, Math.min(100, Math.round(normalized * 100f)));
+      metadata.append(level);
+    }
+    return metadata.toString();
+  }
+
   @Override
   public void onVideoCall() {
     openCall(VideoCallActivity.class);
@@ -624,6 +1177,7 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
     replyingId = null;
     chatView.clearReply();
     chatView.clearDraft();
+    chatView.scrollToBottom();
   }
 
   @Override
@@ -638,22 +1192,58 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
       selectedAttachmentType = type;
       attachmentPicker.launch(new String[] {"*/*"});
     } else if ("Location".equals(type)) {
+      locationPressedElapsedMs = SystemClock.elapsedRealtime();
+      locationPressedWallMs = System.currentTimeMillis();
+      locationTraceId = "location_" + locationPressedWallMs;
+      logLocationPerf("press", "wallTimeMs=" + locationPressedWallMs);
       requestLocationPermission();
     }
   }
 
-  private void onAttachmentPicked(Uri uri) {
-    if (uri == null) {
-      return;
+  @Override
+  public void onCameraSelected() {
+    if (attachmentSending || audioRecorder != null) return;
+    startActivityForResultCamera();
+  }
+
+  private void startActivityForResultCamera() {
+    cameraCapture.launch(new Intent(this, CameraCaptureActivity.class));
+  }
+
+  private void onAttachmentsPicked(List<Uri> picked) {
+    if (picked == null || picked.isEmpty()) return;
+    String pickerType = selectedAttachmentType;
+    ArrayList<Uri> uris = new ArrayList<>();
+    ArrayList<String> types = new ArrayList<>();
+    for (Uri uri : picked) {
+      if (uri == null) continue;
+      try {
+        getContentResolver().takePersistableUriPermission(
+            uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+      } catch (SecurityException ignored) {
+      }
+      uris.add(uri);
+      types.add(selectedPreviewType(uri, pickerType));
     }
-    selectedAttachmentUri = uri;
-    try {
-      getContentResolver().takePersistableUriPermission(
-          uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-    } catch (SecurityException error) {
-    }
-    chatView.showAttachmentPreview(selectedAttachmentType, selectedFileName(uri));
-    Toast.makeText(this, selectedAttachmentType + " selected.", Toast.LENGTH_SHORT).show();
+    if (uris.isEmpty()) return;
+    Intent preview = new Intent(this, SelectedMediaPreviewActivity.class);
+    preview.putParcelableArrayListExtra(SelectedMediaPreviewActivity.EXTRA_URIS, uris);
+    preview.putStringArrayListExtra(SelectedMediaPreviewActivity.EXTRA_TYPES, types);
+    preview.putExtra(SelectedMediaPreviewActivity.EXTRA_CAPTURED, false);
+    preview.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+    attachmentPreview.launch(preview);
+  }
+
+  private String selectedPreviewType(Uri uri, String pickerType) {
+    // The entry point is authoritative. Files must remain file messages even when their
+    // underlying MIME type is image/* or video/*.
+    if ("File".equals(pickerType)) return "File";
+    if ("Image".equals(pickerType)) return "Image";
+    if ("Video".equals(pickerType)) return "Video";
+    String mime = getContentResolver().getType(uri);
+    if (mime != null && mime.startsWith("image/")) return "Image";
+    if (mime != null && mime.startsWith("video/")) return "Video";
+    return "File";
   }
 
   @Override
@@ -681,9 +1271,11 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
         ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)
             == PackageManager.PERMISSION_GRANTED;
     if (fine || coarse) {
+      logLocationPerf("permission_ready", "fine=" + fine + " coarse=" + coarse);
       requestCurrentLocation();
       return;
     }
+    logLocationPerf("permission_prompt", "fine=false coarse=false");
     locationPermission.launch(
         new String[] {
           Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION
@@ -694,95 +1286,227 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
     boolean granted =
         Boolean.TRUE.equals(result.get(Manifest.permission.ACCESS_FINE_LOCATION))
             || Boolean.TRUE.equals(result.get(Manifest.permission.ACCESS_COARSE_LOCATION));
+    logLocationPerf("permission_result", "granted=" + granted);
     if (granted) requestCurrentLocation();
     else Toast.makeText(this, "Location permission is required.", Toast.LENGTH_SHORT).show();
   }
 
   private void requestCurrentLocation() {
     locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
-    String provider = chooseLocationProvider();
-    if (provider == null) {
+    boolean fine =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            == PackageManager.PERMISSION_GRANTED;
+    boolean coarse =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)
+            == PackageManager.PERMISSION_GRANTED;
+    boolean networkEnabled = coarse || fine;
+    networkEnabled = networkEnabled && isLocationProviderEnabled(LocationManager.NETWORK_PROVIDER);
+    boolean gpsEnabled = fine && isLocationProviderEnabled(LocationManager.GPS_PROVIDER);
+    if (!networkEnabled && !gpsEnabled) {
+      logLocationPerf("provider_unavailable", "");
       Toast.makeText(this, "Turn on location services and try again.", Toast.LENGTH_SHORT).show();
       return;
     }
     locationPending = true;
+    bestPendingLocation = null;
     typingHandler.removeCallbacks(locationTimeout);
     typingHandler.postDelayed(locationTimeout, 15_000);
+
+    Location cached = bestCachedLocation(networkEnabled, gpsEnabled);
+    if (cached != null) {
+      long ageMs = locationAgeMs(cached);
+      logLocationPerf(
+          "cached_candidate",
+          locationDetails(cached)
+              + " accepted=" + isAcceptableLocation(cached, LOCATION_CACHE_MAX_AGE_MS));
+      rememberLocationCandidate(cached);
+      if (isAcceptableLocation(cached, LOCATION_CACHE_MAX_AGE_MS)) {
+        completeLocation(cached, "cached");
+        return;
+      }
+    }
+
+    logLocationPerf(
+        "location_request",
+        "network=" + networkEnabled + " gps=" + gpsEnabled);
+    if (networkEnabled) requestLocationFromProvider(LocationManager.NETWORK_PROVIDER);
+    if (gpsEnabled) requestLocationFromProvider(LocationManager.GPS_PROVIDER);
+  }
+
+  private boolean isLocationProviderEnabled(String provider) {
+    try {
+      return locationManager != null && locationManager.isProviderEnabled(provider);
+    } catch (RuntimeException ignored) {
+      return false;
+    }
+  }
+
+  private Location bestCachedLocation(boolean networkEnabled, boolean gpsEnabled) {
+    Location best = null;
+    if (networkEnabled) best = betterLocation(
+        best, lastKnownLocation(LocationManager.NETWORK_PROVIDER));
+    if (gpsEnabled) best = betterLocation(
+        best, lastKnownLocation(LocationManager.GPS_PROVIDER));
+    return best;
+  }
+
+  private Location lastKnownLocation(String provider) {
+    try {
+      return locationManager == null ? null : locationManager.getLastKnownLocation(provider);
+    } catch (SecurityException | IllegalArgumentException ignored) {
+      return null;
+    }
+  }
+
+  private void requestLocationFromProvider(String provider) {
     try {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        locationManager.getCurrentLocation(provider, null, getMainExecutor(), this::onLocationReady);
+        CancellationSignal cancellation = new CancellationSignal();
+        if (LocationManager.NETWORK_PROVIDER.equals(provider)) {
+          networkLocationCancellation = cancellation;
+        } else {
+          gpsLocationCancellation = cancellation;
+        }
+        locationManager.getCurrentLocation(
+            provider,
+            cancellation,
+            getMainExecutor(),
+            location -> onLocationCandidate(location, provider));
       } else {
-        locationListener =
-            new LocationListener() {
-              @Override
-              public void onLocationChanged(Location location) {
-                onLocationReady(location);
-              }
-
-              @Override
-              public void onStatusChanged(String provider, int status, Bundle extras) {}
-
-              @Override
-              public void onProviderEnabled(String provider) {}
-
-              @Override
-              public void onProviderDisabled(String provider) {}
-            };
-        locationManager.requestSingleUpdate(provider, locationListener, Looper.getMainLooper());
+        LocationListener listener = new LocationListener() {
+          @Override public void onLocationChanged(Location location) {
+            onLocationCandidate(location, provider);
+          }
+          @Override public void onStatusChanged(String value, int status, Bundle extras) {}
+          @Override public void onProviderEnabled(String value) {}
+          @Override public void onProviderDisabled(String value) {}
+        };
+        if (LocationManager.NETWORK_PROVIDER.equals(provider)) {
+          networkLocationListener = listener;
+        } else {
+          gpsLocationListener = listener;
+        }
+        locationManager.requestSingleUpdate(provider, listener, Looper.getMainLooper());
       }
-    } catch (SecurityException error) {
-      locationPending = false;
-      typingHandler.removeCallbacks(locationTimeout);
-      Toast.makeText(this, "Location permission is required.", Toast.LENGTH_SHORT).show();
+    } catch (SecurityException | IllegalArgumentException error) {
+      logLocationPerf(
+          "provider_request_error",
+          "provider=" + provider + " message=" + error.getMessage());
     }
   }
 
-  private String chooseLocationProvider() {
-    if (locationManager == null) return null;
-    boolean fine =
-        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-            == PackageManager.PERMISSION_GRANTED;
-    if (fine && locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-      return LocationManager.GPS_PROVIDER;
+  private void onLocationCandidate(Location location, String requestedProvider) {
+    if (!locationPending) return;
+    if (location == null) {
+      logLocationPerf("location_null", "provider=" + requestedProvider);
+      return;
     }
-    if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-      return LocationManager.NETWORK_PROVIDER;
+    rememberLocationCandidate(location);
+    logLocationPerf(
+        "location_candidate",
+        "requestedProvider=" + requestedProvider + " " + locationDetails(location)
+            + " accepted=" + isAcceptableLocation(location, LOCATION_CACHE_MAX_AGE_MS));
+    if (isAcceptableLocation(location, LOCATION_CACHE_MAX_AGE_MS)) {
+      completeLocation(location, requestedProvider);
     }
-    return null;
   }
 
-  private void onLocationReady(Location location) {
+  private void completeLocation(Location location, String source) {
     if (!locationPending) return;
     locationPending = false;
     typingHandler.removeCallbacks(locationTimeout);
     removeLocationUpdates();
-    if (location == null) {
-      Toast.makeText(this, "Unable to get current location.", Toast.LENGTH_SHORT).show();
-      return;
-    }
+    logLocationPerf("location_ready", "source=" + source + " " + locationDetails(location));
     if (chatId == null || chatId.isEmpty() || receiverId.isEmpty()) {
       Toast.makeText(this, "Chat information missing.", Toast.LENGTH_SHORT).show();
       return;
     }
-    repository.sendLocation(
+    long sendStartedMs = SystemClock.elapsedRealtime();
+    String clientMessageId = repository.sendLocation(
         chatId,
         receiverId,
         location.getLatitude(),
         location.getLongitude(),
         location.getAccuracy(),
         replyingId);
+    long sendCallMs = SystemClock.elapsedRealtime() - sendStartedMs;
+    chatView.trackLocationRender(
+        clientMessageId, locationTraceId, locationPressedElapsedMs, locationPressedWallMs);
+    logLocationPerf(
+        "send",
+        "clientMessageId=" + clientMessageId + " repositoryCallMs=" + sendCallMs);
     finishComposeAction();
     Toast.makeText(this, "Current location sent.", Toast.LENGTH_SHORT).show();
   }
 
+  private void rememberLocationCandidate(Location candidate) {
+    if (candidate == null || locationAgeMs(candidate) > LOCATION_FALLBACK_MAX_AGE_MS) return;
+    bestPendingLocation = betterLocation(bestPendingLocation, candidate);
+  }
+
+  private Location betterLocation(Location first, Location second) {
+    if (first == null) return second;
+    if (second == null) return first;
+    boolean firstAcceptable = isAcceptableLocation(first, LOCATION_CACHE_MAX_AGE_MS);
+    boolean secondAcceptable = isAcceptableLocation(second, LOCATION_CACHE_MAX_AGE_MS);
+    if (firstAcceptable != secondAcceptable) return secondAcceptable ? second : first;
+    if (second.getAccuracy() + 5f < first.getAccuracy()) return second;
+    return locationAgeMs(second) < locationAgeMs(first) ? second : first;
+  }
+
+  private boolean isAcceptableLocation(Location location, long maximumAgeMs) {
+    return location != null
+        && locationAgeMs(location) <= maximumAgeMs
+        && location.hasAccuracy()
+        && location.getAccuracy() <= LOCATION_ACCEPTABLE_ACCURACY_M;
+  }
+
+  private long locationAgeMs(Location location) {
+    if (location == null) return Long.MAX_VALUE;
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1
+        && location.getElapsedRealtimeNanos() > 0L) {
+      return Math.max(0L, SystemClock.elapsedRealtime()
+          - location.getElapsedRealtimeNanos() / 1_000_000L);
+    }
+    return Math.max(0L, System.currentTimeMillis() - location.getTime());
+  }
+
+  private String locationDetails(Location location) {
+    return "provider=" + location.getProvider()
+        + " accuracyM=" + location.getAccuracy()
+        + " fixAgeMs=" + locationAgeMs(location);
+  }
+
   private void removeLocationUpdates() {
-    if (locationManager == null || locationListener == null) return;
+    if (networkLocationCancellation != null) networkLocationCancellation.cancel();
+    if (gpsLocationCancellation != null) gpsLocationCancellation.cancel();
+    networkLocationCancellation = null;
+    gpsLocationCancellation = null;
+    removeLocationListener(networkLocationListener);
+    removeLocationListener(gpsLocationListener);
+    networkLocationListener = null;
+    gpsLocationListener = null;
+    bestPendingLocation = null;
+  }
+
+  private void removeLocationListener(LocationListener listener) {
+    if (locationManager == null || listener == null) return;
     try {
-      locationManager.removeUpdates(locationListener);
+      locationManager.removeUpdates(listener);
     } catch (SecurityException ignored) {
       // Permission may have been revoked while the request was active.
     }
-    locationListener = null;
+  }
+
+  private void logLocationPerf(String event, String details) {
+    long now = SystemClock.elapsedRealtime();
+    long elapsed = locationPressedElapsedMs <= 0L ? -1L : now - locationPressedElapsedMs;
+    Log.i(
+        LOCATION_PERF_TAG,
+        "trace=" + locationTraceId
+            + " event=" + event
+            + " elapsedMs=" + elapsed
+            + (details == null || details.isEmpty() ? "" : " " + details));
   }
 
   @Override
@@ -809,10 +1533,47 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
     String type = message.messageType == null ? "text" : message.messageType;
     if ("location".equals(type) && message.latitude != null && message.longitude != null) {
       String coordinates = message.latitude + "," + message.longitude;
-      openUri(Uri.parse("geo:" + coordinates + "?q=" + Uri.encode(coordinates)), null);
+      openLocationChooser(coordinates);
       return;
     }
-    if (!("image".equals(type) || "video".equals(type) || "file".equals(type))) return;
+    if (!("image".equals(type) || "video".equals(type)
+        || "audio".equals(type) || "file".equals(type))) return;
+    String fileMediaType = "file".equals(type) ? attachmentMediaType(message) : null;
+    if ("image".equals(type) || "video".equals(type) || fileMediaType != null) {
+      String previewType = fileMediaType == null ? type : fileMediaType;
+      String source = message.attachmentLocalUri;
+      if (source == null || source.trim().isEmpty() || !canRead(Uri.parse(source))) {
+        source = message.attachmentUrl;
+      }
+      if (source == null || source.trim().isEmpty()) {
+        Toast.makeText(this, "This file does not exist.", Toast.LENGTH_SHORT).show();
+        return;
+      }
+      String mediaType = "video".equals(previewType)
+          ? MediaPreviewCache.TYPE_VIDEO : MediaPreviewCache.TYPE_IMAGE;
+      if (!MediaPreviewCache.isMediaReady(this, source, mediaType)) {
+        if (!"file".equals(type)) {
+          Toast.makeText(this, "This file does not exist.", Toast.LENGTH_SHORT).show();
+          return;
+        }
+        String remoteSource = source;
+        MediaPreviewCache.resolveMedia(this, remoteSource, mediaType,
+            new MediaPreviewCache.Callback<Uri>() {
+              @Override public void onSuccess(Uri local) {
+                openMediaPreview(local.toString(), previewType, message);
+              }
+
+              @Override public void onError() {
+                Toast.makeText(ChatActivity.this,
+                    "This file does not exist.", Toast.LENGTH_SHORT).show();
+              }
+            });
+        return;
+      } else {
+        openMediaPreview(source, previewType, message);
+        return;
+      }
+    }
     boolean own = currentUser.equals(normalize(message.senderId));
     if (own) {
       Uri local = message.attachmentLocalUri == null ? null : Uri.parse(message.attachmentLocalUri);
@@ -820,11 +1581,11 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
         Toast.makeText(this, "File no longer available.", Toast.LENGTH_SHORT).show();
         return;
       }
-      openUri(local, message.attachmentMimeType);
+      openAttachment(message, local);
       return;
     }
     if (message.attachmentLocalUri != null && canRead(Uri.parse(message.attachmentLocalUri))) {
-      openLocalAttachment(Uri.parse(message.attachmentLocalUri), message.attachmentMimeType);
+      openAttachment(message, Uri.parse(message.attachmentLocalUri));
       return;
     }
     if (attachmentStates.getOrDefault(
@@ -848,7 +1609,7 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
     replyingId = message.messageId;
     editingId = null;
     chatView.clearMessageSelection();
-    chatView.showReply(message.text);
+    chatView.showReply(message);
   }
 
   @Override
@@ -985,12 +1746,22 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
     }
   }
 
+  private void openLocationChooser(String coordinates) {
+    try {
+      Uri target = Uri.parse("geo:" + coordinates + "?q=" + Uri.encode(coordinates));
+      Intent mapIntent = new Intent(Intent.ACTION_VIEW, target);
+      startActivity(Intent.createChooser(mapIntent, "Open location with"));
+    } catch (RuntimeException error) {
+      Toast.makeText(this, "No map app is available.", Toast.LENGTH_SHORT).show();
+    }
+  }
+
   private void startAttachmentDownload(MessageEntity message) {
     repository.downloadAttachment(message, new ChatRepository.DownloadCallback() {
       @Override public void onAvailable(Uri uri) {
         attachmentStates.put(attachmentKey(message), ATTACHMENT_AVAILABLE);
         refreshAttachmentRows();
-        openLocalAttachment(uri, message.attachmentMimeType);
+        openAttachment(message, uri);
       }
       @Override public void onQueued() {
         attachmentStates.put(attachmentKey(message), ATTACHMENT_DOWNLOADING);
@@ -1029,6 +1800,50 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
     openUri(uri, mimeType == null || mimeType.isEmpty() ? "*/*" : mimeType);
   }
 
+  private void openAttachment(MessageEntity message, Uri uri) {
+    String previewType = attachmentMediaType(message);
+    if (previewType != null) {
+      openMediaPreview(uri.toString(), previewType, message);
+      return;
+    }
+    if ("file".equals(uri.getScheme())) {
+      uri = FileProvider.getUriForFile(this, getPackageName() + ".files", new File(uri.getPath()));
+    }
+    try {
+      Intent intent = new Intent(Intent.ACTION_VIEW, uri);
+      String mime = message.attachmentMimeType;
+      intent.setDataAndType(uri, mime == null || mime.isEmpty() ? "*/*" : mime);
+      intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+      startActivity(Intent.createChooser(intent, "Open with"));
+    } catch (RuntimeException error) {
+      Toast.makeText(this, "No app can open this message.", Toast.LENGTH_SHORT).show();
+    }
+  }
+
+  private void openMediaPreview(String source, String mediaType, MessageEntity message) {
+    Intent preview = new Intent(this,
+        "video".equals(mediaType) ? VideoPreviewActivity.class : ImagePreviewActivity.class);
+    preview.putExtra(ImagePreviewActivity.EXTRA_URI, source);
+    preview.putExtra(ImagePreviewActivity.EXTRA_PHONE_NUMBER, receiverId);
+    preview.putExtra(ImagePreviewActivity.EXTRA_CHAT_ID, chatId);
+    preview.putExtra(ImagePreviewActivity.EXTRA_MESSAGE_ID,
+        message == null ? null : message.messageId);
+    startActivity(preview);
+  }
+
+  private static String attachmentMediaType(MessageEntity message) {
+    if (message == null) return null;
+    String mime = message.attachmentMimeType == null
+        ? "" : message.attachmentMimeType.toLowerCase(java.util.Locale.US);
+    if (mime.startsWith("image/")) return "image";
+    if (mime.startsWith("video/")) return "video";
+    String name = message.attachmentName == null
+        ? "" : message.attachmentName.toLowerCase(java.util.Locale.US);
+    if (name.matches(".*\\.(jpg|jpeg|png|gif|webp|bmp|heic|heif)$")) return "image";
+    if (name.matches(".*\\.(mp4|m4v|mov|webm|mkv|avi|3gp)$")) return "video";
+    return null;
+  }
+
   @Override
   public int attachmentState(MessageEntity message) {
     if (currentUser.equals(normalize(message.senderId))) return ATTACHMENT_AVAILABLE;
@@ -1046,7 +1861,7 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
     if ("Reply".equals(action)) {
       replyingId = message.messageId;
       editingId = null;
-      chatView.showReply(message.text);
+      chatView.showReply(message);
       return;
     }
     if ("Edit".equals(action)) {
@@ -1070,6 +1885,11 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
 
   @Override
   public void onBack() {
+    if (audioRecorder != null) {
+      finishAudioRecording(false);
+      return;
+    }
+    if (chatView != null && chatView.dismissAttachmentPanel()) return;
     if (chatView != null && chatView.clearMessageSelection()) return;
     finish();
   }
@@ -1117,6 +1937,8 @@ public class ChatActivity extends AppCompatActivity implements ChatView.Listener
 
   @Override
   protected void onDestroy() {
+    finishAudioRecording(false);
+    stopAudioPlayback();
     removePrompt();
     if (conversationMenuDialog != null) {
       conversationMenuDialog.release();

@@ -8,13 +8,15 @@ import android.view.View;
 import android.view.ViewConfiguration;
 
 import com.hbb20.CCPCountry;
+import com.ogfa.nativeviews.component.FigmaConfig;
 import com.ogfa.nativeviews.list.ComponentList;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 
 /** Native component-list host for country rows and their scroll gesture handling. */
 public final class CountryListView extends View {
-    private static final float ROW_HEIGHT_DP = 58f;
+    private static final float ROW_HEIGHT_PX = 159.5f;
+    private final FigmaConfig figmaConfig = new FigmaConfig(1080f);
 
     private final ZLayerGroup nativeListLayers = new ZLayerGroup(this);
     private final ZLayer nativeListLayer = nativeListLayers.addLayer("countries");
@@ -44,7 +46,7 @@ public final class CountryListView extends View {
         nativeListLayer.add(new ComponentList.Builder<CCPCountry>(getContext(),
                 "country_native_list", new RectF(0f, 0f, width, height))
                 .setOrientation(ComponentList.Orientation.VERTICAL)
-                .setItemSize(dp(ROW_HEIGHT_DP))
+                .setItemSize(px(ROW_HEIGHT_PX))
                 .setItemSpacing(0f)
                 .setAdapter(adapter)
                 .setOverscrollEnabled(false)
@@ -83,8 +85,9 @@ public final class CountryListView extends View {
         return nativeListLayers.onTouchEvent(event) || super.onTouchEvent(event);
     }
 
-    private float dp(float value) {
-        return value * getResources().getDisplayMetrics().density;
+    private float px(float value) {
+        return figmaConfig.toRuntime(value,
+                Math.max(1, getResources().getDisplayMetrics().widthPixels));
     }
 
     public interface CountryClickListener {
