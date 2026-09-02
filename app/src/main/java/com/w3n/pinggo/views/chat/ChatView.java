@@ -132,6 +132,7 @@ public final class ChatView extends View {
   private boolean keepKeyboardAfterSend;
   private boolean forceBottomOnNextMessageSubmission;
   private boolean directComposerSendGesture;
+  private boolean directMessageListGesture;
   private String searchDraft = "";
   private Runnable searchDismissAction;
   private final List<Integer> searchMatches = new ArrayList<>();
@@ -370,18 +371,18 @@ public final class ChatView extends View {
     invalidate();
   }
 
-  /** Restores the composer/IME after clearing a sent draft rebuilt the native text field. */
+  /** Keeps the composer focused after send without restarting an already visible IME. */
   public void restoreComposerAfterSend() {
     if (!keepKeyboardAfterSend) return;
     keepKeyboardAfterSend = false;
     post(() -> {
       if (input == null || contactBlocked) return;
+      if (input.isFocused() && imeVisible) return;
       requestFocus();
       input.requestFocus();
       InputMethodManager keyboard =
           (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
       if (keyboard != null) {
-        keyboard.restartInput(this);
         keyboard.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT);
       }
     });
@@ -509,8 +510,17 @@ public final class ChatView extends View {
   }
 
   public void clearReply() {
+    boolean hadReply = composer.hasReply();
     composer.clearReply();
-    updateReply();
+    if (!hadReply) return;
+    if (replyText != null) replyText.setVisible(false);
+    if (composerReplyPreview != null) composerReplyPreview.hide();
+    if (input != null && list != null && renderedComposerHeight >= 0f) {
+      applyComposerHeight(renderedComposerHeight);
+    } else {
+      updateReply();
+    }
+    invalidate();
   }
 
   public boolean isSelectingMessages() {
@@ -1072,7 +1082,16 @@ public final class ChatView extends View {
     float listBottom = Math.max(headerBottom + px(2.75f), baseListBottom + shift);
     RectF nextBounds = new RectF(0, messageListTop(), getWidth(), listBottom);
     RectF currentBounds = list.getBounds();
-    if (!sameBounds(currentBounds, nextBounds)) list.setRegion(nextBounds);
+    if (!sameBounds(currentBounds, nextBounds)) {
+      int itemCount = adapter.getItemCount();
+      int lastVisible = list.getLastVisiblePosition();
+      boolean wasNearBottom = itemCount == 0 || lastVisible >= itemCount - 2;
+      list.setRegion(nextBounds);
+      // Resizing the viewport does not change ComponentList's scroll offset. Keep a
+      // conversation that was at the bottom pinned to its newest message when the IME
+      // reduces the available height; otherwise the final rows remain below the keyboard.
+      if (wasNearBottom && itemCount > 0) list.scrollToPosition(itemCount - 1);
+    }
     invalidate();
   }
 
@@ -1519,6 +1538,11 @@ public final class ChatView extends View {
       return true;
     }
     if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
+      // ZLayerGroup otherwise gives the gesture to its TextField coordinator, which clears
+      // composer focus before the list can scroll. Route this gesture straight to the list.
+      directMessageListGesture = list != null && input != null
+          && (input.isFocused() || imeVisible)
+          && list.getBounds().contains(e.getX(), e.getY());
       loadingGestureStartY = e.getY();
       loadingGestureBlocked = false;
       olderLoadRequestedForGesture = false;
@@ -1539,7 +1563,8 @@ public final class ChatView extends View {
             > ViewConfiguration.get(getContext()).getScaledTouchSlop()) {
       MotionEvent cancel = MotionEvent.obtain(e);
       cancel.setAction(MotionEvent.ACTION_CANCEL);
-      layers.onTouchEvent(cancel);
+      if (directMessageListGesture && list != null) list.onTouchEvent(cancel);
+      else layers.onTouchEvent(cancel);
       cancel.recycle();
       loadingGestureBlocked = true;
     }
@@ -1574,11 +1599,16 @@ public final class ChatView extends View {
       if (e.getActionMasked() == MotionEvent.ACTION_UP
           || e.getActionMasked() == MotionEvent.ACTION_CANCEL) {
         loadingGestureBlocked = false;
+        directMessageListGesture = false;
       }
       return true;
     }
-    boolean handled = layers.onTouchEvent(e);
+    boolean handled = directMessageListGesture && list != null
+        ? list.onTouchEvent(e) : layers.onTouchEvent(e);
     if (handled) loadOlderMessagesIfNeeded();
+    if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+      directMessageListGesture = false;
+    }
     return handled || super.onTouchEvent(e);
   }
 
