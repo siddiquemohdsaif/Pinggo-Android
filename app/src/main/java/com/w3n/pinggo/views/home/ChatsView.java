@@ -725,6 +725,8 @@ public final class ChatsView extends View {
             row.add(new Image.Builder(getContext(), scope.id("selection_background"),
                     selectionBackgroundBitmap, new RectF(0, 0, width, height))
                     .setScaleType(Image.ScaleType.FIT_XY));
+            row.add(new ChatRowRippleComponent(scope.id("row_ripple"),
+                    new RectF(0f, 0f, width, height)));
             row.add(new Image.Builder(getContext(), scope.id("avatar"), avatar("?"),
                     new RectF(50f * scale, 27f * scale, 182f * scale, 159f * scale))
                     .setScaleType(Image.ScaleType.CENTER_CROP));
@@ -826,6 +828,13 @@ public final class ChatsView extends View {
             boolean selected = selectedChatIds.contains(chat.getChatId());
             item.find("selection_background", Image.class).setVisible(selected);
             item.find("selection_check", Image.class).setVisible(selected);
+            item.find("row_ripple", ChatRowRippleComponent.class).bind(
+                    new RectF(0f, 0f, item.getScope().width(), item.getScope().height()),
+                    () -> {
+                        if (isSelecting()) toggleSelection(chat);
+                        else clickListener.onChatClick(chat);
+                    },
+                    () -> toggleSelection(chat));
             float scale = figmaConfig.getScale(getWidth());
             item.find("name", Text.class).setText(ellipsize(chat.getContactName(),
                     630f * scale, 42f * scale));

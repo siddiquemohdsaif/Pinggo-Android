@@ -2,13 +2,11 @@ package com.w3n.pinggo.views.chat;
 
 import android.content.Context;
 import android.graphics.Bitmap;
-import android.graphics.BitmapShader;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
-import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.text.InputType;
 import android.text.Layout;
@@ -159,40 +157,32 @@ public final class ChatView extends View {
         new ChatMessageAdapter(
             c,
             this.currentUser,
-            transparent,
-            messageSelectionBackground,
-            messageSendingIcon,
-            messageSentIcon,
-            messageDeliveredIcon,
-            messageReadIcon,
-            selectionPinIcon,
-            documentIcon,
-            deletedMessageIcon,
-            forwardedMessageIcon,
-            callPhoneIncomingIcon,
-            callPhoneOutgoingIcon,
-            callPhoneMissedIcon,
-            callVideoIncomingIcon,
-            callVideoOutgoingIcon,
-            callVideoMissedIcon,
-            listener::attachmentState,
-            this::onMediaMetricsChanged,
-            listener::onAudioPlaybackToggle,
-            this::scrollToMessageId,
-            this::handleMessageClick,
-            this::toggleMessageSelection,
-            profiler,
+            new ChatMessageAdapterConfig(
+                transparent,
+                messageSelectionBackground,
+                messageSendingIcon,
+                messageSentIcon,
+                messageDeliveredIcon,
+                messageReadIcon,
+                selectionPinIcon,
+                documentIcon,
+                deletedMessageIcon,
+                forwardedMessageIcon,
+                callPhoneIncomingIcon,
+                callPhoneOutgoingIcon,
+                callPhoneMissedIcon,
+                callVideoIncomingIcon,
+                callVideoOutgoingIcon,
+                callVideoMissedIcon,
+                listener::attachmentState,
+                this::onMediaMetricsChanged,
+                listener::onAudioPlaybackToggle,
+                this::scrollToMessageId,
+                this::handleMessageClick,
+                this::toggleMessageSelection,
+                profiler),
             selection.ids());
-    Bitmap b =
-        photoPath == null || photoPath.trim().isEmpty()
-            ? null
-            : BitmapFactory.decodeFile(photoPath);
-    if (b == null) {
-      profile = avatar(name);
-    } else {
-      profile = circleCrop(b);
-      b.recycle();
-    }
+    profile = ChatProfileBitmap.load(c, photoPath, name, Math.round(px(132f)), ACCENT);
     adapter.setChatProfile(profile);
     chatHeader = new ChatHeaderComponent(
         c, chatName, listener, white, headerBackground, transparent, profile, backIcon,
@@ -609,6 +599,13 @@ public final class ChatView extends View {
                 .setClipToBounds(true)
                 .setScrollBarEnabled(true)
                 .setOverscrollEnabled(false)
+                .setOnItemLongClickListener(
+                    (componentList, message, position) -> {
+                      toggleMessageSelection(message);
+                      return true;
+                    })
+                .setOnItemClickListener(
+                    (componentList, message, position) -> handleMessageClick(message))
                 );
     status =
         text(
@@ -1305,41 +1302,6 @@ public final class ChatView extends View {
         documentIcon, deletedMessageIcon, forwardedMessageIcon,
         callPhoneIncomingIcon, callPhoneOutgoingIcon, callPhoneMissedIcon,
         callVideoIncomingIcon, callVideoOutgoingIcon, callVideoMissedIcon);
-  }
-
-  private Bitmap avatar(String value) {
-    int s = Math.round(px(132f));
-    Bitmap b = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
-    Canvas c = new Canvas(b);
-    Paint p = new Paint(1);
-    p.setColor(0xFFD9F1F7);
-    c.drawCircle(s / 2f, s / 2f, s / 2f, p);
-    String x =
-        value == null || value.isEmpty() ? "?" : value.substring(0, 1).toUpperCase(Locale.US);
-    p.setColor(ACCENT);
-    p.setTextSize(s * .42f);
-    p.setTextAlign(Paint.Align.CENTER);
-    Paint.FontMetrics m = p.getFontMetrics();
-    c.drawText(x, s / 2f, s / 2f - (m.ascent + m.descent) / 2, p);
-    return b;
-  }
-
-  private Bitmap circleCrop(Bitmap source) {
-    int size = Math.min(source.getWidth(), source.getHeight());
-    Bitmap result = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
-    Canvas canvas = new Canvas(result);
-    Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    BitmapShader shader = new BitmapShader(source, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
-    float scale = Math.max(size / (float) source.getWidth(), size / (float) source.getHeight());
-    android.graphics.Matrix matrix = new android.graphics.Matrix();
-    matrix.setScale(scale, scale);
-    matrix.postTranslate(
-        (size - source.getWidth() * scale) / 2f,
-        (size - source.getHeight() * scale) / 2f);
-    shader.setLocalMatrix(matrix);
-    paint.setShader(shader);
-    canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint);
-    return result;
   }
 
   private static String normalize(String v) {

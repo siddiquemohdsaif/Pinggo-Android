@@ -29,6 +29,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import com.w3n.pinggo.views.chat.ChatMessageAdapterModels.LocationRenderTiming;
+import com.w3n.pinggo.views.chat.ChatMessageAdapterModels.MessageMetrics;
+import com.w3n.pinggo.views.chat.ChatMessageAdapterModels.MessageRenderModel;
+import com.w3n.pinggo.views.chat.ChatMessageAdapterModels.MetricKey;
 
 /** Owns chat-message presentation, cached measurement, row diffing, and binding. */
 final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
@@ -103,30 +107,6 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   private static final float REPLY_FULL_ATTACHMENT_WIDTH_PX = 685f;
   private static final float REPLY_PORTRAIT_MEDIA_WIDTH_PX = 529f;
 
-  interface AttachmentStateProvider {
-    int attachmentState(MessageEntity message);
-  }
-
-  interface MediaMetricsListener {
-    void onMediaMetricsChanged();
-  }
-
-  interface AudioPlaybackListener {
-    void onAudioPlaybackToggle(String messageId);
-  }
-
-  interface ReplyNavigationListener {
-    void onReplyTargetSelected(String messageId);
-  }
-
-  interface MessageClickListener {
-    void onMessageClick(MessageEntity message);
-  }
-
-  interface MessageLongClickListener {
-    void onMessageLongClick(MessageEntity message);
-  }
-
   private final Context context;
   private final String currentUser;
   private final Bitmap transparent;
@@ -145,12 +125,12 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   private final Bitmap callVideoIncomingIcon;
   private final Bitmap callVideoOutgoingIcon;
   private final Bitmap callVideoMissedIcon;
-  private final AttachmentStateProvider attachmentStateProvider;
-  private final MediaMetricsListener mediaMetricsListener;
-  private final AudioPlaybackListener audioPlaybackListener;
-  private final ReplyNavigationListener replyNavigationListener;
-  private final MessageClickListener messageClickListener;
-  private final MessageLongClickListener messageLongClickListener;
+  private final ChatMessageAdapterConfig.AttachmentStateProvider attachmentStateProvider;
+  private final ChatMessageAdapterConfig.MediaMetricsListener mediaMetricsListener;
+  private final ChatMessageAdapterConfig.AudioPlaybackListener audioPlaybackListener;
+  private final ChatMessageAdapterConfig.ReplyNavigationListener replyNavigationListener;
+  private final ChatMessageAdapterConfig.MessageClickListener messageClickListener;
+  private final ChatMessageAdapterConfig.MessageLongClickListener messageLongClickListener;
   private final ChatPerformanceProfiler profiler;
   private final Set<String> selectedMessageIds;
   private final Typeface messageTypeface;
@@ -188,55 +168,33 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   ChatMessageAdapter(
       Context context,
       String currentUser,
-      Bitmap transparent,
-      Bitmap selectionBackground,
-      Bitmap messageSendingIcon,
-      Bitmap messageSentIcon,
-      Bitmap messageDeliveredIcon,
-      Bitmap messageReadIcon,
-      Bitmap messagePinnedIcon,
-      Bitmap documentIcon,
-      Bitmap deletedMessageIcon,
-      Bitmap forwardedMessageIcon,
-      Bitmap callPhoneIncomingIcon,
-      Bitmap callPhoneOutgoingIcon,
-      Bitmap callPhoneMissedIcon,
-      Bitmap callVideoIncomingIcon,
-      Bitmap callVideoOutgoingIcon,
-      Bitmap callVideoMissedIcon,
-      AttachmentStateProvider attachmentStateProvider,
-      MediaMetricsListener mediaMetricsListener,
-      AudioPlaybackListener audioPlaybackListener,
-      ReplyNavigationListener replyNavigationListener,
-      MessageClickListener messageClickListener,
-      MessageLongClickListener messageLongClickListener,
-      ChatPerformanceProfiler profiler,
+      ChatMessageAdapterConfig config,
       Set<String> selectedMessageIds) {
     this.context = context;
     this.currentUser = normalize(currentUser);
-    this.transparent = transparent;
-    this.selectionBackground = selectionBackground;
-    this.messageSendingIcon = messageSendingIcon;
-    this.messageSentIcon = messageSentIcon;
-    this.messageDeliveredIcon = messageDeliveredIcon;
-    this.messageReadIcon = messageReadIcon;
-    this.messagePinnedIcon = messagePinnedIcon;
-    this.documentIcon = documentIcon;
-    this.deletedMessageIcon = deletedMessageIcon;
-    this.forwardedMessageIcon = forwardedMessageIcon;
-    this.callPhoneIncomingIcon = callPhoneIncomingIcon;
-    this.callPhoneOutgoingIcon = callPhoneOutgoingIcon;
-    this.callPhoneMissedIcon = callPhoneMissedIcon;
-    this.callVideoIncomingIcon = callVideoIncomingIcon;
-    this.callVideoOutgoingIcon = callVideoOutgoingIcon;
-    this.callVideoMissedIcon = callVideoMissedIcon;
-    this.attachmentStateProvider = attachmentStateProvider;
-    this.mediaMetricsListener = mediaMetricsListener;
-    this.audioPlaybackListener = audioPlaybackListener;
-    this.replyNavigationListener = replyNavigationListener;
-    this.messageClickListener = messageClickListener;
-    this.messageLongClickListener = messageLongClickListener;
-    this.profiler = profiler;
+    this.transparent = config.transparent;
+    this.selectionBackground = config.selectionBackground;
+    this.messageSendingIcon = config.messageSendingIcon;
+    this.messageSentIcon = config.messageSentIcon;
+    this.messageDeliveredIcon = config.messageDeliveredIcon;
+    this.messageReadIcon = config.messageReadIcon;
+    this.messagePinnedIcon = config.messagePinnedIcon;
+    this.documentIcon = config.documentIcon;
+    this.deletedMessageIcon = config.deletedMessageIcon;
+    this.forwardedMessageIcon = config.forwardedMessageIcon;
+    this.callPhoneIncomingIcon = config.callPhoneIncomingIcon;
+    this.callPhoneOutgoingIcon = config.callPhoneOutgoingIcon;
+    this.callPhoneMissedIcon = config.callPhoneMissedIcon;
+    this.callVideoIncomingIcon = config.callVideoIncomingIcon;
+    this.callVideoOutgoingIcon = config.callVideoOutgoingIcon;
+    this.callVideoMissedIcon = config.callVideoMissedIcon;
+    this.attachmentStateProvider = config.attachmentStateProvider;
+    this.mediaMetricsListener = config.mediaMetricsListener;
+    this.audioPlaybackListener = config.audioPlaybackListener;
+    this.replyNavigationListener = config.replyNavigationListener;
+    this.messageClickListener = config.messageClickListener;
+    this.messageLongClickListener = config.messageLongClickListener;
+    this.profiler = config.profiler;
     this.selectedMessageIds = selectedMessageIds;
     messageTypeface = NativeFonts.load(context, NativeFonts.INTER);
     messageTimeFormatter = new SimpleDateFormat("h:mm a", Locale.getDefault());
@@ -547,6 +505,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     row.add(new ForwardedMessagePanelComponent(
         scope.id("forwarded_panel"),
         figmaScale()));
+            row.add(new MessageRowRippleComponent(scope.id("message_ripple")));
     row.add(new ReplyPreviewComponent(
         context, scope.id("reply_preview"), documentIcon, chatProfile, messageTypeface,
         REPLY_SENDER_TEXT_SIZE_PX, REPLY_MESSAGE_TEXT_SIZE_PX,
@@ -676,6 +635,13 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         .setClickAction(messageClickListener == null
             ? null : () -> messageClickListener.onMessageClick(message))
         .setLongClickAction(messageLongClickListener == null
+            ? null : () -> messageLongClickListener.onMessageLongClick(message));
+    item.find("message_ripple", MessageRowRippleComponent.class).bind(
+        positiveRect(0f, bubbleTop, rowWidth, bubbleBottom),
+        positiveRect(clickRegion.left, clickRegion.top, clickRegion.right, clickRegion.bottom),
+        0f,
+        messageClickListener == null ? null : () -> messageClickListener.onMessageClick(message),
+        messageLongClickListener == null
             ? null : () -> messageLongClickListener.onMessageLongClick(message));
     MediaPreviewComponent preview = item.find("media_preview", MediaPreviewComponent.class);
     if (media) {
@@ -1531,18 +1497,6 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
             + " clientMessageId=" + clientId);
   }
 
-  private static final class LocationRenderTiming {
-    final String traceId;
-    final long pressedElapsedMs;
-    final long pressedWallMs;
-
-    LocationRenderTiming(String traceId, long pressedElapsedMs, long pressedWallMs) {
-      this.traceId = traceId == null ? "" : traceId;
-      this.pressedElapsedMs = pressedElapsedMs;
-      this.pressedWallMs = pressedWallMs;
-    }
-  }
-
   private float sp(float value) {
     return value * context.getResources().getDisplayMetrics().scaledDensity;
   }
@@ -1705,115 +1659,4 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     }
   }
 
-  private static final class MessageRenderModel {
-    final String displayText;
-    final String formattedTime;
-    final String repliedMessageId;
-    final boolean forwarded;
-    final boolean pinned;
-    final boolean deleted;
-    final boolean showDelivery;
-    final boolean own;
-    final String mediaType;
-    final String attachmentName;
-    final String attachmentSource;
-    final String sourceSignature;
-    final String presentationSignature;
-    final long stableMessageId;
-    final long contentVersion;
-
-    MessageRenderModel(
-        String displayText,
-        String formattedTime,
-        String repliedMessageId,
-        boolean forwarded,
-        boolean pinned,
-        boolean deleted,
-        boolean showDelivery,
-        boolean own,
-        String mediaType,
-        String attachmentName,
-        String attachmentSource,
-        String sourceSignature,
-        long stableMessageId,
-        long contentVersion) {
-      this.displayText = displayText;
-      this.formattedTime = formattedTime;
-      this.repliedMessageId = repliedMessageId;
-      this.forwarded = forwarded;
-      this.pinned = pinned;
-      this.deleted = deleted;
-      this.showDelivery = showDelivery;
-      this.own = own;
-      this.mediaType = mediaType;
-      this.attachmentName = attachmentName;
-      this.attachmentSource = attachmentSource;
-      this.sourceSignature = sourceSignature;
-      this.presentationSignature = sourceSignature;
-      this.stableMessageId = stableMessageId;
-      this.contentVersion = contentVersion;
-    }
-  }
-
-  private static final class MetricKey {
-    final long messageId;
-    final long contentVersion;
-    final int widthBits;
-
-    MetricKey(long messageId, long contentVersion, int widthBits) {
-      this.messageId = messageId;
-      this.contentVersion = contentVersion;
-      this.widthBits = widthBits;
-    }
-
-    @Override
-    public boolean equals(Object value) {
-      if (this == value) return true;
-      if (!(value instanceof MetricKey)) return false;
-      MetricKey other = (MetricKey) value;
-      return messageId == other.messageId
-          && contentVersion == other.contentVersion
-          && widthBits == other.widthBits;
-    }
-
-    @Override
-    public int hashCode() {
-      long combined = messageId ^ (messageId >>> 32)
-          ^ contentVersion ^ (contentVersion >>> 32);
-      return 31 * (int) combined + widthBits;
-    }
-  }
-
-  private static final class MessageMetrics {
-    final float bubbleWidth;
-    final float bubbleHeight;
-    final float renderedTextWidth;
-    final float textHeight;
-    final float forwardedHeight;
-    final float replyHeight;
-    final float timeWidth;
-    final float timeHeight;
-    final boolean metadataInline;
-
-    MessageMetrics(
-        float bubbleWidth,
-        float bubbleHeight,
-        float renderedTextWidth,
-        float textHeight,
-        float forwardedHeight,
-        float replyHeight,
-        float timeWidth,
-        float timeHeight,
-        boolean metadataInline) {
-      this.bubbleWidth = bubbleWidth;
-      this.bubbleHeight = bubbleHeight;
-      this.renderedTextWidth = renderedTextWidth;
-      this.textHeight = textHeight;
-      this.forwardedHeight = forwardedHeight;
-      this.replyHeight = replyHeight;
-      this.timeWidth = timeWidth;
-      this.timeHeight = timeHeight;
-      this.metadataInline = metadataInline;
-    }
-  }
 }
