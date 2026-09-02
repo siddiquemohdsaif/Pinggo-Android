@@ -41,6 +41,12 @@ public final class ChatPerformanceProfiler {
   private double scrollReplyMs;
   private double scrollTextMs;
   private double scrollMetadataMs;
+  private long scrollViewDrawCount;
+  private double scrollLayersDrawTotalMs;
+  private double scrollMaxLayersDrawMs;
+  private double scrollListDrawTotalMs;
+  private double scrollMaxListDrawMs;
+  private double lastListDrawMs;
   private int scrollFirstPosition = -1;
   private int scrollLastPosition = -1;
   private int scrollItemCount;
@@ -78,15 +84,26 @@ public final class ChatPerformanceProfiler {
   public synchronized void viewDraw(
       long durationNanos, int itemCount, int firstVisible, int lastVisible) {
     double durationMs = nanosToMs(durationNanos);
+    double listDrawMs = lastListDrawMs;
+    double otherDrawMs = Math.max(0.0, durationMs - listDrawMs);
+    lastListDrawMs = 0.0;
+    if (scrolling) {
+      scrollViewDrawCount++;
+      scrollLayersDrawTotalMs += durationMs;
+      scrollMaxLayersDrawMs = Math.max(scrollMaxLayersDrawMs, durationMs);
+    }
     if (!firstDrawLogged) {
       firstDrawLogged = true;
-      log("first_view_draw", "drawMs=" + fmt(durationMs) + " openElapsedMs=" + openElapsedMs());
+      log("first_view_draw", "layersDrawMs=" + fmt(durationMs)
+          + " listDrawMs=" + fmt(listDrawMs) + " openElapsedMs=" + openElapsedMs());
     }
     if (contentSubmitted && !firstContentDrawLogged && itemCount > 0) {
       firstContentDrawLogged = true;
       log(
           "first_content_draw",
-          "drawMs=" + fmt(durationMs)
+          "layersDrawMs=" + fmt(durationMs)
+              + " listDrawMs=" + fmt(listDrawMs)
+              + " otherDrawMs=" + fmt(otherDrawMs)
               + " count=" + itemCount
               + " visible=" + firstVisible + "-" + lastVisible
               + " openElapsedMs=" + openElapsedMs()
@@ -95,10 +112,24 @@ public final class ChatPerformanceProfiler {
     if (durationMs >= 8.0) {
       log(
           "view_draw_slow",
-          "drawMs=" + fmt(durationMs)
+          "layersDrawMs=" + fmt(durationMs)
+              + " listDrawMs=" + fmt(listDrawMs)
+              + " otherDrawMs=" + fmt(otherDrawMs)
               + " count=" + itemCount
               + " visible=" + firstVisible + "-" + lastVisible
               + " scrolling=" + scrolling);
+    }
+  }
+
+  public synchronized void messageListDraw(long durationNanos) {
+    double durationMs = nanosToMs(durationNanos);
+    lastListDrawMs = durationMs;
+    if (scrolling) {
+      scrollListDrawTotalMs += durationMs;
+      scrollMaxListDrawMs = Math.max(scrollMaxListDrawMs, durationMs);
+    }
+    if (durationMs >= 8.0) {
+      log("list_draw_slow", "listDrawMs=" + fmt(durationMs) + " scrolling=" + scrolling);
     }
   }
 
@@ -191,6 +222,10 @@ public final class ChatPerformanceProfiler {
     scrollReusedRows = 0;
     scrollSetupMs = scrollAttachmentMs = scrollReplyMs = 0.0;
     scrollTextMs = scrollMetadataMs = 0.0;
+    scrollViewDrawCount = 0;
+    scrollLayersDrawTotalMs = scrollMaxLayersDrawMs = 0.0;
+    scrollListDrawTotalMs = scrollMaxListDrawMs = 0.0;
+    lastListDrawMs = 0.0;
     scrollFirstPosition = firstVisible;
     scrollLastPosition = lastVisible;
     scrollItemCount = itemCount;
@@ -226,6 +261,13 @@ public final class ChatPerformanceProfiler {
             + " replyTotalMs=" + fmt(scrollReplyMs)
             + " textTotalMs=" + fmt(scrollTextMs)
             + " metadataTotalMs=" + fmt(scrollMetadataMs)
+            + " viewDraws=" + scrollViewDrawCount
+            + " layersDrawTotalMs=" + fmt(scrollLayersDrawTotalMs)
+            + " maxLayersDrawMs=" + fmt(scrollMaxLayersDrawMs)
+            + " listDrawTotalMs=" + fmt(scrollListDrawTotalMs)
+            + " maxListDrawMs=" + fmt(scrollMaxListDrawMs)
+            + " otherDrawTotalMs=" + fmt(Math.max(
+                0.0, scrollLayersDrawTotalMs - scrollListDrawTotalMs))
             + " visible=" + scrollFirstPosition + "-" + scrollLastPosition
             + " count=" + scrollItemCount
             + " " + memoryFields());

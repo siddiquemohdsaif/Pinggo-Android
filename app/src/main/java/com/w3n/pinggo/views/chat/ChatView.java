@@ -21,6 +21,8 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import com.ogfa.nativeviews.button.Button;
+import com.ogfa.nativeviews.component.Component;
+import com.ogfa.nativeviews.component.ComponentHost;
 import com.ogfa.nativeviews.font.NativeFonts;
 import com.ogfa.nativeviews.image.Image;
 import com.ogfa.nativeviews.list.ComponentList;
@@ -649,8 +651,7 @@ public final class ChatView extends View {
     float listBottom = composerTop - replyHeight - previewHeight - messageComposerGap;
     baseListBottom = listBottom;
     float messageListTop = messageListTop();
-    list =
-        content.add(
+    ComponentList.Builder<MessageEntity> messageListBuilder =
             new ComponentList.Builder<MessageEntity>(
                     getContext(), "messages", new RectF(0, messageListTop, w, listBottom))
                 .setOrientation(ComponentList.Orientation.VERTICAL)
@@ -671,8 +672,9 @@ public final class ChatView extends View {
                       // The row-wide fallback exists only for multi-selection. Normal media/file
                       // actions must remain scoped to the bubble or its inner preview bounds.
                       if (isSelectingMessages()) toggleMessageSelection(message);
-                    })
-                );
+                    });
+    list = messageListBuilder.build(this);
+    content.add(new TimedMessageListComponent(list));
     status =
         text(
             content,
@@ -1272,6 +1274,31 @@ public final class ChatView extends View {
     }
   }
 
+  /** Transparent timing wrapper around the AAR list's draw call. */
+  private final class TimedMessageListComponent implements Component {
+    private final ComponentList<MessageEntity> delegate;
+
+    TimedMessageListComponent(ComponentList<MessageEntity> delegate) {
+      this.delegate = delegate;
+    }
+
+    @Override public String getId() { return delegate.getId(); }
+    @Override public RectF getBounds() { return delegate.getBounds(); }
+    @Override public boolean isVisible() { return delegate.isVisible(); }
+    @Override public boolean isEnabled() { return delegate.isEnabled(); }
+    @Override public boolean onTouchEvent(MotionEvent event) { return delegate.onTouchEvent(event); }
+    @Override public void attach(ComponentHost host) { delegate.attach(host); }
+    @Override public void release() { delegate.release(); }
+
+    @Override public void draw(Canvas canvas) {
+      long startedNanos = SystemClock.elapsedRealtimeNanos();
+      delegate.draw(canvas);
+      if (profiler != null) {
+        profiler.messageListDraw(SystemClock.elapsedRealtimeNanos() - startedNanos);
+      }
+    }
+  }
+
   @Override
   public boolean onTouchEvent(MotionEvent e) {
     if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
@@ -1309,7 +1336,10 @@ public final class ChatView extends View {
       profileScrollStarted = true;
       messageScrollActive = true;
       adapter.setScrolling(true);
-      MediaPreviewCache.setDecodingPaused(true);
+      // Comparison mode: allow newly visible media rows to start their thumbnail work while
+      // the gesture/fling is active. MediaPreviewComponent still checks the memory cache first,
+      // so already prepared previews remain allocation-free on the bind path.
+      MediaPreviewCache.setDecodingPaused(false);
       removeCallbacks(finishScrollProfile);
       removeCallbacks(probeScrollIdle);
     } else if ((e.getActionMasked() == MotionEvent.ACTION_UP
