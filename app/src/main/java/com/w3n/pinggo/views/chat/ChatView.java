@@ -605,7 +605,11 @@ public final class ChatView extends View {
                       return true;
                     })
                 .setOnItemClickListener(
-                    (componentList, message, position) -> handleMessageClick(message))
+                    (componentList, message, position) -> {
+                      // The row-wide fallback exists only for multi-selection. Normal media/file
+                      // actions must remain scoped to the bubble or its inner preview bounds.
+                      if (isSelectingMessages()) toggleMessageSelection(message);
+                    })
                 );
     status =
         text(
