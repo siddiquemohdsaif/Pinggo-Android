@@ -8,6 +8,7 @@ import android.graphics.Typeface;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.text.StaticLayout;
+import android.text.Layout;
 import android.text.TextPaint;
 import android.util.Log;
 import com.ogfa.nativeviews.font.NativeFonts;
@@ -28,6 +29,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import com.w3n.pinggo.views.chat.ChatMessageAdapterModels.LocationRenderTiming;
 import com.w3n.pinggo.views.chat.ChatMessageAdapterModels.MessageMetrics;
@@ -150,6 +152,9 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   private String playingAudioMessageId = "";
   private long playingAudioProgressMs;
   private long playingAudioDurationMs;
+  private volatile boolean scrolling;
+  private final Set<String> mediaPrefetches = ConcurrentHashMap.newKeySet();
+  private final Map<ComponentList.Item, String> boundRows = new WeakHashMap<>();
   private final Map<String, MessageRenderModel> renderModelCache =
       new LinkedHashMap<String, MessageRenderModel>(64, .75f, true) {
         @Override
@@ -212,6 +217,52 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     chatProfile = profile;
   }
 
+  void setScrolling(boolean value) { scrolling = value; }
+
+  /** Warms only three rows in the current scroll direction. */
+  void prefetchMediaAround(int firstVisible, int lastVisible, int direction, float availableWidth) {
+    if (messages.isEmpty() || firstVisible < 0 || lastVisible < 0) return;
+    // Include the visible range so rows that first appeared during a paused fling recover.
+    int start = direction < 0 ? Math.max(0, firstVisible - 3) : firstVisible;
+    int end = direction < 0 ? lastVisible : Math.min(messages.size() - 1, lastVisible + 3);
+    for (int position = start; position <= end; position++) {
+      MessageEntity message = messages.get(position);
+      MessageRenderModel model = renderModel(message);
+      if (!("image".equals(model.mediaType) || "video".equals(model.mediaType))) continue;
+      MessageMetrics measured = metrics(model, availableWidth);
+      boolean video = "video".equals(model.mediaType);
+      String source = model.attachmentSource;
+      float baseWidth = Boolean.TRUE.equals(mediaPortraits.get(source))
+          ? PORTRAIT_MEDIA_WIDTH_PX : video ? VIDEO_BUBBLE_WIDTH_PX : IMAGE_BUBBLE_WIDTH_PX;
+      float contentScale = measured.bubbleWidth / baseWidth;
+      int width = Math.max(64, Math.round(
+          measured.bubbleWidth - 2f * MEDIA_PADDING_PX * contentScale));
+      int height = Math.max(64, Math.round(measured.bubbleHeight - measured.forwardedHeight
+          - measured.replyHeight - 2f * MEDIA_PADDING_PX * contentScale));
+      String requestKey = source + '|' + video + '|' + width + 'x' + height;
+      MediaPreviewCache.Thumbnail cached =
+          MediaPreviewCache.memoryThumbnail(source, video, width, height);
+      if (cached != null) {
+        if (!scrolling && position >= firstVisible && position <= lastVisible) {
+          notifyItemChanged(position);
+        }
+        continue;
+      }
+      if (!mediaPrefetches.add(requestKey)) continue;
+      String messageId = messageKey(message, position);
+      MediaPreviewCache.loadThumbnail(context, source, video, width, height,
+          new MediaPreviewCache.Callback<MediaPreviewCache.Thumbnail>() {
+            @Override public void onSuccess(MediaPreviewCache.Thumbnail value) {
+              mediaPrefetches.remove(requestKey);
+              if (scrolling) return;
+              int current = indexOfMessage(messageId);
+              if (current >= 0) notifyItemChanged(current);
+            }
+            @Override public void onError() { mediaPrefetches.remove(requestKey); }
+          });
+    }
+  }
+
   void trackLocationRender(
       String clientMessageId,
       String traceId,
@@ -237,10 +288,29 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     if (nextPosition >= 0 && nextPosition != previousPosition) notifyItemChanged(nextPosition);
   }
 
-  boolean submit(List<MessageEntity> values) {
-    long submitStartedNanos = SystemClock.elapsedRealtimeNanos();
-    int oldCount = messages.size();
-    int insertedCount = 0, changedCount = 0, removedCount = 0, movedCount = 0;
+  static final class PreparedSubmission {
+    final List<MessageEntity> messages;
+    final Map<String, String> replySenders;
+    final Map<String, ReplyContent> replyContents;
+    final List<String> signatures;
+    final List<String> dateLabels;
+
+    PreparedSubmission(
+        List<MessageEntity> messages,
+        Map<String, String> replySenders,
+        Map<String, ReplyContent> replyContents,
+        List<String> signatures,
+        List<String> dateLabels) {
+      this.messages = messages;
+      this.replySenders = replySenders;
+      this.replyContents = replyContents;
+      this.signatures = signatures;
+      this.dateLabels = dateLabels;
+    }
+  }
+
+  /** Performs full-list formatting and signature generation without touching ComponentList. */
+  PreparedSubmission prepareSubmission(List<MessageEntity> values) {
     List<MessageEntity> nextMessages =
         values == null ? new ArrayList<>() : new ArrayList<>(values);
     Map<String, String> nextReplySenders = new HashMap<>();
@@ -271,6 +341,24 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
           + '\u0001' + String.valueOf(repliedSender)
           + '\u0001' + nextDateLabels.get(index));
     }
+    return new PreparedSubmission(
+        nextMessages, nextReplySenders, nextReplyContents, nextSignatures, nextDateLabels);
+  }
+
+  boolean submit(List<MessageEntity> values) {
+    return applyPreparedSubmission(prepareSubmission(values));
+  }
+
+  /** Applies prepared data and emits AAR list notifications; must run on the UI thread. */
+  boolean applyPreparedSubmission(PreparedSubmission prepared) {
+    long submitStartedNanos = SystemClock.elapsedRealtimeNanos();
+    int oldCount = messages.size();
+    int insertedCount = 0, changedCount = 0, removedCount = 0, movedCount = 0;
+    List<MessageEntity> nextMessages = prepared.messages;
+    Map<String, String> nextReplySenders = prepared.replySenders;
+    Map<String, ReplyContent> nextReplyContents = prepared.replyContents;
+    List<String> nextSignatures = prepared.signatures;
+    List<String> nextDateLabels = prepared.dateLabels;
     boolean changed = !presentationSignatures.equals(nextSignatures);
     replyContents.putAll(nextReplyContents);
     replySenders.putAll(nextReplySenders);
@@ -517,40 +605,8 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     row.add(new MessageNoticeComponent(
         scope.id("deleted_notice"), deletedMessageIcon, messageTypeface,
         NOTICE_TEXT_SIZE_PX));
-    row.add(
-        textBuilder(
-                scope.id("message"),
-                "",
-                new RectF(
-                    bodyLeft + MESSAGE_HORIZONTAL_PADDING_PX,
-                    MESSAGE_TOP_PADDING_PX,
-                    bodyRight - MESSAGE_HORIZONTAL_PADDING_PX,
-                    height - MESSAGE_BOTTOM_PADDING_PX),
-                MESSAGE_TEXT_SIZE_PX,
-                MESSAGE_TEXT_COLOR,
-                FontVariation.REGULAR)
-            .setLineSpacingPx(MESSAGE_LINE_SPACING_PX)
-            .setVerticalAlignment(Text.VerticalAlignment.TOP)
-            .setMaxLines(100));
-    row.add(
-        textBuilder(
-                scope.id("time"),
-                "",
-                new RectF(0f, 0f, 1f, 1f),
-                MESSAGE_TIME_SIZE_PX,
-                MESSAGE_TIME_COLOR,
-                FontVariation.REGULAR)
-            .setAlignment(Text.Alignment.END)
-            .setWrapEnabled(false)
-            .setMaxLines(1));
-    row.add(
-        new Image.Builder(
-                context, scope.id("delivery"), transparent, new RectF(0f, 0f, 1f, 1f))
-            .setScaleType(Image.ScaleType.FIT_XY));
-    row.add(
-        new Image.Builder(
-                context, scope.id("pinned"), messagePinnedIcon, new RectF(0f, 0f, 1f, 1f))
-            .setScaleType(Image.ScaleType.FIT_CENTER));
+    row.add(new PreparedMessageTextComponent(scope.id("message_text")));
+    row.add(new MessageMetadataComponent(scope.id("message_metadata")));
   }
 
   @Override
@@ -561,6 +617,24 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     float rowWidth = item.getScope().width();
     float rowHeight = item.getScope().height();
     String dateLabel = position >= 0 && position < dateLabels.size() ? dateLabels.get(position) : "";
+    String messageKey = messageKey(message, position);
+    // Native Text.setText is expensive. Re-keyed AAR holders can retain an unchanged message
+    // after insertions, so avoid rebinding every child when its complete visual state is stable.
+    if (!isMedia(message)) {
+      boolean audioRow = "audio".equals(model.mediaType);
+      String bindSignature = model.presentationSignature + '\u0001' + dateLabel + '\u0001'
+          + selectedMessageIds.contains(messageKey) + '\u0001'
+          + (audioRow && messageKey.equals(playingAudioMessageId)) + '\u0001'
+          + (audioRow ? playingAudioProgressMs : 0L) + '\u0001'
+          + Float.floatToIntBits(rowWidth) + '\u0001' + Float.floatToIntBits(rowHeight);
+      String previousSignature = boundRows.put(item, bindSignature);
+      if (bindSignature.equals(previousSignature)) {
+        if (profiler != null) profiler.rowReused(position, message.messageId);
+        return;
+      }
+    } else {
+      boundRows.remove(item);
+    }
     float dateOffset = dateLabel.isEmpty()
         ? 0f
         : DateNotifierComponent.blockHeight(
@@ -643,6 +717,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         messageClickListener == null ? null : () -> messageClickListener.onMessageClick(message),
         messageLongClickListener == null
             ? null : () -> messageLongClickListener.onMessageLongClick(message));
+    long setupFinishedNanos = SystemClock.elapsedRealtimeNanos();
     MediaPreviewComponent preview = item.find("media_preview", MediaPreviewComponent.class);
     if (media) {
       String source = mediaSource;
@@ -690,6 +765,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     } else {
       audioPreview.hide();
     }
+    long attachmentFinishedNanos = SystemClock.elapsedRealtimeNanos();
 
     MessageNoticeComponent forwardedNotice =
         item.find("forwarded_notice", MessageNoticeComponent.class);
@@ -718,6 +794,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     } else {
       replyPreview.hide();
     }
+    long replyFinishedNanos = SystemClock.elapsedRealtimeNanos();
 
     float messageTop = headingTop + metrics.forwardedHeight + metrics.replyHeight;
     CallPreviewComponent callPreview = item.find("call_preview", CallPreviewComponent.class);
@@ -747,10 +824,11 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
                 fullTextRight,
                 textLeft + metrics.renderedTextWidth + MESSAGE_TEXT_WIDTH_SAFETY_PX);
     float textBottom = messageTop + metrics.textHeight;
-    item.find("message", Text.class)
-        .setRegion(positiveRect(textLeft, messageTop, textRight, textBottom))
-        .setText(model.displayText)
-        .setVisible(!attachmentPreview && !model.deleted && !call);
+    boolean showMessageText = !attachmentPreview && !model.deleted && !call;
+    item.find("message_text", PreparedMessageTextComponent.class).bind(
+        positiveRect(textLeft, messageTop, textRight, textBottom),
+        metrics.messageLayout, showMessageText);
+    long textFinishedNanos = SystemClock.elapsedRealtimeNanos();
 
     float contentLeft = bodyLeft + MESSAGE_HORIZONTAL_PADDING_PX;
     float metadataRight = bodyRight - MESSAGE_META_RIGHT_PX;
@@ -764,20 +842,12 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         ? pinLeft - MESSAGE_PIN_GAP_PX
         : model.showDelivery
             ? tickLeft - MESSAGE_TIME_TICK_GAP_PX : metadataRight;
-    Text time = item.find("time", Text.class);
-    time.setRegion(positiveRect(contentLeft, bubbleTop, timeRight, bubbleBottom))
-        .setTextSizePx(MESSAGE_TIME_SIZE_PX)
-        .setText(model.formattedTime);
     float timeLeft = timeRight - metrics.timeWidth;
     float timeBottom = bubbleBottom
         - (attachmentPreview || call
             ? (MEDIA_PADDING_PX + 8f) * attachmentContentScale : MESSAGE_TIME_BOTTOM_PX);
-    time.setRegion(
-        positiveRect(
-            timeLeft - MESSAGE_TIME_RECT_EXTRA_PX,
-            timeBottom - metrics.timeHeight,
-            timeRight,
-            timeBottom));
+    RectF timeBounds = positiveRect(timeLeft - MESSAGE_TIME_RECT_EXTRA_PX,
+        timeBottom - metrics.timeHeight, timeRight, timeBottom);
     MessageNoticeComponent deletedNotice =
         item.find("deleted_notice", MessageNoticeComponent.class);
     if (model.deleted) {
@@ -788,29 +858,25 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     } else {
       deletedNotice.hide();
     }
-    item.find("delivery", Image.class)
-        .setBitmap(messageStatusIcon(message))
-        .setRegion(
-            positiveRect(
-                tickLeft,
-                bubbleBottom - MESSAGE_TICK_BOTTOM_PX * attachmentContentScale
-                    - MESSAGE_TICK_HEIGHT_PX,
-                tickRight,
-                bubbleBottom - MESSAGE_TICK_BOTTOM_PX * attachmentContentScale))
-        .setVisible(model.showDelivery);
-    item.find("pinned", Image.class)
-        .setBitmap(messagePinnedIcon)
-        .setRegion(
-            positiveRect(
-                pinLeft,
-                bubbleBottom - MESSAGE_TICK_BOTTOM_PX * attachmentContentScale
-                    - MESSAGE_TICK_HEIGHT_PX,
-                pinRight,
-                bubbleBottom - MESSAGE_TICK_BOTTOM_PX * attachmentContentScale))
-        .setVisible(model.pinned);
+    RectF deliveryBounds = positiveRect(tickLeft,
+        bubbleBottom - MESSAGE_TICK_BOTTOM_PX * attachmentContentScale - MESSAGE_TICK_HEIGHT_PX,
+        tickRight, bubbleBottom - MESSAGE_TICK_BOTTOM_PX * attachmentContentScale);
+    RectF pinnedBounds = positiveRect(pinLeft,
+        bubbleBottom - MESSAGE_TICK_BOTTOM_PX * attachmentContentScale - MESSAGE_TICK_HEIGHT_PX,
+        pinRight, bubbleBottom - MESSAGE_TICK_BOTTOM_PX * attachmentContentScale);
+    item.find("message_metadata", MessageMetadataComponent.class).bind(
+        timeBounds, metrics.timeLayout, messageStatusIcon(message), deliveryBounds,
+        model.showDelivery, messagePinnedIcon, pinnedBounds, model.pinned);
     if (profiler != null) {
+      long bindFinishedNanos = SystemClock.elapsedRealtimeNanos();
+      profiler.rowBindSections(position, message.messageId,
+          setupFinishedNanos - bindStartedNanos,
+          attachmentFinishedNanos - setupFinishedNanos,
+          replyFinishedNanos - attachmentFinishedNanos,
+          textFinishedNanos - replyFinishedNanos,
+          bindFinishedNanos - textFinishedNanos);
       profiler.rowBound(
-          SystemClock.elapsedRealtimeNanos() - bindStartedNanos,
+          bindFinishedNanos - bindStartedNanos,
           position,
           message.messageId);
     }
@@ -826,6 +892,8 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     }
     replySenders.clear();
     replyContents.clear();
+    mediaPrefetches.clear();
+    boundRows.clear();
     measurementTools.remove();
   }
 
@@ -880,6 +948,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
           callTimePaint.measureText(model.formattedTime) + MESSAGE_TIME_RECT_EXTRA_PX,
           (float) Math.ceil(timeFont.descent - timeFont.ascent),
           true);
+      callMetrics.timeLayout = timeLayout(model.formattedTime, callMetrics.timeWidth);
       synchronized (metricsCache) { metricsCache.put(cacheKey, callMetrics); }
       return callMetrics;
     }
@@ -934,6 +1003,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
               + MESSAGE_TIME_RECT_EXTRA_PX,
           (float) Math.ceil(timeFont.descent - timeFont.ascent),
           true);
+      mediaMetrics.timeLayout = timeLayout(model.formattedTime, mediaMetrics.timeWidth);
       synchronized (metricsCache) { metricsCache.put(cacheKey, mediaMetrics); }
       return mediaMetrics;
     }
@@ -968,6 +1038,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       MessageMetrics deletedMetrics = new MessageMetrics(
           bubbleWidth, bubbleHeight, noticeWidth, noticeHeight,
           0f, 0f, timeWidth, metadataHeight, false);
+      deletedMetrics.timeLayout = timeLayout(model.formattedTime, deletedMetrics.timeWidth);
       synchronized (metricsCache) { metricsCache.put(cacheKey, deletedMetrics); }
       return deletedMetrics;
     }
@@ -1065,6 +1136,8 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         timeWidth,
         metadataHeight,
         metadataInline);
+    result.messageLayout = layout;
+    result.timeLayout = timeLayout(model.formattedTime, result.timeWidth);
     synchronized (metricsCache) {
       metricsCache.put(cacheKey, result);
     }
@@ -1075,6 +1148,16 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
           Looper.myLooper() != Looper.getMainLooper());
     }
     return result;
+  }
+
+  private StaticLayout timeLayout(String value, float width) {
+    TextPaint paint = new TextPaint(measurementTools.get().timePaint);
+    return StaticLayout.Builder.obtain(value, 0, value.length(), paint,
+            Math.max(1, Math.round(width)))
+        .setIncludePad(false)
+        .setAlignment(Layout.Alignment.ALIGN_OPPOSITE)
+        .setMaxLines(1)
+        .build();
   }
 
   private MessageRenderModel renderModel(MessageEntity message) {
@@ -1635,6 +1718,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     MeasurementTools(Typeface typeface, float replyTextSize) {
       messagePaint.setTypeface(typeface);
       messagePaint.setTextSize(MESSAGE_TEXT_SIZE_PX);
+      messagePaint.setColor(MESSAGE_TEXT_COLOR);
       replyPaint.setTypeface(typeface);
       replyPaint.setTextSize(replyTextSize);
       replySenderPaint.setTypeface(
@@ -1656,6 +1740,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       noticePaint.setTextSize(NOTICE_TEXT_SIZE_PX);
       timePaint.setTypeface(typeface);
       timePaint.setTextSize(MESSAGE_TIME_SIZE_PX);
+      timePaint.setColor(MESSAGE_TIME_COLOR);
     }
   }
 

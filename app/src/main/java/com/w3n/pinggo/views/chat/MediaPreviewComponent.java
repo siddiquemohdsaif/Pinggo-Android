@@ -80,7 +80,7 @@ final class MediaPreviewComponent implements Component {
         duration = cached.duration;
         loading = false;
         notifyOrientation(cached);
-      } else {
+      } else if (!MediaPreviewCache.isDecodingPaused()) {
         loading = true;
         MAIN.post(animateSpinner);
         MediaPreviewCache.loadThumbnail(context, source, video, targetWidth, targetHeight,
@@ -103,6 +103,18 @@ final class MediaPreviewComponent implements Component {
                 invalidate();
               }
             });
+      } else {
+        // A scroll-aware prefetch will populate the cache and rebind this row after the fling.
+        loading = false;
+      }
+    }
+    if (bitmap == null && !loading) {
+      MediaPreviewCache.Thumbnail warmed = MediaPreviewCache.memoryThumbnail(
+          source, video, targetWidth, targetHeight);
+      if (warmed != null) {
+        bitmap = warmed.bitmap;
+        duration = warmed.duration;
+        notifyOrientation(warmed);
       }
     }
     invalidate();

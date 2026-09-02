@@ -21,6 +21,7 @@ import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /** Shared memory/disk media cache used by chat rows and full-screen preview activities. */
 public final class MediaPreviewCache {
@@ -50,11 +51,15 @@ public final class MediaPreviewCache {
 
   private static final Handler MAIN = new Handler(Looper.getMainLooper());
   private static final ExecutorService IO = Executors.newFixedThreadPool(3);
+  private static final ConcurrentLinkedQueue<Runnable> DEFERRED_DECODES =
+      new ConcurrentLinkedQueue<>();
+  private static volatile boolean decodingPaused;
   private static final ConcurrentHashMap<String, Object> LOCKS = new ConcurrentHashMap<>();
   private static final ConcurrentHashMap<String, Boolean> ORIENTATIONS =
       new ConcurrentHashMap<>();
-  private static final int MEMORY_KB = Math.max(8 * 1024,
-      (int) (Runtime.getRuntime().maxMemory() / 1024L / 8L));
+  // Keep chat thumbnails bounded independently of large application heap limits.
+  private static final int MEMORY_KB = Math.min(48 * 1024, Math.max(8 * 1024,
+      (int) (Runtime.getRuntime().maxMemory() / 1024L / 16L)));
   private static final LruCache<String, Thumbnail> MEMORY =
       new LruCache<String, Thumbnail>(MEMORY_KB) {
         @Override protected int sizeOf(String key, Thumbnail value) {
@@ -63,6 +68,30 @@ public final class MediaPreviewCache {
       };
 
   private MediaPreviewCache() { }
+
+  /** Defers new thumbnail decoding while a chat list is actively flinging. */
+  public static void setDecodingPaused(boolean paused) {
+    decodingPaused = paused;
+    if (paused) return;
+    Runnable task;
+    while ((task = DEFERRED_DECODES.poll()) != null) IO.execute(task);
+  }
+
+  public static boolean isDecodingPaused() { return decodingPaused; }
+
+  /** Lightweight counters for separating thumbnail memory from other native allocations. */
+  public static String diagnostics() {
+    return "thumbnailCacheKb=" + MEMORY.size()
+        + " thumbnailEntries=" + MEMORY.snapshot().size()
+        + " thumbnailEvictions=" + MEMORY.evictionCount()
+        + " deferredDecodes=" + DEFERRED_DECODES.size()
+        + " mediaLocks=" + LOCKS.size();
+  }
+
+  private static void executeDecode(Runnable task) {
+    if (decodingPaused) DEFERRED_DECODES.offer(task);
+    else IO.execute(task);
+  }
 
   public static Boolean cachedPortrait(String source, boolean video) {
     return ORIENTATIONS.get(orientationKey(source, video));
@@ -151,7 +180,7 @@ public final class MediaPreviewCache {
       return;
     }
     Context app = context.getApplicationContext();
-    IO.execute(() -> {
+    executeDecode(() -> {
       try {
         Uri local = resolveMediaBlocking(app, source, TYPE_IMAGE);
         Bitmap bitmap = decodeSampled(app, local, targetWidth, targetHeight);
@@ -181,7 +210,7 @@ public final class MediaPreviewCache {
       return;
     }
     Context app = context.getApplicationContext();
-    IO.execute(() -> {
+    executeDecode(() -> {
       try {
         Object lock = LOCKS.computeIfAbsent(memoryKey, ignored -> new Object());
         Thumbnail result;
@@ -189,6 +218,7 @@ public final class MediaPreviewCache {
           result = MEMORY.get(memoryKey);
           if (result == null) {
             result = createOrReadThumbnail(app, source, video, width, height);
+            result.bitmap.prepareToDraw();
             MEMORY.put(memoryKey, result);
           }
         }
@@ -260,10 +290,18 @@ public final class MediaPreviewCache {
           sourceHeight = swap;
         }
         Bitmap frame;
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
           try {
-            frame = retriever.getFrameAtIndex(0);
-          } catch (RuntimeException unsupportedFrameIndex) {
+            float requestedScale = sourceWidth > 0 && sourceHeight > 0
+                ? Math.min(width / (float) sourceWidth, height / (float) sourceHeight) : 1f;
+            int decodedWidth = sourceWidth > 0
+                ? Math.max(1, Math.round(sourceWidth * Math.min(1f, requestedScale))) : width;
+            int decodedHeight = sourceHeight > 0
+                ? Math.max(1, Math.round(sourceHeight * Math.min(1f, requestedScale))) : height;
+            frame = retriever.getScaledFrameAtTime(
+                0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                decodedWidth, decodedHeight);
+          } catch (RuntimeException unsupportedScaledFrame) {
             frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST);
           }
         } else {
@@ -284,9 +322,11 @@ public final class MediaPreviewCache {
         retriever.release();
       }
     } else {
-      bitmap = decodeSampled(context, local, width, height);
-      if (bitmap == null) throw new IllegalStateException();
-      portrait = bitmap.getHeight() > bitmap.getWidth();
+      Bitmap decoded = decodeSampled(context, local, width, height);
+      if (decoded == null) throw new IllegalStateException();
+      portrait = decoded.getHeight() > decoded.getWidth();
+      bitmap = scaleDown(decoded, width, height);
+      if (bitmap != decoded) decoded.recycle();
     }
     try (FileOutputStream output = new FileOutputStream(thumbnailFile)) {
       bitmap.compress(Bitmap.CompressFormat.JPEG, 88, output);
@@ -354,7 +394,11 @@ public final class MediaPreviewCache {
     options.inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, width, height);
     options.inPreferredConfig = Bitmap.Config.ARGB_8888;
     try (InputStream input = context.getContentResolver().openInputStream(uri)) {
-      return BitmapFactory.decodeStream(input, null, options);
+      Bitmap decoded = BitmapFactory.decodeStream(input, null, options);
+      if (decoded == null) return null;
+      Bitmap result = scaleDown(decoded, width, height);
+      if (result != decoded) decoded.recycle();
+      return result;
     }
   }
 
@@ -365,7 +409,11 @@ public final class MediaPreviewCache {
     BitmapFactory.Options options = new BitmapFactory.Options();
     options.inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, width, height);
     options.inPreferredConfig = Bitmap.Config.ARGB_8888;
-    return BitmapFactory.decodeFile(file.getAbsolutePath(), options);
+    Bitmap decoded = BitmapFactory.decodeFile(file.getAbsolutePath(), options);
+    if (decoded == null) return null;
+    Bitmap result = scaleDown(decoded, width, height);
+    if (result != decoded) decoded.recycle();
+    return result;
   }
 
   private static int sampleSize(int sourceWidth, int sourceHeight, int width, int height) {

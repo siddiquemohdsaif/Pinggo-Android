@@ -8,6 +8,7 @@ import android.os.SystemClock;
 import android.util.Log;
 import android.view.FrameMetrics;
 import android.view.Window;
+import com.w3n.pinggo.data.cache.MediaPreviewCache;
 import java.util.Locale;
 
 /** Low-overhead timing and frame profiler for a single chat screen session. */
@@ -34,6 +35,12 @@ public final class ChatPerformanceProfiler {
   private long scrollBindCount;
   private double scrollBindTotalMs;
   private double scrollMaxBindMs;
+  private long scrollReusedRows;
+  private double scrollSetupMs;
+  private double scrollAttachmentMs;
+  private double scrollReplyMs;
+  private double scrollTextMs;
+  private double scrollMetadataMs;
   private int scrollFirstPosition = -1;
   private int scrollLastPosition = -1;
   private int scrollItemCount;
@@ -140,6 +147,32 @@ public final class ChatPerformanceProfiler {
             + " messageId=" + safe(messageId));
   }
 
+  public synchronized void rowBindSections(int position, String messageId, long setupNanos,
+      long attachmentNanos, long replyNanos, long textNanos, long metadataNanos) {
+    long total = setupNanos + attachmentNanos + replyNanos + textNanos + metadataNanos;
+    if (scrolling) {
+      scrollSetupMs += nanosToMs(setupNanos);
+      scrollAttachmentMs += nanosToMs(attachmentNanos);
+      scrollReplyMs += nanosToMs(replyNanos);
+      scrollTextMs += nanosToMs(textNanos);
+      scrollMetadataMs += nanosToMs(metadataNanos);
+      if (total < 30_000_000L) return;
+    } else if (total < 16_000_000L) return;
+    log("bind_sections",
+        "totalMs=" + ms(total)
+            + " setupMs=" + ms(setupNanos)
+            + " attachmentMs=" + ms(attachmentNanos)
+            + " replyMs=" + ms(replyNanos)
+            + " textMs=" + ms(textNanos)
+            + " metadataMs=" + ms(metadataNanos)
+            + " position=" + position
+            + " messageId=" + safe(messageId));
+  }
+
+  public synchronized void rowReused(int position, String messageId) {
+    if (scrolling) scrollReusedRows++;
+  }
+
   public void operation(String name, long startedNanos, String fields) {
     logDuration(name, startedNanos, fields);
   }
@@ -155,6 +188,9 @@ public final class ChatPerformanceProfiler {
     scrollBindCount = 0;
     scrollBindTotalMs = 0.0;
     scrollMaxBindMs = 0.0;
+    scrollReusedRows = 0;
+    scrollSetupMs = scrollAttachmentMs = scrollReplyMs = 0.0;
+    scrollTextMs = scrollMetadataMs = 0.0;
     scrollFirstPosition = firstVisible;
     scrollLastPosition = lastVisible;
     scrollItemCount = itemCount;
@@ -184,6 +220,12 @@ public final class ChatPerformanceProfiler {
             + " binds=" + scrollBindCount
             + " bindTotalMs=" + fmt(scrollBindTotalMs)
             + " maxBindMs=" + fmt(scrollMaxBindMs)
+            + " reusedRows=" + scrollReusedRows
+            + " setupTotalMs=" + fmt(scrollSetupMs)
+            + " attachmentTotalMs=" + fmt(scrollAttachmentMs)
+            + " replyTotalMs=" + fmt(scrollReplyMs)
+            + " textTotalMs=" + fmt(scrollTextMs)
+            + " metadataTotalMs=" + fmt(scrollMetadataMs)
             + " visible=" + scrollFirstPosition + "-" + scrollLastPosition
             + " count=" + scrollItemCount
             + " " + memoryFields());
@@ -246,7 +288,8 @@ public final class ChatPerformanceProfiler {
     Runtime runtime = Runtime.getRuntime();
     long javaUsed = runtime.totalMemory() - runtime.freeMemory();
     return "javaHeapMb=" + (javaUsed / (1024L * 1024L))
-        + " nativeHeapMb=" + (Debug.getNativeHeapAllocatedSize() / (1024L * 1024L));
+        + " nativeHeapMb=" + (Debug.getNativeHeapAllocatedSize() / (1024L * 1024L))
+        + " " + MediaPreviewCache.diagnostics();
   }
 
   private static String safe(String value) {

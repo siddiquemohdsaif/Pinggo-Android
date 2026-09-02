@@ -1,5 +1,7 @@
 package com.w3n.pinggo.views.chat;
 
+import android.text.StaticLayout;
+
 /** Internal value objects shared by chat-message measurement, caching, and binding. */
 final class ChatMessageAdapterModels {
   private ChatMessageAdapterModels() {}
@@ -105,6 +107,8 @@ final class ChatMessageAdapterModels {
     final float timeWidth;
     final float timeHeight;
     final boolean metadataInline;
+    StaticLayout messageLayout;
+    StaticLayout timeLayout;
 
     MessageMetrics(
         float bubbleWidth,

@@ -575,17 +575,22 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     updateOlderMessagesState();
     messagePreparationExecutor.execute(() -> {
       long preparationStartedNanos = SystemClock.elapsedRealtimeNanos();
-      view.prepareMessageMetrics(messagesToPrepare, availableWidth);
+      ChatView.PreparedMessages prepared = view.prepareMessages(messagesToPrepare, availableWidth);
       profiler.operation(
           "prepare_visible",
           preparationStartedNanos,
           "count=" + messagesToPrepare.size());
       typingHandler.post(() -> {
-        if (chatView == null || generation != messagePreparationGeneration) return;
-        messagePreparationRunning = false;
-        submitPreparedMessages(messagesToPrepare, phase);
-        updateOlderMessagesState();
-        scheduleProgressiveRender();
+        ChatView currentView = chatView;
+        if (currentView == null || generation != messagePreparationGeneration) return;
+        Runnable applyPrepared = () -> {
+          if (chatView == null || generation != messagePreparationGeneration) return;
+          messagePreparationRunning = false;
+          submitPreparedMessages(messagesToPrepare, phase, prepared);
+          updateOlderMessagesState();
+          scheduleProgressiveRender();
+        };
+        if (!currentView.deferUntilMessageScrollIdle(applyPrepared)) applyPrepared.run();
       });
     });
   }
@@ -603,10 +608,19 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void submitPreparedMessages(List<MessageEntity> preparedMessages, String phase) {
+    submitPreparedMessages(preparedMessages, phase, null);
+  }
+
+  private void submitPreparedMessages(
+      List<MessageEntity> preparedMessages,
+      String phase,
+      ChatView.PreparedMessages backgroundPreparation) {
     long operationStartedNanos = SystemClock.elapsedRealtimeNanos();
     latestMessages = preparedMessages;
     long renderStarted = System.nanoTime();
-    boolean changed = chatView.submitMessages(latestMessages);
+    boolean changed = backgroundPreparation == null
+        ? chatView.submitMessages(latestMessages)
+        : chatView.submitPreparedMessages(backgroundPreparation);
     profiler.contentSubmitted(latestMessages.size());
     long renderDurationMs = (System.nanoTime() - renderStarted) / 1_000_000L;
     Log.d(TESTING_TAG, "message_list source=render phase=" + phase + "_complete chatId="
@@ -634,8 +648,11 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         snapshot.size(), renderedMessageCount + PROGRESSIVE_RENDER_INCREMENT);
     int firstToPrepare = Math.max(0, snapshot.size() - targetRenderedCount);
     int preparedEnd = Math.max(firstToPrepare, snapshot.size() - renderedMessageCount);
-    List<MessageEntity> preparationChunk = new ArrayList<>(
-        snapshot.subList(firstToPrepare, preparedEnd));
+    List<MessageEntity> targetMessages = new ArrayList<>();
+    for (int index = 0; index < snapshot.size(); index++) {
+      MessageEntity message = snapshot.get(index);
+      if (index >= firstToPrepare || message.pinned) targetMessages.add(message);
+    }
     float availableWidth = chatView.getMessageLayoutWidth();
     messagePreparationRunning = true;
     updateOlderMessagesState();
@@ -643,19 +660,26 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       long preparationStartedNanos = SystemClock.elapsedRealtimeNanos();
       ChatView view = chatView;
       if (view == null) return;
-      view.prepareMessageMetrics(preparationChunk, availableWidth);
+      ChatView.PreparedMessages prepared =
+          view.prepareMessages(targetMessages, availableWidth);
       profiler.operation(
           "prepare_chunk",
           preparationStartedNanos,
-          "count=" + preparationChunk.size() + " targetRendered=" + targetRenderedCount);
+          "count=" + (preparedEnd - firstToPrepare)
+              + " targetRendered=" + targetRenderedCount);
       typingHandler.post(() -> {
-        if (chatView == null || generation != messagePreparationGeneration) return;
-        availableMessages = snapshot;
-        renderedMessageCount = targetRenderedCount;
-        messagePreparationRunning = renderedMessageCount < snapshot.size();
-        renderAvailableMessages("background");
-        updateOlderMessagesState();
-        if (messagePreparationRunning) scheduleProgressiveRender();
+        ChatView currentView = chatView;
+        if (currentView == null || generation != messagePreparationGeneration) return;
+        Runnable applyPrepared = () -> {
+          if (chatView == null || generation != messagePreparationGeneration) return;
+          availableMessages = snapshot;
+          renderedMessageCount = targetRenderedCount;
+          messagePreparationRunning = renderedMessageCount < snapshot.size();
+          submitPreparedMessages(targetMessages, "background", prepared);
+          updateOlderMessagesState();
+          if (messagePreparationRunning) scheduleProgressiveRender();
+        };
+        if (!currentView.deferUntilMessageScrollIdle(applyPrepared)) applyPrepared.run();
       });
     });
   }
@@ -1531,13 +1555,22 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       return;
     }
     String type = message.messageType == null ? "text" : message.messageType;
+    if ("audio".equals(type)) {
+      // Voice messages are owned by the in-chat player. Never let their row click fall
+      // through to the generic attachment chooser.
+      String audioMessageId = message.messageId;
+      if (audioMessageId == null || audioMessageId.trim().isEmpty()) {
+        audioMessageId = message.clientMessageId;
+      }
+      onAudioPlaybackToggle(audioMessageId);
+      return;
+    }
     if ("location".equals(type) && message.latitude != null && message.longitude != null) {
       String coordinates = message.latitude + "," + message.longitude;
       openLocationChooser(coordinates);
       return;
     }
-    if (!("image".equals(type) || "video".equals(type)
-        || "audio".equals(type) || "file".equals(type))) return;
+    if (!("image".equals(type) || "video".equals(type) || "file".equals(type))) return;
     String fileMediaType = "file".equals(type) ? attachmentMediaType(message) : null;
     if ("image".equals(type) || "video".equals(type) || fileMediaType != null) {
       String previewType = fileMediaType == null ? type : fileMediaType;

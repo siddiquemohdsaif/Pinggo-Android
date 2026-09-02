@@ -31,6 +31,7 @@ import com.ogfa.nativeviews.textfield.TextField;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.R;
+import com.w3n.pinggo.data.cache.MediaPreviewCache;
 import com.w3n.pinggo.data.local.MessageEntity;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.res.ResourcesCompat;
@@ -40,6 +41,14 @@ import java.util.Locale;
 
 /** AAR-native conversation screen and message composer. */
 public final class ChatView extends View {
+  /** Opaque full-list render data prepared away from the UI thread. */
+  public static final class PreparedMessages {
+    private final ChatMessageAdapter.PreparedSubmission submission;
+
+    private PreparedMessages(ChatMessageAdapter.PreparedSubmission submission) {
+      this.submission = submission;
+    }
+  }
   private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
       new com.ogfa.nativeviews.component.FigmaConfig(1080f);
   private static final int PRIMARY = 0xFF000E1A, SECONDARY = 0xFF687382, ACCENT = 0xFF019CC4;
@@ -130,7 +139,27 @@ public final class ChatView extends View {
   private boolean profileScrollCandidate;
   private boolean profileScrollStarted;
   private float profileGestureStartY;
+  private int lastPrefetchFirst = -1;
+  private boolean messageScrollActive;
+  private float lastIdleProbeOffset;
+  private int stableIdleProbes;
+  private long idleProbeDeadlineMs;
+  private Runnable pendingScrollIdleAction;
   private final Runnable finishScrollProfile = this::finishScrollProfile;
+  private final Runnable probeScrollIdle = new Runnable() {
+    @Override public void run() {
+      if (!messageScrollActive || list == null) return;
+      float offset = list.getScrollOffset();
+      if (Math.abs(offset - lastIdleProbeOffset) < .5f) stableIdleProbes++;
+      else stableIdleProbes = 0;
+      lastIdleProbeOffset = offset;
+      if (stableIdleProbes >= 2 || SystemClock.uptimeMillis() >= idleProbeDeadlineMs) {
+        finishScrollProfile();
+      } else {
+        postDelayed(this, 32L);
+      }
+    }
+  };
 
   public ChatView(
       Context c,
@@ -226,6 +255,11 @@ public final class ChatView extends View {
   }
 
   public boolean submitMessages(List<MessageEntity> values) {
+    return submitMessagesInternal(values, null);
+  }
+
+  private boolean submitMessagesInternal(
+      List<MessageEntity> values, ChatMessageAdapter.PreparedSubmission prepared) {
     int oldCount = adapter.getItemCount();
     int firstVisible = list == null ? -1 : list.getFirstVisiblePosition();
     int lastVisible = list == null ? -1 : list.getLastVisiblePosition();
@@ -238,7 +272,8 @@ public final class ChatView extends View {
     String oldFirstId = adapter.messageIdAt(0);
     String oldLastId = adapter.messageIdAt(oldCount - 1);
     boolean wasNearBottom = oldCount == 0 || lastVisible >= oldCount - 2;
-    boolean changed = adapter.submit(values);
+    boolean changed = prepared == null
+        ? adapter.submit(values) : adapter.applyPreparedSubmission(prepared);
     boolean selectionChanged = selection.retainLoaded(adapter);
     if (selectionChanged) refreshMessageSelectionHeader();
     boolean empty = adapter.getItemCount() == 0;
@@ -289,12 +324,23 @@ public final class ChatView extends View {
         }
       }
     }
+    if (list != null && !MediaPreviewCache.isDecodingPaused()) {
+      adapter.prefetchMediaAround(
+          list.getFirstVisiblePosition(), list.getLastVisiblePosition(), 1, availableWidth);
+    }
     invalidate();
     return changed;
   }
 
   public float getMessageLayoutWidth() {
     return Math.max(1f, getWidth() - px(66f));
+  }
+
+  /** Keeps only the newest prepared update and applies it as soon as list motion becomes idle. */
+  public boolean deferUntilMessageScrollIdle(Runnable action) {
+    if (!messageScrollActive || action == null) return false;
+    pendingScrollIdleAction = action;
+    return true;
   }
 
   /** Keeps the composer workflow anchored to the newest message. */
@@ -337,6 +383,22 @@ public final class ChatView extends View {
 
   public void prepareMessageMetrics(List<MessageEntity> values, float availableWidth) {
     adapter.prepareMetrics(values, availableWidth);
+  }
+
+  /** Builds render models, dates, signatures, and row metrics without mutating the AAR list. */
+  public PreparedMessages prepareMessages(List<MessageEntity> values, float availableWidth) {
+    adapter.prepareMetrics(values, availableWidth);
+    return new PreparedMessages(adapter.prepareSubmission(values));
+  }
+
+  /** Applies an off-thread preparation result. Call only from the main thread. */
+  public boolean submitPreparedMessages(PreparedMessages prepared) {
+    if (prepared == null) return false;
+    return submitMessages(prepared.submission);
+  }
+
+  private boolean submitMessages(ChatMessageAdapter.PreparedSubmission prepared) {
+    return submitMessagesInternal(null, prepared);
   }
 
   public void indexReplyTargets(List<MessageEntity> values) {
@@ -1218,8 +1280,15 @@ public final class ChatView extends View {
       olderLoadRequestedForGesture = false;
       profileGestureStartY = e.getY();
       profileScrollCandidate = list != null && list.getBounds().contains(e.getX(), e.getY());
+      if (list != null) {
+        lastPrefetchFirst = list.getFirstVisiblePosition();
+        int last = list.getLastVisiblePosition();
+        adapter.prefetchMediaAround(lastPrefetchFirst, last, -1, getMessageLayoutWidth());
+        adapter.prefetchMediaAround(lastPrefetchFirst, last, 1, getMessageLayoutWidth());
+      }
       profileScrollStarted = false;
       removeCallbacks(finishScrollProfile);
+      removeCallbacks(probeScrollIdle);
     } else if (e.getActionMasked() == MotionEvent.ACTION_MOVE
         && !loadingGestureBlocked && shouldShowOlderLoading()
         && e.getY() - loadingGestureStartY
@@ -1238,11 +1307,19 @@ public final class ChatView extends View {
             list.getFirstVisiblePosition(), list.getLastVisiblePosition(), adapter.getItemCount());
       }
       profileScrollStarted = true;
+      messageScrollActive = true;
+      adapter.setScrolling(true);
+      MediaPreviewCache.setDecodingPaused(true);
       removeCallbacks(finishScrollProfile);
+      removeCallbacks(probeScrollIdle);
     } else if ((e.getActionMasked() == MotionEvent.ACTION_UP
         || e.getActionMasked() == MotionEvent.ACTION_CANCEL) && profileScrollStarted) {
       removeCallbacks(finishScrollProfile);
-      postDelayed(finishScrollProfile, 1500L);
+      removeCallbacks(probeScrollIdle);
+      lastIdleProbeOffset = list == null ? 0f : list.getScrollOffset();
+      stableIdleProbes = 0;
+      idleProbeDeadlineMs = SystemClock.uptimeMillis() + 350L;
+      postDelayed(probeScrollIdle, 32L);
       profileScrollCandidate = false;
       profileScrollStarted = false;
     }
@@ -1268,9 +1345,21 @@ public final class ChatView extends View {
   }
 
   private void finishScrollProfile() {
-    if (profiler == null || list == null) return;
-    profiler.scrollEnd(
-        list.getFirstVisiblePosition(), list.getLastVisiblePosition(), adapter.getItemCount());
+    if (!messageScrollActive && pendingScrollIdleAction == null) return;
+    messageScrollActive = false;
+    removeCallbacks(probeScrollIdle);
+    adapter.setScrolling(false);
+    MediaPreviewCache.setDecodingPaused(false);
+    if (list == null) return;
+    int first = list.getFirstVisiblePosition();
+    int last = list.getLastVisiblePosition();
+    int direction = lastPrefetchFirst < 0 || first >= lastPrefetchFirst ? 1 : -1;
+    lastPrefetchFirst = first;
+    adapter.prefetchMediaAround(first, last, direction, getMessageLayoutWidth());
+    if (profiler != null) profiler.scrollEnd(first, last, adapter.getItemCount());
+    Runnable pending = pendingScrollIdleAction;
+    pendingScrollIdleAction = null;
+    if (pending != null) pending.run();
   }
 
   @Override
@@ -1291,7 +1380,9 @@ public final class ChatView extends View {
 
   public void release() {
     removeCallbacks(finishScrollProfile);
+    removeCallbacks(probeScrollIdle);
     finishScrollProfile();
+    MediaPreviewCache.setDecodingPaused(false);
     layers.release();
     adapter.release();
     recycle(
