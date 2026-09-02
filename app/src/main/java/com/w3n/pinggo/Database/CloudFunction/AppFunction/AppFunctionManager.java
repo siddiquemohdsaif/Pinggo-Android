@@ -151,6 +151,22 @@ public class AppFunctionManager {
         appApi, phoneNumber, chatIds, setting, value, callback);
   }
 
+  public void clearChat(String phoneNumber, String chatId, Callback callback) {
+    ChatHandler.clearChat(appApi, phoneNumber, chatId, callback);
+  }
+
+  public void reportChat(String phoneNumber, String chatId, String reason, Callback callback) {
+    ChatHandler.reportChat(appApi, phoneNumber, chatId, reason, callback);
+  }
+
+  public void updateBlock(String phoneNumber, String chatId, boolean blocked, Callback callback) {
+    ChatHandler.updateBlock(appApi, phoneNumber, chatId, blocked, callback);
+  }
+
+  public void getBlockStatus(String phoneNumber, String chatId, Callback callback) {
+    ChatHandler.getBlockStatus(appApi, phoneNumber, chatId, callback);
+  }
+
   public void syncPresence(List<String> userIds, Callback callback) {
     ChatHandler.syncPresence(appApi, userIds, callback);
   }

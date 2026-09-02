@@ -31,6 +31,7 @@ public final class NativePromptDialogView extends View {
   private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
       new com.ogfa.nativeviews.component.FigmaConfig(1080f);
   public interface InputHandler { boolean onSubmit(String value); }
+  public interface InputChangedHandler { void onChanged(String value); }
   public interface ActionHandler { void onAction(int index); }
 
   private enum Mode { MESSAGE, INPUT, ACTIONS }
@@ -46,6 +47,7 @@ public final class NativePromptDialogView extends View {
   private final int inputType;
   private final List<String> actions;
   private final InputHandler inputHandler;
+  private final InputChangedHandler inputChangedHandler;
   private final ActionHandler actionHandler;
   private final Runnable dismissHandler;
   private Dialog dialog;
@@ -54,7 +56,7 @@ public final class NativePromptDialogView extends View {
 
   private NativePromptDialogView(Context context, Mode mode, String title, String message,
       String initialValue, int inputType, List<String> actions, InputHandler inputHandler,
-      ActionHandler actionHandler, Runnable dismissHandler) {
+      InputChangedHandler inputChangedHandler, ActionHandler actionHandler, Runnable dismissHandler) {
     super(context);
     this.mode = mode;
     this.title = title == null ? "" : title;
@@ -63,6 +65,7 @@ public final class NativePromptDialogView extends View {
     this.inputType = inputType;
     this.actions = actions;
     this.inputHandler = inputHandler;
+    this.inputChangedHandler = inputChangedHandler;
     this.actionHandler = actionHandler;
     this.dismissHandler = dismissHandler;
     setClickable(true);
@@ -73,19 +76,25 @@ public final class NativePromptDialogView extends View {
   public static NativePromptDialogView message(Context context, String title, String message,
       Runnable onDismiss) {
     return new NativePromptDialogView(context, Mode.MESSAGE, title, message, "", 0,
-        null, null, null, onDismiss);
+        null, null, null, null, onDismiss);
   }
 
   public static NativePromptDialogView input(Context context, String title, String initialValue,
       int inputType, InputHandler handler, Runnable onDismiss) {
     return new NativePromptDialogView(context, Mode.INPUT, title, "", initialValue, inputType,
-        null, handler, null, onDismiss);
+        null, handler, null, null, onDismiss);
+  }
+
+  public static NativePromptDialogView input(Context context, String title, String initialValue,
+      int inputType, InputChangedHandler changedHandler, InputHandler handler, Runnable onDismiss) {
+    return new NativePromptDialogView(context, Mode.INPUT, title, "", initialValue, inputType,
+        null, handler, changedHandler, null, onDismiss);
   }
 
   public static NativePromptDialogView actions(Context context, List<String> actions,
       ActionHandler handler, Runnable onDismiss) {
     return new NativePromptDialogView(context, Mode.ACTIONS, "", "", "", 0,
-        actions, null, handler, onDismiss);
+        actions, null, null, handler, onDismiss);
   }
 
   @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
@@ -137,6 +146,9 @@ public final class NativePromptDialogView extends View {
           scope.rect(px(60.5f), px(214.5f), width - px(121f), px(159.5f)))
           .setFont(NativeFonts.INTER).setFontVariations(FontVariation.REGULAR)
           .setText(initialValue).setInputType(inputType)
+          .setOnTextChangedListener((id, value) -> {
+            if (inputChangedHandler != null) inputChangedHandler.onChanged(value);
+          })
           .setTextSizePx(px(46.75f)).setTextColor(0xFF000E1A).setHintColor(0xFF7A8792)
           .setBackgroundColor(0xFFF7FAFC, Color.WHITE)
           .setStrokeColor(0xFFD5DEE7, 0xFF019CC4)

@@ -73,6 +73,21 @@ public interface AppRestAPI {
   @POST("chats/settings/bulk")
   Call<JsonObject> updateChatSettingsBulk(@Body RequestBody body);
 
+  @POST("chats/clear")
+  Call<JsonObject> clearChat(@Body RequestBody body);
+
+  @POST("chats/report")
+  Call<JsonObject> reportChat(@Body RequestBody body);
+
+  @POST("chats/block")
+  Call<JsonObject> blockChat(@Body RequestBody body);
+
+  @POST("chats/unblock")
+  Call<JsonObject> unblockChat(@Body RequestBody body);
+
+  @POST("chats/block-status")
+  Call<JsonObject> getBlockStatus(@Body RequestBody body);
+
   @POST("profile/presence")
   Call<JsonObject> syncPresence(@Body RequestBody body);
 

@@ -28,6 +28,8 @@ public interface ChatViewListener {
   void onMessageSelectionChanged(boolean selected);
   void onLoadOlderMessages();
   void onReplyTargetRequested(String messageId);
+  void onBlockedDeleteChat();
+  void onBlockedUnblock();
 
   /** 0 = locally available, 1 = needs download, 2 = downloading. */
   int attachmentState(MessageEntity message);

@@ -1139,7 +1139,7 @@ public final class ChatsView extends View {
                     ? ChatProfilePhotoStore.getLocalPath(getContext(), entity.otherUserId)
                     : entity.localProfilePhotoPath;
             chats.add(new Chat(entity.chatId, name, entity.profilePhotoUrl, path,
-                    entity.lastMessage, entity.lastMessageTime,
+                    homeMessagePreview(entity), entity.lastMessageTime,
                     normalizeId(entity.lastMessageSenderId).equals(currentPhoneNumber()),
                     entity.lastMessageDeliveredTime, entity.lastMessageReadTime,
                     entity.lastMessageStatus,
@@ -1149,6 +1149,25 @@ public final class ChatsView extends View {
                     entity.isOnline, entity.lastSeen));
         }
         return chats;
+    }
+
+    private String homeMessagePreview(ChatEntity entity) {
+        String text = entity.lastMessage;
+        if (text == null) return null;
+        String type = entity.lastMessageType == null ? "" : entity.lastMessageType;
+        String action = "chat_report".equalsIgnoreCase(type) ? "reported"
+                : "chat_block".equalsIgnoreCase(type) ? "blocked"
+                : "chat_unblock".equalsIgnoreCase(type) ? "unblocked" : "";
+        if (action.isEmpty()) return text;
+        String ownNumber = currentPhoneNumber();
+        String normalizedText = text.trim();
+        String[] participants = normalizedText.split(" " + action + " ", 2);
+        if (!ownNumber.isEmpty() && participants.length == 2) return
+                (ownNumber.equals(normalizeId(participants[0])) ? "You" : participants[0])
+                        + " " + action + " "
+                        + (ownNumber.equals(normalizeId(participants[1]))
+                        ? "You" : participants[1]);
+        return normalizedText;
     }
 
     private String currentPhoneNumber() {

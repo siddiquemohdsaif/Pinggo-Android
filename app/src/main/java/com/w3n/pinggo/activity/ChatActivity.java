@@ -22,7 +22,10 @@ import android.os.Looper;
 import android.os.Environment;
 import android.os.SystemClock;
 import android.provider.OpenableColumns;
+import android.provider.ContactsContract;
 import android.provider.Settings;
+import android.telephony.PhoneNumberUtils;
+import android.text.InputType;
 import android.util.Log;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
@@ -38,6 +41,7 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.lifecycle.LiveData;
+import com.google.gson.JsonObject;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.local.PresenceEntity;
@@ -49,6 +53,8 @@ import com.w3n.pinggo.views.chat.ChatPerformanceProfiler;
 import com.w3n.pinggo.views.chat.ConversationMenuDialogView;
 import com.w3n.pinggo.call.ActiveCallRegistry;
 import com.w3n.pinggo.views.common.NativePromptDialogView;
+import com.w3n.pinggo.views.common.BlockingProgressView;
+import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import java.text.DateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -153,15 +159,29 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
               Toast.LENGTH_LONG).show();
         }
       });
+  private final ActivityResultLauncher<String> contactsPermission =
+      registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
+        if (granted) refreshContactState(true);
+        else {
+          addContactAfterLookup = false;
+          Toast.makeText(this, "Contacts permission is required.", Toast.LENGTH_SHORT).show();
+        }
+      });
+  private final ActivityResultLauncher<Intent> contactInsert =
+      registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result ->
+          refreshContactState(false));
   private final Set<String> pendingSeen = new HashSet<>();
   private final Map<String, Integer> attachmentStates = new ConcurrentHashMap<>();
   private final ExecutorService messagePreparationExecutor =
       Executors.newSingleThreadExecutor();
+  private final ExecutorService contactLookupExecutor = Executors.newSingleThreadExecutor();
   private ChatPerformanceProfiler profiler;
   private ChatRepository repository;
   private NativePromptDialogView promptDialog;
   private ConversationMenuDialogView conversationMenuDialog;
+  private BlockingProgressView menuProgress;
   private String chatId, currentUser, receiverId, replyingId, editingId;
+  private String chatName;
   private String profilePhotoPath;
   private boolean typingStarted, peerTyping, locationPending, attachmentSending;
   private MediaRecorder audioRecorder;
@@ -230,6 +250,18 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private int localExpansionPreviousCount;
   private String localExpansionPreviousOldestId;
   private String nextMessageCursor;
+  private long messagePageRequestGeneration;
+  private String inFlightMessageCursor;
+  private int consecutiveMessagePagesWithoutUniqueRows;
+  private String oldestSynchronizedMessageId;
+  private long lastSuccessfulPaginationAt;
+  private boolean searchLoadingAll;
+  private boolean searchActive;
+  private boolean notificationsMuted;
+  private boolean contactBlocked;
+  private boolean contactExists;
+  private boolean addContactAfterLookup;
+  private int contactLookupGeneration;
   private final Runnable refreshTyping = new Runnable() {
     @Override public void run() {
       if (!typingStarted || repository == null || receiverId.isEmpty()) return;
@@ -269,7 +301,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     EdgeToEdge.enable(this);
     String name = getIntent().getStringExtra(EXTRA_CHAT_NAME);
     if (name == null || name.trim().isEmpty()) name = "Chat";
+    chatName = name;
     chatId = getIntent().getStringExtra(EXTRA_CHAT_ID);
+    contactBlocked = getSharedPreferences("chat_menu_state", MODE_PRIVATE)
+        .getBoolean("blocked:" + String.valueOf(chatId), false);
     profiler = new ChatPerformanceProfiler(
         chatId, getIntent().getLongExtra(EXTRA_OPEN_REQUEST_NANOS, createStartedNanos));
     profiler.attach(getWindow());
@@ -289,9 +324,17 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     conversationMenuDialog =
         new ConversationMenuDialogView(
             this,
-            option -> { });
+            this::handleConversationMenuOption);
+    conversationMenuDialog.setBlocked(contactBlocked);
+    chatView.setContactBlocked(contactBlocked);
     ((ViewGroup) findViewById(android.R.id.content)).addView(
         conversationMenuDialog,
+        new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    refreshContactState(false);
+    menuProgress = new BlockingProgressView(this);
+    ((ViewGroup) findViewById(android.R.id.content)).addView(
+        menuProgress,
         new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     getOnBackPressedDispatcher().addCallback(
@@ -299,6 +342,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         new OnBackPressedCallback(true) {
           @Override
           public void handleOnBackPressed() {
+            if (chatView != null && chatView.dismissSearch()) return;
             if (chatView != null && chatView.dismissAttachmentPanel()) return;
             if (chatView != null && chatView.clearMessageSelection()) return;
             if (conversationMenuDialog != null
@@ -323,6 +367,13 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         });
     ViewCompat.requestApplyInsets(chatView);
     repository = ChatRepository.getInstance(this);
+    repository.observeChat(chatId).observe(this, chat -> {
+      long mutedUntil = chat == null ? 0L : chat.notificationMuted;
+      notificationsMuted = mutedUntil == -1L || mutedUntil > System.currentTimeMillis();
+      if (conversationMenuDialog != null) {
+        conversationMenuDialog.setMuted(notificationsMuted);
+      }
+    });
     restoreMessageSessionState();
     repository.setEventListener(
         new ChatRepository.EventListener() {
@@ -348,7 +399,21 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
                     ? "Chat connection interrupted." : message,
                 Toast.LENGTH_SHORT).show();
           }
+
+          @Override
+          public void onBlockStatus(String eventChatId, boolean blocked) {
+            if (chatId != null && chatId.equals(eventChatId)) applyBlockState(blocked);
+          }
         });
+    repository.getBlockStatus(chatId, new AppFunctionManager.Callback() {
+      @Override public void onSuccess(Object object) {
+        if (object instanceof JsonObject) {
+          JsonObject json = (JsonObject) object;
+          applyBlockState(json.has("blocked") && json.get("blocked").getAsBoolean());
+        }
+      }
+      @Override public void onError(String error) { }
+    });
     observe();
     profiler.activityCreated(createStartedNanos);
   }
@@ -425,10 +490,20 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   private void loadMessagePage(String cursor) {
     if (messagePageLoading || !messageNetworkHasMore) return;
+    String requestedCursor = cursor == null ? "" : cursor;
+    if (requestedCursor.equals(inFlightMessageCursor)) return;
+    long requestGeneration = ++messagePageRequestGeneration;
+    int localCountBefore = availableMessages.size();
+    String oldestBefore = availableMessages.isEmpty()
+        ? "" : stableMessageKey(availableMessages.get(0));
+    inFlightMessageCursor = requestedCursor;
     messagePageLoading = true;
     Log.d(TESTING_TAG, "message_list source=routes phase=activity_request chatId=" + chatId
+        + " requestId=" + requestGeneration
         + " page=" + (cursor == null || cursor.isEmpty() ? "initial" : "pagination")
-        + " hasCursor=" + (cursor != null && !cursor.isEmpty()));
+        + " requestedCursor=" + cursorLabel(requestedCursor)
+        + " localCountBefore=" + localCountBefore
+        + " oldestBefore=" + oldestBefore);
     updateOlderMessagesState();
     repository.hydrateChatPage(
         chatId,
@@ -436,26 +511,57 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         cursor,
         new ChatRepository.MessagePageCallback() {
           @Override
-          public void onLoaded(String newCursor, boolean hasMore, int loadedCount) {
+          public void onLoaded(
+              String newCursor, boolean hasMore, int loadedCount, int uniqueCount) {
+            if (requestGeneration != messagePageRequestGeneration) return;
+            String returnedCursor = newCursor == null ? "" : newCursor;
+            if (uniqueCount > 0) consecutiveMessagePagesWithoutUniqueRows = 0;
+            else consecutiveMessagePagesWithoutUniqueRows++;
+            boolean stalled = loadedCount <= 0
+                || (!requestedCursor.isEmpty() && requestedCursor.equals(returnedCursor));
             firstMessagePageLoaded = true;
-            nextMessageCursor = newCursor;
-            messageNetworkHasMore = hasMore && newCursor != null && !newCursor.isEmpty();
+            nextMessageCursor = stalled ? null : newCursor;
+            messageNetworkHasMore = !stalled && hasMore && !returnedCursor.isEmpty();
             messagePageLoading = false;
+            inFlightMessageCursor = null;
+            if (!availableMessages.isEmpty()) {
+              oldestSynchronizedMessageId = stableMessageKey(availableMessages.get(0));
+            }
+            lastSuccessfulPaginationAt = System.currentTimeMillis();
             saveMessageSessionState();
             Log.d(TESTING_TAG, "message_list source=routes phase=activity_loaded chatId="
-                + chatId + " loaded=" + loadedCount + " hasMore=" + hasMore
-                + " hasNextCursor=" + (newCursor != null && !newCursor.isEmpty()));
+                + chatId + " requestId=" + requestGeneration
+                + " requestedCursor=" + cursorLabel(requestedCursor)
+                + " returnedCursor=" + cursorLabel(returnedCursor)
+                + " loaded=" + loadedCount + " uniqueAdded=" + uniqueCount
+                + " noUniqueStreak=" + consecutiveMessagePagesWithoutUniqueRows
+                + " stalled=" + stalled
+                + " localCountBefore=" + localCountBefore
+                + " hasMore=" + messageNetworkHasMore);
             updateOlderMessagesState();
+            if (searchLoadingAll) {
+              if (messageNetworkHasMore) loadMessagePage(nextMessageCursor);
+              else searchLoadingAll = false;
+            }
           }
 
           @Override
           public void onError(String message) {
+            if (requestGeneration != messagePageRequestGeneration) return;
             messagePageLoading = false;
+            inFlightMessageCursor = null;
             Log.e(TESTING_TAG, "message_list source=routes phase=activity_error chatId="
-                + chatId + " error=" + message);
+                + chatId + " requestId=" + requestGeneration
+                + " requestedCursor=" + cursorLabel(requestedCursor)
+                + " retry=next_gesture error=" + message);
             updateOlderMessagesState();
           }
         });
+  }
+
+  private static String cursorLabel(String cursor) {
+    if (cursor == null || cursor.isEmpty()) return "none";
+    return Integer.toHexString(cursor.hashCode()) + ":" + cursor.length();
   }
 
   @Override
@@ -479,17 +585,71 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void messages(List<MessageEntity> values) {
-    List<MessageEntity> snapshot = values == null
+    List<MessageEntity> raw = values == null
         ? Collections.emptyList() : new ArrayList<>(values);
+    raw = deduplicateMessages(raw);
+    LocalMessageWindow window = trimLocalMessageSentinel(raw);
+    List<MessageEntity> snapshot = window.messages;
     int generation = ++replyTargetLoadGeneration;
     repository.loadReplyTargets(chatId, snapshot, replyTargets -> {
       if (generation != replyTargetLoadGeneration || isFinishing() || isDestroyed()) return;
-      messagesHydrated(snapshot, replyTargets);
+      messagesHydrated(snapshot, replyTargets, window.hasOlder);
     });
   }
 
+  private static List<MessageEntity> deduplicateMessages(List<MessageEntity> values) {
+    Map<String, MessageEntity> unique = new java.util.LinkedHashMap<>();
+    int anonymousIndex = 0;
+    for (MessageEntity message : values) {
+      String key = stableMessageKey(message);
+      if (key.isEmpty()) key = "anonymous:" + anonymousIndex++;
+      unique.put(key, message);
+    }
+    return new ArrayList<>(unique.values());
+  }
+
+  private static String stableMessageKey(MessageEntity message) {
+    if (message == null) return "";
+    if (message.messageId != null && !message.messageId.isEmpty()) {
+      return "server:" + message.messageId;
+    }
+    if (message.clientMessageId != null && !message.clientMessageId.isEmpty()) {
+      return "client:" + message.clientMessageId;
+    }
+    return "";
+  }
+
+  /** Keeps every pin while removing the extra timeline row used as a has-more sentinel. */
+  private LocalMessageWindow trimLocalMessageSentinel(List<MessageEntity> raw) {
+    if (raw == null || raw.isEmpty()) {
+      return new LocalMessageWindow(Collections.emptyList(), false);
+    }
+    int recentStart = Math.max(0, raw.size() - messageLimit);
+    List<MessageEntity> visible = new ArrayList<>();
+    boolean omittedOlder = false;
+    for (int index = 0; index < raw.size(); index++) {
+      MessageEntity message = raw.get(index);
+      if (index >= recentStart || (message != null && message.pinned)) {
+        visible.add(message);
+      } else {
+        omittedOlder = true;
+      }
+    }
+    return new LocalMessageWindow(visible, omittedOlder);
+  }
+
+  private static final class LocalMessageWindow {
+    final List<MessageEntity> messages;
+    final boolean hasOlder;
+
+    LocalMessageWindow(List<MessageEntity> messages, boolean hasOlder) {
+      this.messages = messages;
+      this.hasOlder = hasOlder;
+    }
+  }
+
   private void messagesHydrated(
-      List<MessageEntity> values, List<MessageEntity> replyTargets) {
+      List<MessageEntity> values, List<MessageEntity> replyTargets, boolean hasOlderLocally) {
     availableMessages = values;
     if (!pendingAudioPlaybackMessageId.isEmpty()) {
       MessageEntity pendingAudio = findMessageByKey(pendingAudioPlaybackMessageId);
@@ -517,7 +677,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       chatView.setPinnedMessages(pinnedMessages);
     }
     localPageLoading = false;
-    localHasMore = availableMessages.size() >= messageLimit;
+    localHasMore = hasOlderLocally;
     boolean completedLocalExpansion = localExpansionRequested;
     boolean revealedOlderCachedMessages = completedLocalExpansion
         && availableMessages.size() > localExpansionPreviousCount
@@ -528,7 +688,11 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       Log.d(TESTING_TAG, "message_list source=pagination phase=local_expansion_complete chatId="
           + chatId + " previousCount=" + localExpansionPreviousCount
           + " currentCount=" + availableMessages.size()
-          + " revealedOlder=" + revealedOlderCachedMessages);
+          + " uniqueAdded=" + Math.max(
+              0, availableMessages.size() - localExpansionPreviousCount)
+          + " revealedOlder=" + revealedOlderCachedMessages
+          + " localHasMore=" + localHasMore
+          + " networkHasMore=" + messageNetworkHasMore);
     }
     long oldestTime = availableMessages.isEmpty() ? 0L : availableMessages.get(0).sentTime;
     long newestTime = availableMessages.isEmpty()
@@ -538,6 +702,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         + " localHasMore=" + localHasMore + " oldestTime=" + oldestTime
         + " newestTime=" + newestTime);
     if (availableMessages.isEmpty()) renderedMessageCount = 0;
+    else if (searchActive) renderedMessageCount = availableMessages.size();
     else if (renderedMessageCount == 0) {
       renderedMessageCount = Math.min(INITIAL_RENDER_WINDOW_SIZE, availableMessages.size());
     } else {
@@ -546,7 +711,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     prepareAndRenderAvailableMessages("room");
     if (completedLocalExpansion && !revealedOlderCachedMessages
         && !messagePageLoading && messageNetworkHasMore
-        && (!firstMessagePageLoaded || nextMessageCursor != null)) {
+        && (!firstMessagePageLoaded
+            || (nextMessageCursor != null && !nextMessageCursor.isEmpty()))) {
       loadMessagePage(firstMessagePageLoaded ? nextMessageCursor : null);
     } else {
       if (revealedOlderCachedMessages) saveMessageSessionState();
@@ -707,6 +873,12 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     chatView.setOlderMessagesState(
         localPageLoading || messagePageLoading,
         !isProgressiveRendering() && (localHasMore || messageNetworkHasMore));
+    Log.d(TESTING_TAG, "message_list source=pagination phase=state chatId=" + chatId
+        + " localLoading=" + localPageLoading
+        + " networkLoading=" + messagePageLoading
+        + " hasOlderLocally=" + localHasMore
+        + " hasOlderOnNetwork=" + messageNetworkHasMore
+        + " cursor=" + cursorLabel(nextMessageCursor));
   }
 
   @Override
@@ -738,24 +910,29 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       Log.d(TESTING_TAG, "message_cache source=session phase=miss chatId=" + chatId);
       return;
     }
-    // Reopen with one normal network page available to the progressive renderer. A previously
-    // expanded history window is intentionally not submitted to ComponentList in one operation.
+    // Reopen with one normal Room window for the progressive renderer. The persisted cursor
+    // state independently determines whether any network page is still required.
     messageLimit = ChatRepository.MESSAGE_PAGE_SIZE;
     firstMessagePageLoaded = state.isFirstPageLoaded();
     nextMessageCursor = state.getNextCursor();
     messageNetworkHasMore = state.hasMoreOnNetwork();
+    oldestSynchronizedMessageId = state.getOldestSynchronizedMessageId();
+    lastSuccessfulPaginationAt = state.getLastSuccessfulPaginationAt();
     Log.d(TESTING_TAG, "message_cache source=session phase=restored chatId=" + chatId
         + " limit=" + messageLimit
         + " firstPageLoaded=" + firstMessagePageLoaded
         + " hasMore=" + messageNetworkHasMore
-        + " hasNextCursor=" + (nextMessageCursor != null && !nextMessageCursor.isEmpty()));
+        + " hasNextCursor=" + (nextMessageCursor != null && !nextMessageCursor.isEmpty())
+        + " oldestSynchronizedMessageId=" + state.getOldestSynchronizedMessageId()
+        + " lastSuccessfulPaginationAt=" + state.getLastSuccessfulPaginationAt());
   }
 
   private void saveMessageSessionState() {
     if (repository == null || !firstMessagePageLoaded
         || chatId == null || chatId.trim().isEmpty()) return;
     repository.saveMessageSessionState(chatId, messageLimit, true,
-        nextMessageCursor, messageNetworkHasMore);
+        nextMessageCursor, messageNetworkHasMore,
+        oldestSynchronizedMessageId, lastSuccessfulPaginationAt);
   }
 
   private void renderPresence(PresenceEntity p) {
@@ -778,6 +955,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onSend() {
+    if (contactBlocked) return;
     String text = chatView.getDraft();
     if (chatId == null || chatId.isEmpty() || receiverId.isEmpty()) {
       Toast.makeText(this, "Chat information missing.", Toast.LENGTH_SHORT).show();
@@ -893,6 +1071,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onAudioRecordingStart() {
+    if (contactBlocked) return;
     if (attachmentSending || audioRecorder != null) return;
     if (chatId == null || chatId.isEmpty() || receiverId.isEmpty()) {
       Toast.makeText(this, "Chat information missing.", Toast.LENGTH_SHORT).show();
@@ -1164,11 +1343,19 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onVideoCall() {
+    if (contactBlocked) {
+      Toast.makeText(this, "Unblock this contact to make a call.", Toast.LENGTH_SHORT).show();
+      return;
+    }
     openCall(VideoCallActivity.class);
   }
 
   @Override
   public void onVoiceCall() {
+    if (contactBlocked) {
+      Toast.makeText(this, "Unblock this contact to make a call.", Toast.LENGTH_SHORT).show();
+      return;
+    }
     openCall(VoiceCallActivity.class);
   }
 
@@ -1202,10 +1389,12 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     chatView.clearReply();
     chatView.clearDraft();
     chatView.scrollToBottom();
+    chatView.restoreComposerAfterSend();
   }
 
   @Override
   public void onAttachmentSelected(String type) {
+    if (contactBlocked) return;
     if ("Image".equals(type)) {
       selectedAttachmentType = type;
       attachmentPicker.launch(new String[] {"image/*"});
@@ -1226,6 +1415,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onCameraSelected() {
+    if (contactBlocked) return;
     if (attachmentSending || audioRecorder != null) return;
     startActivityForResultCamera();
   }
@@ -1922,6 +2112,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       finishAudioRecording(false);
       return;
     }
+    if (chatView != null && chatView.dismissSearch()) return;
     if (chatView != null && chatView.dismissAttachmentPanel()) return;
     if (chatView != null && chatView.clearMessageSelection()) return;
     finish();
@@ -1930,7 +2121,218 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   @Override
   public void onMore() {
     removePrompt();
+    refreshContactState(false);
     if (conversationMenuDialog != null) conversationMenuDialog.show();
+  }
+
+  private void handleConversationMenuOption(String option) {
+    if ("Clear chat".equals(option)) {
+      showPrompt(NativePromptDialogView.actions(this,
+          java.util.Arrays.asList("Clear chat", "Cancel"), index -> {
+            if (index == 0) clearChat();
+          }, this::removePrompt));
+    } else if ("Report".equals(option)) {
+      showReportReasons();
+    } else if ("Search".equals(option)) {
+      beginSearch();
+    } else if ("Mute notifications".equals(option)
+        || "Unmute notifications".equals(option)) {
+      updateMuteSetting();
+    } else if ("Block".equals(option) || "Unblock".equals(option)) {
+      updateBlockState(!contactBlocked);
+    } else if ("Add to contacts".equals(option)) {
+      addOpponentToContacts();
+    }
+  }
+
+  private void addOpponentToContacts() {
+    if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
+        != PackageManager.PERMISSION_GRANTED) {
+      addContactAfterLookup = true;
+      contactsPermission.launch(Manifest.permission.READ_CONTACTS);
+      return;
+    }
+    refreshContactState(true);
+  }
+
+  private void refreshContactState(boolean continueAdd) {
+    if (continueAdd) addContactAfterLookup = true;
+    if (receiverId == null || receiverId.isEmpty()
+        || ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
+            != PackageManager.PERMISSION_GRANTED
+        || contactLookupExecutor.isShutdown()) return;
+    int generation = ++contactLookupGeneration;
+    String opponent = receiverId;
+    contactLookupExecutor.execute(() -> {
+      boolean exists = isPhoneInContacts(opponent);
+      runOnUiThread(() -> {
+        if (isFinishing() || isDestroyed() || generation != contactLookupGeneration) return;
+        contactExists = exists;
+        if (conversationMenuDialog != null) {
+          conversationMenuDialog.setContactExists(exists);
+        }
+        boolean shouldInsert = addContactAfterLookup;
+        addContactAfterLookup = false;
+        if (shouldInsert && !exists) launchContactInsert(opponent);
+        else if (shouldInsert) {
+          Toast.makeText(this, "Contact already exists.", Toast.LENGTH_SHORT).show();
+        }
+      });
+    });
+  }
+
+  private boolean isPhoneInContacts(String opponent) {
+    String[] projection = {ContactsContract.CommonDataKinds.Phone.NUMBER};
+    try (Cursor cursor = getContentResolver().query(
+        ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+        projection, null, null, null)) {
+      if (cursor == null) return false;
+      int numberIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER);
+      while (cursor.moveToNext()) {
+        String number = numberIndex < 0 ? null : cursor.getString(numberIndex);
+        if (number != null && (PhoneNumberUtils.compare(number, opponent)
+            || normalize(number).equals(normalize(opponent)))) return true;
+      }
+    } catch (SecurityException ignored) {
+      return false;
+    }
+    return false;
+  }
+
+  private void launchContactInsert(String opponent) {
+    Intent intent = new Intent(ContactsContract.Intents.Insert.ACTION);
+    intent.setType(ContactsContract.RawContacts.CONTENT_TYPE);
+    String displayName = chatName == null || chatName.trim().isEmpty() ? opponent : chatName;
+    intent.putExtra(ContactsContract.Intents.Insert.NAME, displayName);
+    intent.putExtra(ContactsContract.Intents.Insert.PHONE, formatContactPhone(opponent));
+    try {
+      contactInsert.launch(intent);
+    } catch (RuntimeException error) {
+      Toast.makeText(this, "No contacts app is available.", Toast.LENGTH_SHORT).show();
+    }
+  }
+
+  private static String formatContactPhone(String phone) {
+    String normalized = normalize(phone);
+    return normalized.isEmpty() ? "" : "+" + normalized;
+  }
+
+  private void updateBlockState(boolean blocked) {
+    setMenuLoading(true);
+    repository.updateBlock(chatId, blocked, new AppFunctionManager.Callback() {
+      @Override public void onSuccess(Object object) {
+        setMenuLoading(false);
+        applyBlockState(blocked);
+        Toast.makeText(ChatActivity.this, blocked ? "Contact blocked." : "Contact unblocked.",
+            Toast.LENGTH_SHORT).show();
+      }
+      @Override public void onError(String error) {
+        setMenuLoading(false);
+        Toast.makeText(ChatActivity.this, error == null ? "Block action failed." : error,
+            Toast.LENGTH_LONG).show();
+      }
+    });
+  }
+
+  private void applyBlockState(boolean blocked) {
+    contactBlocked = blocked;
+    getSharedPreferences("chat_menu_state", MODE_PRIVATE).edit()
+        .putBoolean("blocked:" + String.valueOf(chatId), blocked).apply();
+    if (conversationMenuDialog != null) conversationMenuDialog.setBlocked(blocked);
+    if (chatView != null) chatView.setContactBlocked(blocked);
+  }
+
+  @Override public void onBlockedUnblock() { updateBlockState(false); }
+
+  @Override public void onBlockedDeleteChat() {
+    setMenuLoading(true);
+    repository.updateChatSetting(chatId, "delete", 1L, new AppFunctionManager.Callback() {
+      @Override public void onSuccess(Object object) {
+        setMenuLoading(false);
+        repository.deleteLocalChat(chatId);
+        finish();
+      }
+      @Override public void onError(String error) {
+        setMenuLoading(false);
+        Toast.makeText(ChatActivity.this, error == null ? "Unable to delete chat." : error,
+            Toast.LENGTH_LONG).show();
+      }
+    });
+  }
+
+  private void clearChat() {
+    setMenuLoading(true);
+    repository.clearChat(chatId, callback(
+        "Chat cleared.", "Unable to clear chat."));
+  }
+
+  private void showReportReasons() {
+    List<String> reasons = java.util.Arrays.asList(
+        "Spam", "Harassment", "Inappropriate content", "Scam or fraud", "Other");
+    showPrompt(NativePromptDialogView.actions(this, reasons, index -> {
+      if (index == reasons.size() - 1) {
+        showPrompt(NativePromptDialogView.input(this, "Report reason", "",
+            InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES,
+            value -> {
+              if (value.trim().isEmpty()) {
+                Toast.makeText(this, "Reason is required.", Toast.LENGTH_SHORT).show();
+                return false;
+              }
+              submitReport(value);
+              return true;
+            }, this::removePrompt));
+      } else {
+        submitReport(reasons.get(index));
+      }
+    }, this::removePrompt));
+  }
+
+  private void submitReport(String reason) {
+    setMenuLoading(true);
+    repository.reportChat(chatId, reason, callback(
+        "Report submitted.", "Unable to submit report."));
+  }
+
+  private void beginSearch() {
+    searchActive = true;
+    searchLoadingAll = true;
+    messageLimit = Integer.MAX_VALUE;
+    observeMessageWindow();
+    if (!messagePageLoading && messageNetworkHasMore) {
+      loadMessagePage(firstMessagePageLoaded ? nextMessageCursor : null);
+    }
+    if (chatView != null) chatView.showSearch(() -> {
+      searchActive = false;
+      searchLoadingAll = false;
+    });
+  }
+
+  private void updateMuteSetting() {
+    setMenuLoading(true);
+    long value = notificationsMuted ? 0L : -1L;
+    repository.updateChatSetting(chatId, "mute", value, callback(
+        notificationsMuted ? "Notifications unmuted." : "Notifications muted.",
+        notificationsMuted ? "Unable to unmute notifications."
+            : "Unable to mute notifications."));
+  }
+
+  private AppFunctionManager.Callback callback(String successText, String failureText) {
+    return new AppFunctionManager.Callback() {
+      @Override public void onSuccess(Object object) {
+        setMenuLoading(false);
+        Toast.makeText(ChatActivity.this, successText, Toast.LENGTH_SHORT).show();
+      }
+
+      @Override public void onError(String error) {
+        setMenuLoading(false);
+        String detail = error == null || error.trim().isEmpty() ? failureText : error;
+        Toast.makeText(ChatActivity.this, detail, Toast.LENGTH_LONG).show();
+      }
+    };
+  }
+
+  private void setMenuLoading(boolean loading) {
+    if (menuProgress != null) menuProgress.setLoading(loading);
   }
 
   private void showPrompt(NativePromptDialogView prompt) {
@@ -1977,9 +2379,12 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       conversationMenuDialog.release();
       conversationMenuDialog = null;
     }
+    menuProgress = null;
     stopTyping.run();
     messagePreparationGeneration++;
     messagePreparationExecutor.shutdownNow();
+    contactLookupGeneration++;
+    contactLookupExecutor.shutdownNow();
     typingHandler.removeCallbacksAndMessages(null);
     locationPending = false;
     removeLocationUpdates();

@@ -1,6 +1,7 @@
 package com.w3n.pinggo.data.repository;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.database.Cursor;
 import android.net.Uri;
@@ -8,6 +9,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
+import android.util.Base64;
 
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
@@ -52,6 +54,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.nio.charset.StandardCharsets;
 import java.io.IOException;
 import java.io.InputStream;
 
@@ -77,6 +80,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         void onSocketError(String error);
 
         default void onTotalUnread(int totalUnread) { }
+        default void onBlockStatus(String chatId, boolean blocked) { }
     }
 
     public interface CallEventListener {
@@ -100,7 +104,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     public interface MessagePageCallback {
-        void onLoaded(String nextCursor, boolean hasMore, int loadedCount);
+        void onLoaded(String nextCursor, boolean hasMore, int loadedCount, int uniqueCount);
         void onError(String message);
     }
 
@@ -108,25 +112,35 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         void onLoaded(List<MessageEntity> messages);
     }
 
-    /** Pagination state retained only while this application process is alive. */
+    /** Pagination state cached in memory and persisted across application processes. */
     public static final class MessageSessionState {
         private final int messageLimit;
         private final boolean firstPageLoaded;
         private final String nextCursor;
         private final boolean networkHasMore;
+        private final String oldestSynchronizedMessageId;
+        private final long lastSuccessfulPaginationAt;
 
         private MessageSessionState(int messageLimit, boolean firstPageLoaded,
-                                    String nextCursor, boolean networkHasMore) {
+                                    String nextCursor, boolean networkHasMore,
+                                    String oldestSynchronizedMessageId,
+                                    long lastSuccessfulPaginationAt) {
             this.messageLimit = Math.max(MESSAGE_PAGE_SIZE, messageLimit);
             this.firstPageLoaded = firstPageLoaded;
             this.nextCursor = nextCursor;
             this.networkHasMore = networkHasMore;
+            this.oldestSynchronizedMessageId = oldestSynchronizedMessageId;
+            this.lastSuccessfulPaginationAt = Math.max(0L, lastSuccessfulPaginationAt);
         }
 
         public int getMessageLimit() { return messageLimit; }
         public boolean isFirstPageLoaded() { return firstPageLoaded; }
         public String getNextCursor() { return nextCursor; }
         public boolean hasMoreOnNetwork() { return networkHasMore; }
+        public String getOldestSynchronizedMessageId() {
+            return oldestSynchronizedMessageId;
+        }
+        public long getLastSuccessfulPaginationAt() { return lastSuccessfulPaginationAt; }
     }
 
     private static volatile ChatRepository instance;
@@ -147,6 +161,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     private final Set<String> pendingDeliveredAcks =
             Collections.synchronizedSet(new HashSet<>());
     private final Map<String, MessageSessionState> messageSessionStates = new HashMap<>();
+    private final SharedPreferences messagePaginationPreferences;
     private final Map<String, Map<String, MessageEntity>> temporaryReplyTargets =
             new java.util.LinkedHashMap<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -183,6 +198,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     private ChatRepository(Context context) {
         appContext = context.getApplicationContext();
+        messagePaginationPreferences = appContext.getSharedPreferences(
+                "message_pagination_v1", Context.MODE_PRIVATE);
         PingGoDatabase database = PingGoDatabase.getInstance(appContext);
         messageDao = database.messageDao();
         chatDao = database.chatDao();
@@ -217,17 +234,59 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     public synchronized MessageSessionState getMessageSessionState(String chatId) {
         if (chatId == null || chatId.trim().isEmpty()) return null;
-        return messageSessionStates.get(chatId);
+        MessageSessionState cached = messageSessionStates.get(chatId);
+        if (cached != null) return cached;
+        String prefix = messageSessionKeyPrefix(chatId);
+        if (!messagePaginationPreferences.contains(prefix + "firstPageLoaded")) return null;
+        String cursor = messagePaginationPreferences.getString(prefix + "nextCursor", null);
+        MessageSessionState restored = new MessageSessionState(
+                messagePaginationPreferences.getInt(prefix + "messageLimit", MESSAGE_PAGE_SIZE),
+                messagePaginationPreferences.getBoolean(prefix + "firstPageLoaded", false),
+                cursor == null || cursor.isEmpty() ? null : cursor,
+                messagePaginationPreferences.getBoolean(prefix + "networkHasMore", true),
+                messagePaginationPreferences.getString(prefix + "oldestMessageId", null),
+                messagePaginationPreferences.getLong(prefix + "lastSuccessAt", 0L));
+        messageSessionStates.put(chatId, restored);
+        Log.d(TESTING_TAG, "message_cache source=persistent phase=restored chatId=" + chatId
+                + " limit=" + restored.messageLimit
+                + " firstPageLoaded=" + restored.firstPageLoaded
+                + " hasMore=" + restored.networkHasMore
+                + " hasNextCursor=" + (restored.nextCursor != null
+                && !restored.nextCursor.isEmpty())
+                + " hasOldest=" + (restored.oldestSynchronizedMessageId != null
+                && !restored.oldestSynchronizedMessageId.isEmpty())
+                + " lastSuccessAt=" + restored.lastSuccessfulPaginationAt);
+        return restored;
     }
 
     public synchronized void saveMessageSessionState(
             String chatId, int messageLimit, boolean firstPageLoaded,
-            String nextCursor, boolean networkHasMore) {
+            String nextCursor, boolean networkHasMore,
+            String oldestSynchronizedMessageId, long lastSuccessfulPaginationAt) {
         if (chatId == null || chatId.trim().isEmpty()) return;
         MessageSessionState previous = messageSessionStates.get(chatId);
         MessageSessionState updated = new MessageSessionState(
-                messageLimit, firstPageLoaded, nextCursor, networkHasMore);
+                messageLimit, firstPageLoaded, nextCursor, networkHasMore,
+                oldestSynchronizedMessageId, lastSuccessfulPaginationAt);
         messageSessionStates.put(chatId, updated);
+        String prefix = messageSessionKeyPrefix(chatId);
+        SharedPreferences.Editor editor = messagePaginationPreferences.edit()
+                .putInt(prefix + "messageLimit", updated.messageLimit)
+                .putBoolean(prefix + "firstPageLoaded", updated.firstPageLoaded)
+                .putBoolean(prefix + "networkHasMore", updated.networkHasMore)
+                .putLong(prefix + "lastSuccessAt", updated.lastSuccessfulPaginationAt);
+        if (updated.nextCursor == null || updated.nextCursor.isEmpty()) {
+            editor.remove(prefix + "nextCursor");
+        } else {
+            editor.putString(prefix + "nextCursor", updated.nextCursor);
+        }
+        if (updated.oldestSynchronizedMessageId == null
+                || updated.oldestSynchronizedMessageId.isEmpty()) {
+            editor.remove(prefix + "oldestMessageId");
+        } else {
+            editor.putString(prefix + "oldestMessageId", updated.oldestSynchronizedMessageId);
+        }
+        editor.apply();
         if (previous == null
                 || previous.messageLimit != updated.messageLimit
                 || previous.firstPageLoaded != updated.firstPageLoaded
@@ -238,8 +297,17 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     + " firstPageLoaded=" + updated.firstPageLoaded
                     + " hasMore=" + updated.networkHasMore
                     + " hasNextCursor=" + (updated.nextCursor != null
-                    && !updated.nextCursor.isEmpty()));
+                    && !updated.nextCursor.isEmpty())
+                    + " hasOldest=" + (updated.oldestSynchronizedMessageId != null
+                    && !updated.oldestSynchronizedMessageId.isEmpty())
+                    + " lastSuccessAt=" + updated.lastSuccessfulPaginationAt);
         }
+    }
+
+    private static String messageSessionKeyPrefix(String chatId) {
+        String encoded = Base64.encodeToString(
+                chatId.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP | Base64.URL_SAFE);
+        return "chat." + encoded + ".";
     }
 
     private static boolean sameValue(String first, String second) {
@@ -272,7 +340,12 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     public LiveData<List<MessageEntity>> observeMessages(String chatId, int limit) {
-        return messageDao.observeLatestMessages(chatId, Math.max(1, limit));
+        // Request one extra timeline row so the activity can distinguish an exactly-full page
+        // from a page that genuinely has an older cached message. Pinned rows are still returned
+        // independently by the DAO and are preserved when the activity trims the sentinel.
+        int requested = Math.max(1, limit);
+        return messageDao.observeLatestMessages(
+                chatId, requested == Integer.MAX_VALUE ? requested : requested + 1);
     }
 
     /** Loads quoted messages outside the visible Room page without adding them to the timeline. */
@@ -355,6 +428,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         return chatListLiveData;
     }
 
+    public LiveData<ChatEntity> observeChat(String chatId) {
+        return chatDao.observeChat(chatId);
+    }
+
     public void preloadChatCache() {
         synchronized (this) {
             if (chatCachePreloadStarted) return;
@@ -377,7 +454,18 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         String phoneNumber = normalizeAccountId(
                 LoginStateManager.getInstance().getUID(appContext));
         appFunctionManager.updateChatSettings(
-                phoneNumber, chatId, setting, value, callback);
+                phoneNumber, chatId, setting, value, new AppFunctionManager.Callback() {
+                    @Override public void onSuccess(Object object) {
+                        if ("mute".equals(setting)) {
+                            ioExecutor.execute(() -> chatDao.updateNotificationMuted(
+                                    chatId, value, System.currentTimeMillis()));
+                        }
+                        if (callback != null) callback.onSuccess(object);
+                    }
+                    @Override public void onError(String error) {
+                        if (callback != null) callback.onError(error);
+                    }
+                });
     }
 
     public void updateChatSettings(List<String> chatIds, String setting, long value,
@@ -390,6 +478,54 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 LoginStateManager.getInstance().getUID(appContext));
         appFunctionManager.updateChatSettingsBulk(
                 phoneNumber, chatIds, setting, value, callback);
+    }
+
+    public void clearChat(String chatId, AppFunctionManager.Callback callback) {
+        appFunctionManager.clearChat(
+                LoginStateManager.getInstance().getUID(appContext), chatId,
+                new AppFunctionManager.Callback() {
+                    @Override public void onSuccess(Object object) {
+                        ioExecutor.execute(() -> {
+                            messageDao.markChatInvisible(chatId);
+                            chatDao.clearLastMessage(chatId, System.currentTimeMillis());
+                            mainHandler.post(() -> callback.onSuccess(object));
+                        });
+                    }
+                    @Override public void onError(String error) { callback.onError(error); }
+                });
+    }
+
+    public void reportChat(String chatId, String reason, AppFunctionManager.Callback callback) {
+        appFunctionManager.reportChat(
+                LoginStateManager.getInstance().getUID(appContext), chatId, reason, callback);
+    }
+
+    public void updateBlock(String chatId, boolean blocked, AppFunctionManager.Callback callback) {
+        appFunctionManager.updateBlock(
+                LoginStateManager.getInstance().getUID(appContext), chatId, blocked,
+                new AppFunctionManager.Callback() {
+                    @Override public void onSuccess(Object object) {
+                        if (object instanceof JsonObject) {
+                            JsonElement element = ((JsonObject) object).get("message");
+                            if (element != null && element.isJsonObject()) {
+                                MessageEntity message = toMessageEntity(element.getAsJsonObject());
+                                if (message != null) ioExecutor.execute(() -> {
+                                    messageDao.upsert(message);
+                                    updateChatSummary(message);
+                                });
+                            }
+                        }
+                        if (callback != null) callback.onSuccess(object);
+                    }
+                    @Override public void onError(String error) {
+                        if (callback != null) callback.onError(error);
+                    }
+                });
+    }
+
+    public void getBlockStatus(String chatId, AppFunctionManager.Callback callback) {
+        appFunctionManager.getBlockStatus(
+                LoginStateManager.getInstance().getUID(appContext), chatId, callback);
     }
 
     public void deleteLocalChat(String chatId) {
@@ -1721,14 +1857,24 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                         + " hasMore=" + hasMore
                         + " hasNextCursor=" + (nextCursor != null && !nextCursor.isEmpty()));
                 ioExecutor.execute(() -> {
+                    int uniqueCount = 0;
+                    for (MessageEntity message : page) {
+                        if (message != null && message.messageId != null
+                                && !message.messageId.isEmpty()
+                                && !messageDao.existsByMessageId(message.messageId)) {
+                            uniqueCount++;
+                        }
+                    }
                     preserveLocalAttachmentUris(pinnedPage);
                     preserveLocalAttachmentUris(page);
                     if (!pinnedPage.isEmpty()) messageDao.upsertAll(pinnedPage);
                     if (!page.isEmpty()) messageDao.upsertAll(page);
                     Log.d(TESTING_TAG, "message_list source=routes phase=room_write_complete chatId="
                             + chatId + " messages=" + page.size());
+                    final int addedCount = uniqueCount;
                     if (callback != null) mainHandler.post(
-                            () -> callback.onLoaded(nextCursor, hasMore, page.size()));
+                            () -> callback.onLoaded(
+                                    nextCursor, hasMore, page.size(), addedCount));
                 });
             }
 
@@ -1880,6 +2026,12 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             handleMessageFailed(event);
         } else if ("new_message".equals(type)) {
             handleNewMessage(event, totalUnreadBeforeEvent, serverTotalUnread);
+        } else if ("chat_settings_updated".equals(type)) {
+            handleChatSettingsUpdated(event);
+        } else if ("chat_cleared".equals(type)) {
+            handleChatCleared(event);
+        } else if ("chat_block_status".equals(type)) {
+            handleBlockStatus(event);
         } else if ("message_seen".equals(type)) {
             handleMessageSeen(event);
         } else if ("message_seen_ack".equals(type)) {
@@ -1931,6 +2083,33 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         } else if ("online_status".equals(type)) {
             handleOnlineStatus(event);
         }
+    }
+
+    private void handleChatSettingsUpdated(JsonObject event) {
+        String eventChatId = JsonParserUtil.getString(event, "chatId");
+        String setting = JsonParserUtil.getString(event, "setting");
+        if (eventChatId.isEmpty() || !"mute".equals(setting)) return;
+        long value = JsonParserUtil.getLong(event, "value");
+        ioExecutor.execute(() -> chatDao.updateNotificationMuted(
+                eventChatId, value, System.currentTimeMillis()));
+    }
+
+    private void handleChatCleared(JsonObject event) {
+        String eventChatId = JsonParserUtil.getString(event, "chatId");
+        if (eventChatId.isEmpty()) return;
+        ioExecutor.execute(() -> {
+            messageDao.markChatInvisible(eventChatId);
+            chatDao.clearLastMessage(eventChatId, System.currentTimeMillis());
+        });
+    }
+
+    private void handleBlockStatus(JsonObject event) {
+        String eventChatId = JsonParserUtil.getString(event, "chatId");
+        boolean blocked = JsonParserUtil.getBoolean(event, "blocked");
+        EventListener listener = eventListener;
+        if (listener != null) mainHandler.post(() -> {
+            if (eventListener == listener) listener.onBlockStatus(eventChatId, blocked);
+        });
     }
 
     @Override
@@ -2329,6 +2508,9 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     private boolean isInvisibleToCurrentUser(JsonObject message) {
+        String messageType = JsonParserUtil.getString(message, "messageType");
+        if ("chat_block".equalsIgnoreCase(messageType)
+                || "chat_unblock".equalsIgnoreCase(messageType)) return false;
         JsonArray invisible = message.has("invisible") && message.get("invisible").isJsonArray()
                 ? message.getAsJsonArray("invisible") : null;
         if (invisible == null || invisible.size() == 0) return false;
@@ -2484,8 +2666,16 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     private String getMessagePreview(JsonObject message) {
         String messageType = JsonParserUtil.getString(message, "messageType");
+        boolean cleared = JsonParserUtil.getBoolean(message, "cleared");
+        String messageId = JsonParserUtil.getString(message, "id");
+        if (messageId.isEmpty()) {
+            messageId = JsonParserUtil.getString(message, "messageId");
+        }
         if ("audio".equals(messageType) || "voice".equals(messageType)) return "Voice message";
         String text = JsonParserUtil.getString(message, "text").trim();
+        // Cleared chat-list placeholders intentionally retain sentTime for stable sorting.
+        // Older placeholders predate the explicit marker and are identified by an empty id/text.
+        if (cleared || (messageId.isEmpty() && text.isEmpty())) return "";
         if (!text.isEmpty()) {
             return text;
         }

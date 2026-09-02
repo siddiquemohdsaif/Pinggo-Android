@@ -208,6 +208,16 @@ public final class ChatPerformanceProfiler {
     logDuration(name, startedNanos, fields);
   }
 
+  public void paginationAnchor(
+      String messageId, int oldPosition, int newPosition, float pixelOffset, float appliedDelta) {
+    log("pagination_anchor",
+        "messageId=" + safe(messageId)
+            + " oldPosition=" + oldPosition
+            + " newPosition=" + newPosition
+            + " pixelOffset=" + fmt(pixelOffset)
+            + " appliedDelta=" + fmt(appliedDelta));
+  }
+
   public synchronized void scrollStart(int firstVisible, int lastVisible, int itemCount) {
     if (scrolling) return;
     scrolling = true;

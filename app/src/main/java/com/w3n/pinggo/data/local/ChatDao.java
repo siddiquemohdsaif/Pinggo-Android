@@ -73,6 +73,19 @@ public interface ChatDao {
     @Query("SELECT * FROM chats WHERE chatId = :chatId LIMIT 1")
     ChatEntity findByChatId(String chatId);
 
+    @Query("SELECT * FROM chats WHERE chatId = :chatId LIMIT 1")
+    LiveData<ChatEntity> observeChat(String chatId);
+
+    @Query("UPDATE chats SET notificationMuted = :value, updatedAt = :updatedAt WHERE chatId = :chatId")
+    void updateNotificationMuted(String chatId, long value, long updatedAt);
+
+    @Query("UPDATE chats SET lastMessage = NULL, lastMessageId = NULL, "
+            + "lastMessageSenderId = NULL, lastMessageDeliveredTime = NULL, "
+            + "lastMessageReadTime = NULL, lastMessageStatus = NULL, lastMessageType = NULL, "
+            + "lastMessageAttachmentName = NULL, unreadCount = 0, updatedAt = :updatedAt "
+            + "WHERE chatId = :chatId")
+    void clearLastMessage(String chatId, long updatedAt);
+
     @Query("DELETE FROM chats WHERE chatId = :chatId")
     void deleteByChatId(String chatId);
 

@@ -69,6 +69,9 @@ public interface MessageDao {
     @Query("UPDATE messages SET invisible = 1 WHERE messageId = :messageId")
     void markInvisible(String messageId);
 
+    @Query("UPDATE messages SET invisible = 1 WHERE chatId = :chatId")
+    void markChatInvisible(String chatId);
+
     @Query("UPDATE messages SET pinned = :pinned, pinnedAt = :pinnedAt, pinnedBy = :pinnedBy "
             + "WHERE messageId = :messageId")
     void updatePinState(String messageId, boolean pinned, Long pinnedAt, String pinnedBy);

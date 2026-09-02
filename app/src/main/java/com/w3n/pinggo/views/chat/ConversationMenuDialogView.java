@@ -20,6 +20,8 @@ import com.ogfa.nativeviews.text.FontVariation;
 import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
+import java.util.ArrayList;
+import java.util.List;
 
 /** Text-only overflow dialog used by the conversation header's three-dot action. */
 public final class ConversationMenuDialogView extends View {
@@ -34,6 +36,7 @@ public final class ConversationMenuDialogView extends View {
   private static final float MENU_BOTTOM_PADDING = 25f;
   private static final float TEXT_LEFT = 50f;
   private static final float TEXT_TOP = 32f;
+  private static final float DOUBLE_LINE_TEXT_TOP_ADJUSTMENT = 20f;
   private static final float TEXT_SIZE = 34f;
   private static final int TEXT_COLOR = 0xFF101C31;
 
@@ -57,6 +60,9 @@ public final class ConversationMenuDialogView extends View {
   private final Bitmap transparent = colorBitmap(Color.TRANSPARENT);
   private final Listener listener;
   private final RectF menuBounds = new RectF();
+  private boolean muted;
+  private boolean blocked;
+  private boolean contactExists;
 
   public ConversationMenuDialogView(@NonNull Context context, @NonNull Listener listener) {
     super(context);
@@ -78,6 +84,27 @@ public final class ConversationMenuDialogView extends View {
     invalidate();
   }
 
+  public void setMuted(boolean muted) {
+    if (this.muted == muted) return;
+    this.muted = muted;
+    if (getWidth() > 0) buildMenu(getWidth());
+    invalidate();
+  }
+
+  public void setBlocked(boolean blocked) {
+    if (this.blocked == blocked) return;
+    this.blocked = blocked;
+    if (getWidth() > 0) buildMenu(getWidth());
+    invalidate();
+  }
+
+  public void setContactExists(boolean contactExists) {
+    if (this.contactExists == contactExists) return;
+    this.contactExists = contactExists;
+    if (getWidth() > 0) buildMenu(getWidth());
+    invalidate();
+  }
+
   public boolean dismissIfShowing() {
     if (getVisibility() != VISIBLE) return false;
     setVisibility(INVISIBLE);
@@ -92,12 +119,13 @@ public final class ConversationMenuDialogView extends View {
 
   private void buildMenu(int hostWidth) {
     menuLayer.clear();
+    List<String> options = visibleOptions();
     float scale = figmaConfig.getScale(hostWidth);
     float width = MENU_WIDTH * scale;
     float menuHeight =
         (FIRST_ROW_TOP
-            + OPTIONS.length * ROW_HEIGHT
-            + (OPTIONS.length - 1) * ROW_GAP
+            + options.size() * ROW_HEIGHT
+            + Math.max(0, options.size() - 1) * ROW_GAP
             + MENU_BOTTOM_PADDING) * scale;
     float left = hostWidth - MENU_RIGHT * scale - width;
     WindowInsetsCompat windowInsets = ViewCompat.getRootWindowInsets(this);
@@ -106,11 +134,24 @@ public final class ConversationMenuDialogView extends View {
         : windowInsets.getInsets(WindowInsetsCompat.Type.statusBars());
     float top = statusBars.top + MENU_TOP * scale;
     menuBounds.set(left, top, left + width, top + menuHeight);
-    for (int index = 0; index < OPTIONS.length; index++) addOption(index, scale);
+    for (int index = 0; index < options.size(); index++) {
+      addOption(index, options.get(index), scale);
+    }
   }
 
-  private void addOption(int index, float scale) {
-    String option = OPTIONS[index];
+  private List<String> visibleOptions() {
+    List<String> options = new ArrayList<>(OPTIONS.length);
+    for (String option : OPTIONS) {
+      if (contactExists && "Add to contacts".equals(option)) continue;
+      if (muted && "Mute notifications".equals(option)) option = "Unmute notifications";
+      if (blocked && "Block".equals(option)) option = "Unblock";
+      options.add(option);
+    }
+    return options;
+  }
+
+  private void addOption(int index, String option, float scale) {
+    boolean doubleLine = "Unmute notifications".equals(option);
     float rowTop =
         menuBounds.top + (FIRST_ROW_TOP + index * (ROW_HEIGHT + ROW_GAP)) * scale;
     float rowRight = menuBounds.left + ROW_WIDTH * scale;
@@ -121,7 +162,7 @@ public final class ConversationMenuDialogView extends View {
                 option,
                 new RectF(
                     menuBounds.left + TEXT_LEFT * scale,
-                    rowTop + TEXT_TOP * scale,
+                    rowTop + (TEXT_TOP - (doubleLine ? DOUBLE_LINE_TEXT_TOP_ADJUSTMENT : 0f)) * scale,
                     rowRight - 20f * scale,
                     rowTop + ROW_HEIGHT * scale))
             .setFont(NativeFonts.INTER)
@@ -130,7 +171,7 @@ public final class ConversationMenuDialogView extends View {
             .setTextColor(TEXT_COLOR)
             .setAlignment(Text.Alignment.START)
             .setVerticalAlignment(Text.VerticalAlignment.TOP)
-            .setMaxLines(1));
+            .setMaxLines(doubleLine ? 2 : 1));
     menuLayer.add(
         new Button.Builder(
                 getContext(),

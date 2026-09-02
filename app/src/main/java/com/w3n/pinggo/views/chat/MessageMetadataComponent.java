@@ -39,6 +39,15 @@ final class MessageMetadataComponent implements Component {
     return this;
   }
 
+  MessageMetadataComponent hide() {
+    timeLayout = null;
+    delivery = null;
+    pinned = null;
+    showDelivery = false;
+    showPinned = false;
+    return this;
+  }
+
   @Override public String getId() { return id; }
   @Override public RectF getBounds() { return bounds; }
   @Override public boolean isVisible() { return timeLayout != null; }

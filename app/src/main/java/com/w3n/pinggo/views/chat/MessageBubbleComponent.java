@@ -34,6 +34,7 @@ final class MessageBubbleComponent implements Component {
   private boolean pressed;
   private boolean longPressed;
   private boolean released;
+  private boolean visible = true;
   private Runnable clickAction;
   private Runnable longClickAction;
   private final Runnable triggerLongClick = () -> {
@@ -62,6 +63,9 @@ final class MessageBubbleComponent implements Component {
     if (region == null) throw new IllegalArgumentException("Bubble bounds required.");
     return setRegion(region.left, region.top, region.right, region.bottom);
   }
+
+  MessageBubbleComponent show() { visible = true; return this; }
+  MessageBubbleComponent hide() { visible = false; return this; }
 
   MessageBubbleComponent setRegion(float left, float top, float right, float bottom) {
     ensureActive();
@@ -179,7 +183,7 @@ final class MessageBubbleComponent implements Component {
 
   @Override
   public boolean isVisible() {
-    return !released;
+    return !released && visible;
   }
 
   @Override

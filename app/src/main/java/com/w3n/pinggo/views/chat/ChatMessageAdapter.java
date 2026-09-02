@@ -134,6 +134,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   private final ChatMessageAdapterConfig.MessageClickListener messageClickListener;
   private final ChatMessageAdapterConfig.MessageLongClickListener messageLongClickListener;
   private final ChatPerformanceProfiler profiler;
+  private final String opponentName;
   private final Set<String> selectedMessageIds;
   private final Typeface messageTypeface;
   private final SimpleDateFormat messageTimeFormatter;
@@ -150,6 +151,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       new ConcurrentHashMap<>();
   private Bitmap chatProfile;
   private String playingAudioMessageId = "";
+  private String searchQuery = "";
   private long playingAudioProgressMs;
   private long playingAudioDurationMs;
   private volatile boolean scrolling;
@@ -200,6 +202,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     this.messageClickListener = config.messageClickListener;
     this.messageLongClickListener = config.messageLongClickListener;
     this.profiler = config.profiler;
+    this.opponentName = config.opponentName;
     this.selectedMessageIds = selectedMessageIds;
     messageTypeface = NativeFonts.load(context, NativeFonts.INTER);
     messageTimeFormatter = new SimpleDateFormat("h:mm a", Locale.getDefault());
@@ -368,11 +371,6 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       messages.addAll(nextMessages);
       dateLabels.clear();
       dateLabels.addAll(nextDateLabels);
-      if (profiler != null) {
-        profiler.adapterSubmit(
-            SystemClock.elapsedRealtimeNanos() - submitStartedNanos,
-            oldCount, nextMessages.size(), 0, 0, 0, 0);
-      }
       return false;
     }
     boolean structureChanged = oldCount != nextMessages.size();
@@ -468,6 +466,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   float rowHeight(MessageEntity message, int position, float availableWidth) {
     float scale = figmaScale();
     float dateHeight = hasDateLabel(position) ? DateNotifierComponent.blockHeight(scale) : 0f;
+    if (isReportEvent(message)) return Math.max(1f, dateHeight);
     return dateHeight + metrics(message, availableWidth).bubbleHeight + px(MESSAGE_ROW_GAP_PX);
   }
 
@@ -640,8 +639,27 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         : DateNotifierComponent.blockHeight(
             figmaScale());
     item.find("date_notifier", DateNotifierComponent.class).bind(dateLabel, rowWidth);
+    if (isReportEvent(message)) {
+      item.find("selection_background", Image.class).setVisible(false);
+      item.find("bubble", MessageBubbleComponent.class).hide();
+      item.find("media_preview", MediaPreviewComponent.class).hide();
+      item.find("file_preview", FilePreviewComponent.class).hide();
+      item.find("location_preview", LocationPreviewComponent.class).hide();
+      item.find("audio_preview", AudioMessageComponent.class).hide();
+      item.find("call_preview", CallPreviewComponent.class).hide();
+      item.find("forwarded_panel", ForwardedMessagePanelComponent.class).hide();
+      item.find("reply_preview", ReplyPreviewComponent.class).hide();
+      item.find("forwarded_notice", MessageNoticeComponent.class).hide();
+      item.find("deleted_notice", MessageNoticeComponent.class).hide();
+      item.find("message_text", PreparedMessageTextComponent.class)
+          .bind(new RectF(), null, false).setHighlight("");
+      item.find("message_metadata", MessageMetadataComponent.class).hide();
+      item.find("message_ripple", MessageRowRippleComponent.class).bind(
+          new RectF(), new RectF(), 0f, null, null);
+      return;
+    }
     item.find("selection_background", Image.class)
-        .setRegion(new RectF(0f, dateOffset, rowWidth, rowHeight))
+        .setRegion(positiveRect(0f, dateOffset, rowWidth, rowHeight))
         .setVisible(selectedMessageIds.contains(messageKey(message, position)));
     float horizontalInset = px(MESSAGE_ROW_HORIZONTAL_INSET_PX);
     MessageMetrics metrics = metrics(model, Math.max(1f, rowWidth - horizontalInset * 2f));
@@ -680,7 +698,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       bodyRight = right;
     }
     MessageBubbleComponent bubble = item.find("bubble", MessageBubbleComponent.class);
-    bubble
+    bubble.show()
         .setOutgoing(own)
         .setTailEnabled(!tailLess)
         .setShapeScale(attachmentContentScale)
@@ -827,7 +845,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     boolean showMessageText = !attachmentPreview && !model.deleted && !call;
     item.find("message_text", PreparedMessageTextComponent.class).bind(
         positiveRect(textLeft, messageTop, textRight, textBottom),
-        metrics.messageLayout, showMessageText);
+        metrics.messageLayout, showMessageText).setHighlight(searchQuery);
     long textFinishedNanos = SystemClock.elapsedRealtimeNanos();
 
     float contentLeft = bodyLeft + MESSAGE_HORIZONTAL_PADDING_PX;
@@ -1269,6 +1287,20 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     long now = System.currentTimeMillis();
     long previousTimestamp = -1L;
     for (MessageEntity message : values) {
+      if (isReportEvent(message)) {
+        boolean own = currentUser.equals(normalize(message.senderId));
+        String peer = opponentName.isEmpty() ? "this contact" : opponentName;
+        boolean blockEvent = "chat_block".equalsIgnoreCase(message.messageType);
+        boolean unblockEvent = "chat_unblock".equalsIgnoreCase(message.messageType);
+        labels.add(blockEvent
+            ? own ? "You blocked " + peer : peer + " blocked you"
+            : unblockEvent
+                ? own ? "You unblocked " + peer : peer + " unblocked you"
+                : own ? "You reported " + peer : peer + " reported you");
+        long reportTimestamp = timestampMillis(message.sentTime);
+        if (reportTimestamp > 0L) previousTimestamp = reportTimestamp;
+        continue;
+      }
       long timestamp = timestampMillis(message.sentTime);
       if (timestamp <= 0L || (previousTimestamp > 0L && sameLocalDay(previousTimestamp, timestamp))) {
         labels.add("");
@@ -1278,6 +1310,41 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       if (timestamp > 0L) previousTimestamp = timestamp;
     }
     return labels;
+  }
+
+  private static boolean isReportEvent(MessageEntity message) {
+    if (message == null || message.messageType == null) return false;
+    String type = message.messageType.trim().toLowerCase(Locale.US);
+    return "report".equals(type) || "chat_report".equals(type)
+        || "chat_block".equals(type) || "chat_unblock".equals(type);
+  }
+
+  /** Returns the first match and invalidates bound-row signatures for highlight-only changes. */
+  int setSearchQuery(String value) {
+    String next = value == null ? "" : value.trim().toLowerCase(Locale.US);
+    if (!searchQuery.equals(next)) {
+      searchQuery = next;
+      boundRows.clear();
+      notifyDataSetChanged();
+    }
+    if (next.isEmpty()) return -1;
+    for (int index = 0; index < messages.size(); index++) {
+      String text = messages.get(index).text;
+      if (text != null && text.toLowerCase(Locale.US).contains(next)) return index;
+    }
+    return -1;
+  }
+
+  List<Integer> matchingPositions(String value) {
+    String query = value == null ? "" : value.trim().toLowerCase(Locale.US);
+    List<Integer> matches = new ArrayList<>();
+    if (query.isEmpty()) return matches;
+    for (int index = 0; index < messages.size(); index++) {
+      if (isReportEvent(messages.get(index))) continue;
+      String text = messages.get(index).text;
+      if (text != null && text.toLowerCase(Locale.US).contains(query)) matches.add(index);
+    }
+    return matches;
   }
 
   private String formatDateLabel(long timestamp, long now) {

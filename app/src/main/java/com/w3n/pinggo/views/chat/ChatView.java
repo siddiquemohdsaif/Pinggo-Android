@@ -112,11 +112,12 @@ public final class ChatView extends View {
   private final Bitmap profile;
   private ComponentList<MessageEntity> list;
   private ComponentList<MessageEntity> pinnedList;
-  private Text status, olderStatus, replyText;
+  private Text status, olderStatus, replyText, searchMatchCount;
   private ComposerReplyPreviewComponent composerReplyPreview;
   private Image olderLoadingBackground, attachmentPreviewBackground;
   private Progress olderProgress;
   private TextField input;
+  private TextField searchInput;
   private Button send, attachmentPreviewRemove, attachmentPreviewSend;
   private Image composerActionIcon;
   private Text audioRecordingTime;
@@ -126,6 +127,15 @@ public final class ChatView extends View {
   private int topInset, bottomInset, imeInset;
   private int floatingCallInset;
   private boolean imeVisible;
+  private boolean searchVisible;
+  private boolean contactBlocked;
+  private boolean keepKeyboardAfterSend;
+  private boolean forceBottomOnNextMessageSubmission;
+  private boolean directComposerSendGesture;
+  private String searchDraft = "";
+  private Runnable searchDismissAction;
+  private final List<Integer> searchMatches = new ArrayList<>();
+  private int searchMatchIndex = -1;
   private final ChatComposerState composer = new ChatComposerState();
   private boolean loadingOlderMessages, canLoadOlderMessages = true;
   private String pendingPinnedScrollMessageId;
@@ -211,7 +221,8 @@ public final class ChatView extends View {
                 this::scrollToMessageId,
                 this::handleMessageClick,
                 this::toggleMessageSelection,
-                profiler),
+                profiler,
+                name),
             selection.ids());
     profile = ChatProfileBitmap.load(c, photoPath, name, Math.round(px(132f)), ACCENT);
     adapter.setChatProfile(profile);
@@ -300,6 +311,10 @@ public final class ChatView extends View {
               + anchorPixelOffset;
           float delta = desiredOffset - list.getScrollOffset();
           if (Math.abs(delta) >= .5f) list.scrollBy(0f, delta);
+          if (prepended && profiler != null) {
+            profiler.paginationAnchor(
+                anchorId, firstVisible, anchorPosition, anchorPixelOffset, delta);
+          }
         }
       }
       if (pendingPinnedScrollMessageId != null) {
@@ -326,11 +341,12 @@ public final class ChatView extends View {
         }
       }
     }
-    if (list != null && !MediaPreviewCache.isDecodingPaused()) {
+    if (changed && list != null && !MediaPreviewCache.isDecodingPaused()) {
       adapter.prefetchMediaAround(
           list.getFirstVisiblePosition(), list.getLastVisiblePosition(), 1, availableWidth);
     }
-    invalidate();
+    if (searchVisible && changed) refreshSearchMatches(false);
+    if (changed || selectionChanged) invalidate();
     return changed;
   }
 
@@ -347,10 +363,43 @@ public final class ChatView extends View {
 
   /** Keeps the composer workflow anchored to the newest message. */
   public void scrollToBottom() {
+    forceBottomOnNextMessageSubmission = true;
     if (list == null || adapter.getItemCount() == 0) return;
     list.stopScroll();
     list.scrollToPosition(adapter.getItemCount() - 1);
     invalidate();
+  }
+
+  /** Restores the composer/IME after clearing a sent draft rebuilt the native text field. */
+  public void restoreComposerAfterSend() {
+    if (!keepKeyboardAfterSend) return;
+    keepKeyboardAfterSend = false;
+    post(() -> {
+      if (input == null || contactBlocked) return;
+      requestFocus();
+      input.requestFocus();
+      InputMethodManager keyboard =
+          (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+      if (keyboard != null) {
+        keyboard.restartInput(this);
+        keyboard.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT);
+      }
+    });
+  }
+
+  private void dispatchComposerSend() {
+    // Some component hosts transfer focus to the send button before its click callback.
+    // IME visibility preserves the user's pre-tap composer state in that case.
+    keepKeyboardAfterSend = input != null && (input.isFocused() || imeVisible);
+    forceBottomOnNextMessageSubmission = true;
+    listener.onSend();
+  }
+
+  private boolean isInsideDisplayedSendButton(float x, float y) {
+    if (send == null || !send.isVisible() || !send.isEnabled()) return false;
+    RectF bounds = new RectF(send.getBounds());
+    if (imeVisible) bounds.offset(0f, -Math.max(0, imeInset - bottomInset));
+    return bounds.contains(x, y);
   }
 
   private void onMediaMetricsChanged() {
@@ -582,12 +631,15 @@ public final class ChatView extends View {
     String previousAnchorId = adapter.messageIdAt(previousFirstVisible);
     boolean wasNearBottom = previousCount == 0 || previousLastVisible >= previousCount - 2;
     if (input != null) composer.draft = input.getText();
+    if (searchInput != null) searchDraft = searchInput.getText();
     bg.clear();
     content.clear();
     overlay.clear();
     selectionOverlay.clear();
     composerActionIcon = null;
     input = null;
+    searchInput = null;
+    searchMatchCount = null;
     audioRecordingTime = null;
     audioRecordingWaveform = null;
     composerReplyPreview = null;
@@ -616,6 +668,54 @@ public final class ChatView extends View {
                 new RectF(0, headerBottom, w, getHeight()))
             .setScaleType(Image.ScaleType.FIT_XY));
     headerBottom = chatHeader.build(bg, content, w, top, scale);
+    if (searchVisible) {
+      float searchTop = headerBottom;
+      float searchBottom = searchTop + 132f * scale;
+      content.add(new Image.Builder(getContext(), "search_tab_background", white,
+          new RectF(0f, searchTop, w, searchBottom)).setScaleType(Image.ScaleType.FIT_XY));
+      content.add(new Image.Builder(getContext(), "search_tab_divider", divider,
+          new RectF(0f, searchBottom - px(2.75f), w, searchBottom))
+          .setScaleType(Image.ScaleType.FIT_XY));
+      searchInput = content.add(new TextField.Builder(getContext(), "message_search",
+          new RectF(44f * scale, searchTop + 17f * scale,
+              590f * scale, searchBottom - 17f * scale))
+          .setText(searchDraft)
+          .setHint("Search messages")
+          .setInputType(InputType.TYPE_CLASS_TEXT)
+          .setImeOptions(EditorInfo.IME_ACTION_SEARCH)
+          .setFont(NativeFonts.INTER)
+          .setFontVariations(FontVariation.REGULAR)
+          .setTextSizePx(38f * scale)
+          .setTextColor(PRIMARY)
+          .setHintColor(SECONDARY)
+          .setCursorColor(ACCENT)
+          .setBackgroundColor(0xFFF3F6F8, Color.WHITE)
+          .setStrokeColor(0xFFD8E1E8, ACCENT)
+          .setCornerRadiusPx(42f * scale)
+          .setPaddingPx(32f * scale, 16f * scale)
+          .setOnTextChangedListener((id, value) -> {
+            searchDraft = value == null ? "" : value;
+            searchMessages(searchDraft);
+          }));
+      searchMatchCount = text(content, "search_match_count", "0/0",
+          new RectF(600f * scale, searchTop + 17f * scale,
+              716f * scale, searchBottom - 17f * scale),
+          31f * scale, SECONDARY, FontVariation.MEDIUM, Text.Alignment.CENTER);
+      button(content, "previous_search_match", transparent, "↑",
+          new RectF(720f * scale, searchTop + 17f * scale,
+              824f * scale, searchBottom - 17f * scale), PRIMARY,
+          id -> moveSearchMatch(-1));
+      button(content, "next_search_match", transparent, "↓",
+          new RectF(828f * scale, searchTop + 17f * scale,
+              932f * scale, searchBottom - 17f * scale), PRIMARY,
+          id -> moveSearchMatch(1));
+      button(content, "close_search", transparent, "×",
+          new RectF(936f * scale, searchTop + 17f * scale,
+              1058f * scale, searchBottom - 17f * scale), PRIMARY,
+          id -> dismissSearch());
+      refreshSearchMatches(false);
+      headerBottom = searchBottom;
+    }
     float pinnedHeight = pinnedTabHeight();
     if (pinnedHeight > 0f) {
       float pinnedTop = headerBottom;
@@ -783,7 +883,7 @@ public final class ChatView extends View {
           "Send",
           new RectF(w - px(214.5f), previewTop + px(33f), w - px(22f), composerTop - px(33f)),
           Color.WHITE,
-          id -> listener.onSend());
+          id -> dispatchComposerSend());
     }
     composerBackground = overlay.add(
         new ComposerBackgroundComponent(
@@ -898,7 +998,7 @@ public final class ChatView extends View {
                 .setRippleColor(0x16019CC4)
                 .setOnClickListener(id -> {
                   if (composer.recording) listener.onAudioRecordingSend();
-                  else if (hasComposerContent()) listener.onSend();
+                  else if (hasComposerContent()) dispatchComposerSend();
                   else listener.onAudioRecordingStart();
                 }));
     if (composer.attachmentPanelVisible) {
@@ -931,6 +1031,21 @@ public final class ChatView extends View {
             id -> selectAttachment(type));
       }
     }
+    if (contactBlocked) {
+      overlay.add(new Image.Builder(getContext(), "blocked_composer_background", white,
+          new RectF(0f, composerTop - px(12f), w, screenBottom))
+          .setScaleType(Image.ScaleType.FIT_XY));
+      float blockedGap = 22f * scale;
+      float blockedSide = 44f * scale;
+      float blockedWidth = (w - blockedSide * 2f - blockedGap) / 2f;
+      button(overlay, "blocked_delete_chat", attachmentOption, "Delete chat",
+          new RectF(blockedSide, composerTop, blockedSide + blockedWidth, composerBottom),
+          0xFFD32F2F, id -> listener.onBlockedDeleteChat());
+      button(overlay, "blocked_unblock", accent, "Unblock",
+          new RectF(blockedSide + blockedWidth + blockedGap, composerTop,
+              w - blockedSide, composerBottom),
+          Color.WHITE, id -> listener.onBlockedUnblock());
+    }
     if (isSelectingMessages()) {
       selectionHeader.build(selectionOverlay, selectedMessages(), w, top, scale);
     }
@@ -939,7 +1054,10 @@ public final class ChatView extends View {
     status.setVisible(empty && !statusValue.isEmpty());
     if (!empty) {
       int anchorPosition = adapter.indexOfMessage(previousAnchorId);
-      if (wasNearBottom || anchorPosition < 0) list.scrollToPosition(adapter.getItemCount() - 1);
+      if (forceBottomOnNextMessageSubmission || wasNearBottom || anchorPosition < 0) {
+        list.scrollToPosition(adapter.getItemCount() - 1);
+        forceBottomOnNextMessageSubmission = false;
+      }
       else list.scrollToPosition(anchorPosition);
     }
     applyKeyboardInsets();
@@ -1170,7 +1288,8 @@ public final class ChatView extends View {
   }
 
   private boolean shouldShowOlderLoading() {
-    return loadingOlderMessages && adapter.getItemCount() > 0;
+    // Near-top prefetch must not stop or shift the list while the gesture/fling is active.
+    return loadingOlderMessages && !messageScrollActive && adapter.getItemCount() > 0;
   }
 
   private float messageListTop() {
@@ -1208,6 +1327,82 @@ public final class ChatView extends View {
     list.stopScroll();
     list.scrollToPosition(position);
     invalidate();
+  }
+
+  /** Applies live highlighting and moves to the first currently loaded match. */
+  public boolean searchMessages(String query) {
+    if (list == null) return false;
+    adapter.setSearchQuery(query);
+    refreshSearchMatches(true);
+    return !searchMatches.isEmpty();
+  }
+
+  private void refreshSearchMatches(boolean selectFirst) {
+    searchMatches.clear();
+    searchMatches.addAll(adapter.matchingPositions(searchDraft));
+    if (searchMatches.isEmpty()) searchMatchIndex = -1;
+    else if (selectFirst || searchMatchIndex < 0 || searchMatchIndex >= searchMatches.size()) {
+      searchMatchIndex = 0;
+    }
+    updateSearchMatchCount();
+    if (selectFirst && searchMatchIndex >= 0) scrollToSearchMatch();
+  }
+
+  private void moveSearchMatch(int direction) {
+    refreshSearchMatches(false);
+    if (searchMatches.isEmpty()) return;
+    searchMatchIndex = (searchMatchIndex + direction + searchMatches.size())
+        % searchMatches.size();
+    updateSearchMatchCount();
+    scrollToSearchMatch();
+  }
+
+  private void scrollToSearchMatch() {
+    if (list == null || searchMatchIndex < 0 || searchMatchIndex >= searchMatches.size()) return;
+    list.stopScroll();
+    list.scrollToPosition(searchMatches.get(searchMatchIndex));
+    invalidate();
+  }
+
+  private void updateSearchMatchCount() {
+    if (searchMatchCount == null) return;
+    searchMatchCount.setText(searchMatches.isEmpty()
+        ? (searchDraft.trim().isEmpty() ? "0/0" : "0/0")
+        : (searchMatchIndex + 1) + "/" + searchMatches.size());
+  }
+
+  public void showSearch(Runnable onDismiss) {
+    searchVisible = true;
+    searchDismissAction = onDismiss;
+    if (getWidth() > 0 && getHeight() > 0) build();
+    if (searchInput != null) {
+      searchInput.requestFocus();
+      searchInput.setSelection(searchDraft.length());
+    }
+  }
+
+  public boolean dismissSearch() {
+    if (!searchVisible) return false;
+    searchVisible = false;
+    searchDraft = "";
+    adapter.setSearchQuery("");
+    Runnable dismissed = searchDismissAction;
+    searchDismissAction = null;
+    if (getWidth() > 0 && getHeight() > 0) build();
+    if (dismissed != null) dismissed.run();
+    return true;
+  }
+
+  public void setContactBlocked(boolean blocked) {
+    if (contactBlocked == blocked) return;
+    contactBlocked = blocked;
+    if (blocked) {
+      composer.draft = "";
+      composer.clearReply();
+      composer.clearAttachment();
+      composer.attachmentPanelVisible = false;
+    }
+    if (getWidth() > 0 && getHeight() > 0) build();
   }
 
   private float olderLoadingHeight() {
@@ -1301,6 +1496,28 @@ public final class ChatView extends View {
 
   @Override
   public boolean onTouchEvent(MotionEvent e) {
+    int action = e.getActionMasked();
+    if (action == MotionEvent.ACTION_DOWN
+        && input != null
+        && (input.isFocused() || imeVisible)
+        && hasComposerContent()
+        && isInsideDisplayedSendButton(e.getX(), e.getY())) {
+      // Do not pass this gesture to ZLayerGroup: its TextField routing clears focus before
+      // the sibling Button receives the click, making the first send tap dismiss the IME.
+      directComposerSendGesture = true;
+      keepKeyboardAfterSend = true;
+      return true;
+    }
+    if (directComposerSendGesture) {
+      if (action == MotionEvent.ACTION_UP) {
+        boolean sendMessage = isInsideDisplayedSendButton(e.getX(), e.getY());
+        directComposerSendGesture = false;
+        if (sendMessage) dispatchComposerSend();
+        return true;
+      }
+      if (action == MotionEvent.ACTION_CANCEL) directComposerSendGesture = false;
+      return true;
+    }
     if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
       loadingGestureStartY = e.getY();
       loadingGestureBlocked = false;
@@ -1368,7 +1585,8 @@ public final class ChatView extends View {
   private void loadOlderMessagesIfNeeded() {
     if (list == null || adapter.getItemCount() == 0
         || olderLoadRequestedForGesture || loadingOlderMessages || !canLoadOlderMessages) return;
-    if (list.getFirstVisiblePosition() <= 2) {
+    // Begin before position zero so Room/network latency is hidden by the remaining rows.
+    if (list.getFirstVisiblePosition() <= 5) {
       olderLoadRequestedForGesture = true;
       listener.onLoadOlderMessages();
     }
@@ -1380,6 +1598,7 @@ public final class ChatView extends View {
     removeCallbacks(probeScrollIdle);
     adapter.setScrolling(false);
     MediaPreviewCache.setDecodingPaused(false);
+    updateOlderLoadingChrome();
     if (list == null) return;
     int first = list.getFirstVisiblePosition();
     int last = list.getLastVisiblePosition();

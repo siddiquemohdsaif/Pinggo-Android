@@ -135,6 +135,59 @@ public class ChatHandler {
         enqueueChatCall(appApi.updateChatSettingsBulk(createJsonBody(jsonObject)), callback);
     }
 
+    public static void clearChat(AppRestAPI appApi, String phoneNumber, String chatId,
+                                 AppFunctionManager.Callback callback) {
+        JSONObject body = new JSONObject();
+        try {
+            body.put("phoneNumber", normalizePhoneNumber(phoneNumber));
+            body.put("chatId", chatId == null ? "" : chatId.trim());
+        } catch (JSONException error) {
+            handleJsonError(error, callback);
+            return;
+        }
+        enqueueChatCall(appApi.clearChat(createJsonBody(body)), callback);
+    }
+
+    public static void reportChat(AppRestAPI appApi, String phoneNumber, String chatId,
+                                  String reason, AppFunctionManager.Callback callback) {
+        JSONObject body = new JSONObject();
+        try {
+            body.put("phoneNumber", normalizePhoneNumber(phoneNumber));
+            body.put("chatId", chatId == null ? "" : chatId.trim());
+            body.put("reason", reason == null ? "" : reason.trim());
+        } catch (JSONException error) {
+            handleJsonError(error, callback);
+            return;
+        }
+        enqueueChatCall(appApi.reportChat(createJsonBody(body)), callback);
+    }
+
+    public static void updateBlock(AppRestAPI appApi, String phoneNumber, String chatId,
+                                   boolean blocked, AppFunctionManager.Callback callback) {
+        RequestBody body = chatIdentityBody(phoneNumber, chatId, callback);
+        if (body == null) return;
+        enqueueChatCall(blocked ? appApi.blockChat(body) : appApi.unblockChat(body), callback);
+    }
+
+    public static void getBlockStatus(AppRestAPI appApi, String phoneNumber, String chatId,
+                                      AppFunctionManager.Callback callback) {
+        RequestBody body = chatIdentityBody(phoneNumber, chatId, callback);
+        if (body != null) enqueueChatCall(appApi.getBlockStatus(body), callback);
+    }
+
+    private static RequestBody chatIdentityBody(String phoneNumber, String chatId,
+                                                AppFunctionManager.Callback callback) {
+        JSONObject body = new JSONObject();
+        try {
+            body.put("phoneNumber", normalizePhoneNumber(phoneNumber));
+            body.put("chatId", chatId == null ? "" : chatId.trim());
+            return createJsonBody(body);
+        } catch (JSONException error) {
+            handleJsonError(error, callback);
+            return null;
+        }
+    }
+
     public static void syncPresence(AppRestAPI appApi, List<String> userIds,
                                     AppFunctionManager.Callback callback) {
         JSONObject jsonObject = new JSONObject();
