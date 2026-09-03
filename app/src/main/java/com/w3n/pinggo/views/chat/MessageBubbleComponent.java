@@ -222,16 +222,16 @@ final class MessageBubbleComponent implements Component {
     float bottom = Math.max(top + 1f, bounds.bottom - strokeHalf);
     float left = outgoing ? bounds.left + strokeHalf : bounds.left + tailWidth + strokeHalf;
     float right = outgoing ? bounds.right - tailWidth - strokeHalf : bounds.right - strokeHalf;
+    float radius = Math.min(px(44f) * shapeScale, Math.max(1f, (bottom - top) / 2f));
     if (!tailEnabled) {
       path.addRoundRect(
           bounds.left + strokeHalf,
           bounds.top + strokeHalf,
           bounds.right - strokeHalf,
           bounds.bottom - strokeHalf,
-          px(44f), px(44f), Path.Direction.CW);
+          radius, radius, Path.Direction.CW);
       return;
     }
-    float radius = Math.min(px(44f) * shapeScale, Math.max(1f, (bottom - top) / 2f));
     float tailBottom = Math.min(bottom, top + tailHeight);
 
     if (outgoing) {

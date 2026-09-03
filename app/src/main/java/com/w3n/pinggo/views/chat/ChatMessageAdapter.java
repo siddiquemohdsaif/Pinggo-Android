@@ -89,8 +89,16 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   private static final float NOTICE_TEXT_GAP_PX = 5f;
   private static final float NOTICE_TEXT_SIZE_PX = MESSAGE_TEXT_SIZE_PX * .90f;
   private static final float FORWARDED_PANEL_INSET_PX = 12f;
+  private static final float FORWARDED_LABEL_BOTTOM_GAP_PX = 5f;
+  private static final float FORWARDED_INNER_TOP_GAP_PX = 10f;
+  private static final float FORWARDED_EXTRA_HEIGHT_PX =
+      FORWARDED_LABEL_BOTTOM_GAP_PX + FORWARDED_INNER_TOP_GAP_PX;
   private static final float FORWARDED_HEADER_HEIGHT_PX =
-      NOTICE_PADDING_PX + NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX;
+      NOTICE_PADDING_PX + NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX
+          + FORWARDED_EXTRA_HEIGHT_PX;
+  private static final float FORWARDED_ATTACHMENT_HEADER_HEIGHT_PX =
+      NOTICE_PADDING_PX + NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX
+          + FORWARDED_LABEL_BOTTOM_GAP_PX;
   private static final float REPLY_BOX_INSET_PX = 12f;
   private static final float REPLY_TEXT_LEFT_PX = 27f;
   private static final float REPLY_TEXT_RIGHT_PX = 18f;
@@ -152,6 +160,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   private Bitmap chatProfile;
   private String playingAudioMessageId = "";
   private String searchQuery = "";
+  private String pendingNavigationRippleMessageId = "";
   private long playingAudioProgressMs;
   private long playingAudioDurationMs;
   private volatile boolean scrolling;
@@ -455,6 +464,13 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     return -1;
   }
 
+  void rippleMessage(String messageId) {
+    int position = indexOfMessage(messageId);
+    if (position < 0) return;
+    pendingNavigationRippleMessageId = messageId;
+    notifyItemChanged(position);
+  }
+
   float contentStartAt(int position, float availableWidth) {
     float start = 0f;
     for (int index = 0; index < Math.min(position, messages.size()); index++) {
@@ -582,17 +598,19 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     row.add(new LocationPreviewComponent(
         scope.id("location_preview"), messageTypeface,
         figmaScale()));
-    row.add(new AudioMessageComponent(
-        scope.id("audio_preview"), id -> {
-          if (audioPlaybackListener != null) audioPlaybackListener.onAudioPlaybackToggle(id);
-        }));
     row.add(new CallPreviewComponent(
         scope.id("call_preview"), messageTypeface,
         figmaScale()));
     row.add(new ForwardedMessagePanelComponent(
         scope.id("forwarded_panel"),
         figmaScale()));
-            row.add(new MessageRowRippleComponent(scope.id("message_ripple")));
+    row.add(new MessageRowRippleComponent(scope.id("message_ripple")));
+    // ZLayer hit-tests in reverse component order. Keep the audio control above the
+    // row-wide ripple; it returns false outside play/stop so bubble gestures still work.
+    row.add(new AudioMessageComponent(
+        scope.id("audio_preview"), id -> {
+          if (audioPlaybackListener != null) audioPlaybackListener.onAudioPlaybackToggle(id);
+        }));
     row.add(new ReplyPreviewComponent(
         context, scope.id("reply_preview"), documentIcon, chatProfile, messageTypeface,
         REPLY_SENDER_TEXT_SIZE_PX, REPLY_MESSAGE_TEXT_SIZE_PX,
@@ -728,13 +746,18 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
             ? null : () -> messageClickListener.onMessageClick(message))
         .setLongClickAction(messageLongClickListener == null
             ? null : () -> messageLongClickListener.onMessageLongClick(message));
-    item.find("message_ripple", MessageRowRippleComponent.class).bind(
+    MessageRowRippleComponent messageRipple =
+        item.find("message_ripple", MessageRowRippleComponent.class).bind(
         positiveRect(0f, bubbleTop, rowWidth, bubbleBottom),
         positiveRect(clickRegion.left, clickRegion.top, clickRegion.right, clickRegion.bottom),
         0f,
         messageClickListener == null ? null : () -> messageClickListener.onMessageClick(message),
         messageLongClickListener == null
             ? null : () -> messageLongClickListener.onMessageLongClick(message));
+    if (messageKey(message, position).equals(pendingNavigationRippleMessageId)) {
+      pendingNavigationRippleMessageId = "";
+      messageRipple.pulse();
+    }
     long setupFinishedNanos = SystemClock.elapsedRealtimeNanos();
     MediaPreviewComponent preview = item.find("media_preview", MediaPreviewComponent.class);
     if (media) {
@@ -804,7 +827,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     ReplyPreviewComponent replyPreview = item.find("reply_preview", ReplyPreviewComponent.class);
     if (hasReply) {
       float replyTop = headingTop + metrics.forwardedHeight;
-      replyPreview.bind(
+      replyPreview.setCornerRadius(px(44f) * attachmentContentScale).bind(
           positiveRect(bodyLeft + REPLY_BOX_INSET_PX, replyTop,
               bodyRight - REPLY_BOX_INSET_PX,
               replyTop + metrics.replyHeight - REPLY_MESSAGE_GAP_PX),
@@ -818,7 +841,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     CallPreviewComponent callPreview = item.find("call_preview", CallPreviewComponent.class);
     if (call) {
       callPreview.bind(new RectF(left, attachmentTop, right, bubbleBottom),
-          callIcon(message, own), model.displayText);
+          callIcon(message, own), model.displayText, model.forwarded);
     } else {
       callPreview.hide();
     }
@@ -827,7 +850,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     if (model.forwarded && !attachmentPreview && !call) {
       forwardedPanel.bind(positiveRect(
           bodyLeft + FORWARDED_PANEL_INSET_PX,
-          messageTop - FORWARDED_PANEL_INSET_PX,
+          messageTop - FORWARDED_PANEL_INSET_PX - FORWARDED_INNER_TOP_GAP_PX,
           bodyRight - FORWARDED_PANEL_INSET_PX,
           bubbleBottom - FORWARDED_PANEL_INSET_PX));
     } else {
@@ -952,7 +975,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
           ? 0f : replyBlockHeight(replySender, replyValue,
               finalWidth - REPLY_BOX_INSET_PX * 2f);
       float headerHeight = model.forwarded
-          ? FORWARDED_HEADER_HEIGHT_PX
+          ? FORWARDED_ATTACHMENT_HEADER_HEIGHT_PX
           : replyHeight > 0f ? NOTICE_PADDING_PX : 0f;
       Paint callTimePaint = new Paint(measurementTools.get().timePaint);
       Paint.FontMetrics timeFont = callTimePaint.getFontMetrics();
@@ -961,7 +984,9 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
           desiredHeight * scale + headerHeight + replyHeight,
           1f,
           1f,
-          model.forwarded ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX : 0f,
+          model.forwarded
+              ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX + FORWARDED_LABEL_BOTTOM_GAP_PX
+              : 0f,
           replyHeight,
           callTimePaint.measureText(model.formattedTime) + MESSAGE_TIME_RECT_EXTRA_PX,
           (float) Math.ceil(timeFont.descent - timeFont.ascent),
@@ -1015,7 +1040,9 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
           finalWidth,
           desiredHeight * scale + headerHeight + replyHeight,
           1f, 1f,
-          model.forwarded ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX : 0f,
+          model.forwarded
+              ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX + FORWARDED_EXTRA_HEIGHT_PX
+              : 0f,
           replyHeight,
           mediaTimePaint.measureText(model.formattedTime)
               + MESSAGE_TIME_RECT_EXTRA_PX,
@@ -1131,7 +1158,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
             bodyWidth - REPLY_BOX_INSET_PX * 2f)
         : 0f;
     float forwardedHeight = model.forwarded
-        ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX : 0f;
+        ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX + FORWARDED_EXTRA_HEIGHT_PX : 0f;
     float messageTop = (model.forwarded || hasReply
             ? NOTICE_PADDING_PX : MESSAGE_TOP_PADDING_PX)
         + forwardedHeight + replyHeight;

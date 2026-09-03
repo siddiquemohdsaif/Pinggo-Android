@@ -53,6 +53,7 @@ class ReplyPreviewComponent implements Component {
   private Bitmap mediaThumbnail;
   private String mediaRequestKey = "";
   private String targetMessageId = "";
+  private float cornerRadius = CORNER_RADIUS_PX;
   private boolean pressed;
   private boolean visible;
   private boolean released;
@@ -91,6 +92,11 @@ class ReplyPreviewComponent implements Component {
     bindMediaThumbnail();
     visible = true;
     invalidate();
+    return this;
+  }
+
+  ReplyPreviewComponent setCornerRadius(float radius) {
+    cornerRadius = Math.max(0f, radius);
     return this;
   }
 
@@ -143,10 +149,10 @@ class ReplyPreviewComponent implements Component {
   @Override
   public void draw(Canvas canvas) {
     if (!isVisible() || bounds.isEmpty()) return;
-    canvas.drawRoundRect(bounds, CORNER_RADIUS_PX, CORNER_RADIUS_PX, fill);
+    canvas.drawRoundRect(bounds, cornerRadius, cornerRadius, fill);
     accentBounds.set(bounds);
     accentBounds.inset(BORDER_WIDTH_PX, BORDER_WIDTH_PX);
-    float accentRadius = Math.max(1f, CORNER_RADIUS_PX - BORDER_WIDTH_PX);
+    float accentRadius = Math.max(1f, cornerRadius - BORDER_WIDTH_PX);
     cardClip.reset();
     cardClip.addRoundRect(accentBounds, accentRadius, accentRadius, Path.Direction.CW);
     canvas.save();
@@ -156,7 +162,7 @@ class ReplyPreviewComponent implements Component {
     canvas.restore();
     borderBounds.set(bounds);
     borderBounds.inset(BORDER_WIDTH_PX / 2f, BORDER_WIDTH_PX / 2f);
-    canvas.drawRoundRect(borderBounds, CORNER_RADIUS_PX, CORNER_RADIUS_PX, border);
+    canvas.drawRoundRect(borderBounds, cornerRadius, cornerRadius, border);
 
     float textLeft = bounds.left + TEXT_LEFT_PX;
     int textWidth = Math.max(1,

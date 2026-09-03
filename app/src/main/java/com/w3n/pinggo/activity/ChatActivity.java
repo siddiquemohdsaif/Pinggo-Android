@@ -79,7 +79,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private static final long LOCATION_FALLBACK_MAX_AGE_MS = 120_000L;
   private static final float LOCATION_ACCEPTABLE_ACCURACY_M = 100f;
   private static final int SELECTION_STATUS_BAR_COLOR = 0xFFE9EDF0;
-  private static final int DEFAULT_STATUS_BAR_COLOR = 0xFFFFFFFF;
+  private static final int DEFAULT_STATUS_BAR_COLOR = 0xFFF9FBFE;
   private static final int INITIAL_RENDER_WINDOW_SIZE = 15;
   private static final int PROGRESSIVE_RENDER_INCREMENT = ChatRepository.MESSAGE_PAGE_SIZE;
   private static final int MESSAGE_WINDOW_INCREMENT = ChatRepository.MESSAGE_PAGE_SIZE;
@@ -320,6 +320,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
             this,
             profiler);
     setContentView(chatView);
+    getWindow().setStatusBarColor(DEFAULT_STATUS_BAR_COLOR);
     ensurePingGoStorageAccess();
     conversationMenuDialog =
         new ConversationMenuDialogView(
@@ -671,9 +672,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       for (MessageEntity message : availableMessages) {
         if (message != null && message.pinned) pinnedMessages.add(message);
       }
-      pinnedMessages.sort((first, second) -> Long.compare(
-          second.pinnedAt == null ? second.sentTime : second.pinnedAt,
-          first.pinnedAt == null ? first.sentTime : first.pinnedAt));
+      pinnedMessages.sort((first, second) -> Long.compare(first.sentTime, second.sentTime));
       chatView.setPinnedMessages(pinnedMessages);
     }
     localPageLoading = false;
@@ -1745,16 +1744,9 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       return;
     }
     String type = message.messageType == null ? "text" : message.messageType;
-    if ("audio".equals(type)) {
-      // Voice messages are owned by the in-chat player. Never let their row click fall
-      // through to the generic attachment chooser.
-      String audioMessageId = message.messageId;
-      if (audioMessageId == null || audioMessageId.trim().isEmpty()) {
-        audioMessageId = message.clientMessageId;
-      }
-      onAudioPlaybackToggle(audioMessageId);
-      return;
-    }
+    // Audio playback is intentionally handled only by AudioMessageComponent's play/stop
+    // control. A generic message-bubble click must never toggle the player.
+    if ("audio".equals(type)) return;
     if ("location".equals(type) && message.latitude != null && message.longitude != null) {
       String coordinates = message.latitude + "," + message.longitude;
       openLocationChooser(coordinates);

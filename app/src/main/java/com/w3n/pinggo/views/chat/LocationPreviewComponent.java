@@ -18,7 +18,6 @@ final class LocationPreviewComponent implements Component {
   private static final int ACCENT_COLOR = 0xFF019CC4;
   private static final int COORDINATE_COLOR = 0xFF5C6B85;
   private final String id;
-  private final float figmaScale;
   private final RectF bounds = new RectF();
   private final RectF inner = new RectF();
   private final Path clip = new Path();
@@ -33,7 +32,6 @@ final class LocationPreviewComponent implements Component {
 
   LocationPreviewComponent(String id, Typeface typeface, float figmaScale) {
     this.id = id;
-    this.figmaScale = Math.max(.01f, figmaScale);
     coordinatePaint.setColor(COORDINATE_COLOR);
     coordinatePaint.setTypeface(typeface);
     actionPaint.setColor(ACCENT_COLOR);
@@ -68,7 +66,7 @@ final class LocationPreviewComponent implements Component {
     if (!isVisible() || bounds.isEmpty()) return;
     float scale = bounds.width() / 620f;
     float inset = 12f * scale;
-    float radius = 44f * figmaScale;
+    float radius = 44f * scale;
     inner.set(bounds.left + inset, bounds.top + inset,
         bounds.right - inset, bounds.bottom - inset);
     paint.setColor(PANEL_COLOR);

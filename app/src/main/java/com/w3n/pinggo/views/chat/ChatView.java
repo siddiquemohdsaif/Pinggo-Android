@@ -38,6 +38,7 @@ import com.w3n.pinggo.data.local.MessageEntity;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.res.ResourcesCompat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
@@ -55,7 +56,6 @@ public final class ChatView extends View {
       new com.ogfa.nativeviews.component.FigmaConfig(1080f);
   private static final int PRIMARY = 0xFF000E1A, SECONDARY = 0xFF687382, ACCENT = 0xFF019CC4;
   private static final int MAX_VISIBLE_COMPOSER_LINES = 7;
-  private static final int MAX_VISIBLE_PINNED_ROWS = 3;
   private final ZLayerGroup layers = new ZLayerGroup(this);
   private final ZLayer bg = layers.addLayer("background"),
       content = layers.addLayer("content"),
@@ -65,11 +65,13 @@ public final class ChatView extends View {
   private final ChatPerformanceProfiler profiler;
   private final ChatMessageAdapter adapter;
   private final PinnedMessageAdapter pinnedAdapter;
+  private final PinnedMessageTabView pinnedMessageTab;
   private final MessageSelectionHeaderComponent selectionHeader;
   private final ChatHeaderComponent chatHeader;
   private final TextPaint composerMeasurePaint =
       new TextPaint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
   private final Bitmap white = color(Color.WHITE),
+      chatStatusBarBackground = color(0xFFF9FBFE),
       transparent = color(Color.TRANSPARENT),
       divider = color(0xFFE5EAF0),
       accent = color(ACCENT),
@@ -111,7 +113,6 @@ public final class ChatView extends View {
   private final ChatSelectionController selection = new ChatSelectionController();
   private final Bitmap profile;
   private ComponentList<MessageEntity> list;
-  private ComponentList<MessageEntity> pinnedList;
   private Text status, olderStatus, replyText, searchMatchCount;
   private ComposerReplyPreviewComponent composerReplyPreview;
   private Image olderLoadingBackground, attachmentPreviewBackground;
@@ -143,6 +144,7 @@ public final class ChatView extends View {
   private String pendingReplyScrollMessageId;
   private String statusValue = "Loading messages...";
   private final List<MessageEntity> pinnedMessages = new ArrayList<>();
+  private int pinnedMessageIndex;
   private float headerBottom, baseListBottom;
   private float renderedComposerHeight = -1f;
   private boolean composerResizePosted;
@@ -190,6 +192,9 @@ public final class ChatView extends View {
     composerMeasurePaint.setTypeface(ResourcesCompat.getFont(c, NativeFonts.INTER));
     pinnedAdapter = new PinnedMessageAdapter(
         c, this.currentUser, white, divider, selectionPinIcon);
+    pinnedMessageTab = new PinnedMessageTabView(
+        c, pinnedAdapter, white, divider, transparent,
+        this::scrollToPinnedMessage, this::movePinnedMessage);
     selectionHeader = new MessageSelectionHeaderComponent(
         c, listener, this::clearMessageSelection, pinnedAdapter::isPinnedByCurrentUser,
         selectionBackground, selectionStatusBarBackground, transparent, backIcon,
@@ -228,7 +233,8 @@ public final class ChatView extends View {
     profile = ChatProfileBitmap.load(c, photoPath, name, Math.round(px(132f)), ACCENT);
     adapter.setChatProfile(profile);
     chatHeader = new ChatHeaderComponent(
-        c, chatName, listener, white, headerBackground, transparent, profile, backIcon,
+        c, chatName, listener, chatStatusBarBackground, headerBackground, transparent,
+        profile, backIcon,
         voiceCallIcon, videoCallIcon, moreIcon);
     setBackgroundColor(0xFFF7F9FB);
     setClickable(true);
@@ -321,6 +327,7 @@ public final class ChatView extends View {
       if (pendingPinnedScrollMessageId != null) {
         int pinnedPosition = adapter.indexOfMessage(pendingPinnedScrollMessageId);
         if (pinnedPosition >= 0) {
+          adapter.rippleMessage(pendingPinnedScrollMessageId);
           list.stopScroll();
           list.scrollToPosition(pinnedPosition);
           pendingPinnedScrollMessageId = null;
@@ -329,6 +336,7 @@ public final class ChatView extends View {
       if (pendingReplyScrollMessageId != null) {
         int replyPosition = adapter.indexOfMessage(pendingReplyScrollMessageId);
         if (replyPosition >= 0) {
+          adapter.rippleMessage(pendingReplyScrollMessageId);
           list.stopScroll();
           list.scrollToPosition(replyPosition);
           pendingReplyScrollMessageId = null;
@@ -466,13 +474,70 @@ public final class ChatView extends View {
         clientMessageId, traceId, pressedElapsedMs, pressedWallMs);
   }
 
-  /** Displays newest pins first and reserves header space only while pins exist. */
+  /** Displays one active pin while retaining the full collection for navigation. */
   public void setPinnedMessages(List<MessageEntity> values) {
-    if (!pinnedAdapter.submit(values)) return;
+    String previousPinsSignature = pinnedMessagesSignature(pinnedMessages);
+    String activeId = pinnedMessages.isEmpty() || pinnedMessageIndex >= pinnedMessages.size()
+        ? "" : pinnedMessageKey(pinnedMessages.get(pinnedMessageIndex));
     pinnedMessages.clear();
     if (values != null) pinnedMessages.addAll(values);
+    pinnedMessages.sort((first, second) -> {
+      long firstSent = first == null ? 0L : first.sentTime;
+      long secondSent = second == null ? 0L : second.sentTime;
+      int byTime = Long.compare(firstSent, secondSent);
+      return byTime != 0 ? byTime
+          : pinnedMessageKey(first).compareTo(pinnedMessageKey(second));
+    });
+    pinnedMessageIndex = Math.max(0, pinnedMessages.size() - 1);
+    if (!activeId.isEmpty()) {
+      for (int index = 0; index < pinnedMessages.size(); index++) {
+        if (activeId.equals(pinnedMessageKey(pinnedMessages.get(index)))) {
+          pinnedMessageIndex = index;
+          break;
+        }
+      }
+    }
+    boolean changed = pinnedAdapter.submit(activePinnedMessages());
+    boolean collectionChanged = !previousPinsSignature.equals(
+        pinnedMessagesSignature(pinnedMessages));
+    if (!changed && !collectionChanged) return;
     if (getWidth() > 0 && getHeight() > 0) build();
     else invalidate();
+  }
+
+  private List<MessageEntity> activePinnedMessages() {
+    if (pinnedMessages.isEmpty()) return Collections.emptyList();
+    pinnedMessageIndex = Math.max(0, Math.min(pinnedMessageIndex, pinnedMessages.size() - 1));
+    return Collections.singletonList(pinnedMessages.get(pinnedMessageIndex));
+  }
+
+  private static String pinnedMessageKey(MessageEntity message) {
+    if (message == null) return "";
+    if (message.messageId != null && !message.messageId.trim().isEmpty()) return message.messageId;
+    return message.clientMessageId == null ? "" : message.clientMessageId;
+  }
+
+  private static String pinnedMessagesSignature(List<MessageEntity> messages) {
+    StringBuilder value = new StringBuilder();
+    for (MessageEntity message : messages) {
+      value.append(pinnedMessageKey(message)).append('\u0001')
+          .append(message == null ? 0L : message.sentTime).append('\u0001')
+          .append(message == null ? null : message.pinnedAt).append('\u0001')
+          .append(message == null ? null : message.pinnedBy).append('\u0002');
+    }
+    return value.toString();
+  }
+
+  private void movePinnedMessage(int direction) {
+    if (pinnedMessages.isEmpty()) return;
+    int count = pinnedMessages.size();
+    pinnedMessageIndex = (pinnedMessageIndex + direction + count) % count;
+    MessageEntity active = pinnedMessages.get(pinnedMessageIndex);
+    pinnedAdapter.submit(Collections.singletonList(active));
+    pinnedMessageTab.updateCount(pinnedMessageIndex, count);
+    pinnedMessageTab.scrollToOnlyRow();
+    scrollToPinnedMessage(active);
+    invalidate();
   }
 
   public void setOlderMessagesState(boolean loading, boolean canLoad) {
@@ -657,7 +722,6 @@ public final class ChatView extends View {
     attachmentPreviewTextComponent = null;
     attachmentPreviewRemove = null;
     attachmentPreviewSend = null;
-    pinnedList = null;
     float attachmentPanelHeight = composer.attachmentPanelVisible ? px(308f) : 0;
     float w = getWidth();
     float scale = w / 1080f;
@@ -728,32 +792,8 @@ public final class ChatView extends View {
     }
     float pinnedHeight = pinnedTabHeight();
     if (pinnedHeight > 0f) {
-      float pinnedTop = headerBottom;
-      float pinnedBottom = pinnedTop + pinnedHeight;
-      content.add(
-          new Image.Builder(
-                  getContext(), "pinned_tab_background", white,
-                  new RectF(0f, pinnedTop, w, pinnedBottom))
-              .setScaleType(Image.ScaleType.FIT_XY));
-      content.add(
-          new Image.Builder(
-                  getContext(), "pinned_tab_divider", divider,
-                  new RectF(0f, pinnedBottom - px(2.75f), w, pinnedBottom))
-              .setScaleType(Image.ScaleType.FIT_XY));
-      pinnedList =
-          content.add(
-              new ComponentList.Builder<MessageEntity>(
-                      getContext(), "pinned_messages",
-                      new RectF(0f, pinnedTop + px(16.5f), w, pinnedBottom - px(16.5f)))
-                  .setOrientation(ComponentList.Orientation.VERTICAL)
-                  .setItemSize(px(154f))
-                  .setPaddingPx(0f, 0f, 0f, 0f)
-                  .setAdapter(pinnedAdapter)
-                  .setClipToBounds(true)
-                  .setScrollBarEnabled(pinnedMessages.size() > MAX_VISIBLE_PINNED_ROWS)
-                  .setOverscrollEnabled(false)
-                  .setOnItemClickListener(
-                      (componentList, message, position) -> scrollToPinnedMessage(message)));
+      pinnedMessageTab.build(
+          content, headerBottom, w, pinnedMessageIndex, pinnedMessages.size());
     }
     float replyHeight = composerReplyHeight(scale);
     float previewHeight = composer.hasAttachment() ? px(198f) : 0f;
@@ -1317,18 +1357,19 @@ public final class ChatView extends View {
   }
 
   private float pinnedTabHeight() {
-    if (pinnedMessages.isEmpty()) return 0f;
-    return px(33f + Math.min(MAX_VISIBLE_PINNED_ROWS, pinnedMessages.size()) * 154f);
+    return pinnedMessageTab.height(!pinnedMessages.isEmpty());
   }
 
   private void scrollToPinnedMessage(MessageEntity message) {
     if (list == null || message == null) return;
-    int position = adapter.indexOfMessage(message.messageId);
+    String messageId = pinnedMessageKey(message);
+    int position = adapter.indexOfMessage(messageId);
     if (position < 0) {
-      pendingPinnedScrollMessageId = message.messageId;
+      pendingPinnedScrollMessageId = messageId;
       return;
     }
     pendingPinnedScrollMessageId = null;
+    adapter.rippleMessage(messageId);
     list.stopScroll();
     list.scrollToPosition(position);
     invalidate();
@@ -1343,6 +1384,7 @@ public final class ChatView extends View {
       return;
     }
     pendingReplyScrollMessageId = null;
+    adapter.rippleMessage(messageId);
     list.stopScroll();
     list.scrollToPosition(position);
     invalidate();

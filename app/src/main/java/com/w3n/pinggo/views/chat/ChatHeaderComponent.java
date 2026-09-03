@@ -17,7 +17,7 @@ final class ChatHeaderComponent {
   private final Context context;
   private final String chatName;
   private final ChatViewListener listener;
-  private final Bitmap white;
+  private final Bitmap statusBarBackground;
   private final Bitmap headerBackground;
   private final Bitmap transparent;
   private final Bitmap profile;
@@ -29,13 +29,13 @@ final class ChatHeaderComponent {
   private String presenceValue = "connecting...";
 
   ChatHeaderComponent(
-      Context context, String chatName, ChatViewListener listener, Bitmap white,
+      Context context, String chatName, ChatViewListener listener, Bitmap statusBarBackground,
       Bitmap headerBackground, Bitmap transparent, Bitmap profile, Bitmap back,
       Bitmap voiceCall, Bitmap videoCall, Bitmap more) {
     this.context = context;
     this.chatName = chatName;
     this.listener = listener;
-    this.white = white;
+    this.statusBarBackground = statusBarBackground;
     this.headerBackground = headerBackground;
     this.transparent = transparent;
     this.profile = profile;
@@ -47,7 +47,7 @@ final class ChatHeaderComponent {
 
   float build(ZLayer background, ZLayer content, float width, float top, float scale) {
     float bottom = top + 170f * scale;
-    background.add(new Image.Builder(context, "status_bar_background", white,
+    background.add(new Image.Builder(context, "status_bar_background", statusBarBackground,
         new RectF(0, 0, width, top)).setScaleType(Image.ScaleType.FIT_XY));
     background.add(new Image.Builder(context, "header_background", headerBackground,
         new RectF(0, top, width, bottom)).setScaleType(Image.ScaleType.FIT_XY));

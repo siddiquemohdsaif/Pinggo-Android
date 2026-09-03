@@ -44,6 +44,7 @@ final class MessageRowRippleComponent implements Component {
     longPressed = true;
     longClickAction.run();
   };
+  private final Runnable finishProgrammaticRipple = this::startFade;
 
   private final Runnable animate = new Runnable() {
     @Override public void run() {
@@ -75,6 +76,24 @@ final class MessageRowRippleComponent implements Component {
     return this;
   }
 
+  MessageRowRippleComponent pulse() {
+    if (released || bounds.isEmpty()) return this;
+    pressed = false;
+    longPressed = false;
+    fading = false;
+    drawingRipple = true;
+    originX = bounds.centerX();
+    originY = bounds.centerY();
+    maximumRadius = farthestCornerRadius(originX, originY);
+    startedAt = SystemClock.uptimeMillis();
+    MAIN.removeCallbacks(triggerLongClick);
+    MAIN.removeCallbacks(finishProgrammaticRipple);
+    MAIN.removeCallbacks(animate);
+    MAIN.post(animate);
+    MAIN.postDelayed(finishProgrammaticRipple, EXPAND_MS);
+    return this;
+  }
+
   @Override public String getId() { return id; }
   @Override public RectF getBounds() { return bounds; }
   @Override public boolean isVisible() { return !released; }
@@ -97,6 +116,7 @@ final class MessageRowRippleComponent implements Component {
       maximumRadius = farthestCornerRadius(originX, originY);
       startedAt = SystemClock.uptimeMillis();
       MAIN.removeCallbacks(triggerLongClick);
+      MAIN.removeCallbacks(finishProgrammaticRipple);
       MAIN.removeCallbacks(animate);
       MAIN.postDelayed(triggerLongClick, ViewConfiguration.getLongPressTimeout());
       MAIN.post(animate);
@@ -155,6 +175,7 @@ final class MessageRowRippleComponent implements Component {
     clickAction = null;
     longClickAction = null;
     MAIN.removeCallbacks(triggerLongClick);
+    MAIN.removeCallbacks(finishProgrammaticRipple);
     MAIN.removeCallbacks(animate);
     host = null;
   }

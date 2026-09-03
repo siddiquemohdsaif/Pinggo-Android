@@ -151,11 +151,12 @@ final class MediaPreviewComponent implements Component {
   @Override public void draw(Canvas canvas) {
     if (!isVisible() || bounds.isEmpty()) return;
     paint.setColor(0xFFE8EDF2);
-    canvas.drawRoundRect(bounds, px(33f) * contentScale, px(33f) * contentScale, paint);
+    float radius = px(44f) * contentScale;
+    canvas.drawRoundRect(bounds, radius, radius, paint);
     if (bitmap != null && !bitmap.isRecycled()) {
       Rect sourceRect = centerCrop(bitmap.getWidth(), bitmap.getHeight(), bounds);
       android.graphics.Path mediaClip = new android.graphics.Path();
-      mediaClip.addRoundRect(bounds, px(33f) * contentScale, px(33f) * contentScale,
+      mediaClip.addRoundRect(bounds, radius, radius,
           android.graphics.Path.Direction.CW);
       canvas.save();
       canvas.clipPath(mediaClip);

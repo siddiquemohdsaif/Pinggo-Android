@@ -79,7 +79,9 @@ final class AudioMessageComponent implements Component {
     if (!isVisible()) return false;
     if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
       pressed = controlBounds.contains(event.getX(), event.getY());
-      return bounds.contains(event.getX(), event.getY());
+      // Only claim the play/stop control. Touches elsewhere in the audio bubble must fall
+      // through to the regular message click/selection handlers.
+      return pressed;
     }
     if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
       pressed = false;

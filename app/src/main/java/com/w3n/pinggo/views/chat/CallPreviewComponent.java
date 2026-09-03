@@ -15,25 +15,26 @@ final class CallPreviewComponent implements Component {
   private static final int TITLE_COLOR = 0xFF131D2F;
   private final String id;
   private final Typeface typeface;
-  private final float figmaScale;
   private final RectF bounds = new RectF();
   private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
   private ComponentHost host;
   private Bitmap icon;
   private String title = "";
+  private boolean forwarded;
   private boolean visible;
   private boolean released;
 
   CallPreviewComponent(String id, Typeface typeface, float figmaScale) {
     this.id = id;
     this.typeface = typeface;
-    this.figmaScale = Math.max(.01f, figmaScale);
   }
 
-  CallPreviewComponent bind(RectF region, Bitmap callIcon, String callTitle) {
+  CallPreviewComponent bind(
+      RectF region, Bitmap callIcon, String callTitle, boolean isForwarded) {
     bounds.set(region);
     icon = callIcon;
     title = callTitle == null ? "" : callTitle.trim();
+    forwarded = isForwarded;
     visible = true;
     invalidate();
     return this;
@@ -58,10 +59,12 @@ final class CallPreviewComponent implements Component {
     if (!isVisible() || bounds.isEmpty()) return;
     float scale = bounds.width() / 596f;
     float inset = 12f * scale;
-    RectF inner = new RectF(bounds.left + inset, bounds.top + inset,
+    // The forwarded header has already positioned the top of its inner surface. Applying
+    // this component's regular top inset again creates a second, visible gap.
+    RectF inner = new RectF(bounds.left + inset, bounds.top + (forwarded ? 0f : inset),
         bounds.right - inset, bounds.bottom - inset);
     paint.setColor(PANEL_COLOR);
-    float radius = 44f * figmaScale;
+    float radius = 44f * scale;
     canvas.drawRoundRect(inner, radius, radius, paint);
 
     float iconSize = 40f * scale;

@@ -21,7 +21,6 @@ final class FilePreviewComponent implements Component {
   private final String id;
   private final Bitmap documentIcon;
   private final Typeface typeface;
-  private final float figmaScale;
   private final RectF bounds = new RectF();
   private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
   private ComponentHost host;
@@ -34,7 +33,6 @@ final class FilePreviewComponent implements Component {
     this.id = id;
     this.documentIcon = documentIcon;
     this.typeface = typeface;
-    this.figmaScale = Math.max(.01f, figmaScale);
   }
 
   FilePreviewComponent bind(RectF region, String fileTitle, String fileSubtitle) {
@@ -67,7 +65,7 @@ final class FilePreviewComponent implements Component {
     RectF inner = new RectF(bounds.left + inset, bounds.top + inset,
         bounds.right - inset, bounds.bottom - inset);
     paint.setColor(PANEL_COLOR);
-    float bubbleRadius = 44f * figmaScale;
+    float bubbleRadius = 44f * scale;
     canvas.drawRoundRect(inner, bubbleRadius, bubbleRadius, paint);
 
     RectF icon = new RectF(
