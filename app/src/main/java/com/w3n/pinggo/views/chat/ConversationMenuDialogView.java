@@ -44,7 +44,7 @@ public final class ConversationMenuDialogView extends View {
     void onOptionSelected(String option);
   }
 
-  private static final String[] OPTIONS = {
+  private static final String[] CONVERSATION_OPTIONS = {
       "Add to contacts",
       "Search",
       "Mute notifications",
@@ -59,14 +59,29 @@ public final class ConversationMenuDialogView extends View {
   private final Paint cardPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
   private final Bitmap transparent = colorBitmap(Color.TRANSPARENT);
   private final Listener listener;
+  private final String[] options;
+  private final boolean conversationOptions;
   private final RectF menuBounds = new RectF();
   private boolean muted;
   private boolean blocked;
   private boolean contactExists;
 
   public ConversationMenuDialogView(@NonNull Context context, @NonNull Listener listener) {
+    this(context, CONVERSATION_OPTIONS, true, listener);
+  }
+
+  public ConversationMenuDialogView(
+      @NonNull Context context, @NonNull List<String> options, @NonNull Listener listener) {
+    this(context, options.toArray(new String[0]), false, listener);
+  }
+
+  private ConversationMenuDialogView(
+      @NonNull Context context, String[] options, boolean conversationOptions,
+      @NonNull Listener listener) {
     super(context);
     this.listener = listener;
+    this.options = options.clone();
+    this.conversationOptions = conversationOptions;
     setClickable(true);
     setFocusableInTouchMode(true);
     setLayerType(LAYER_TYPE_SOFTWARE, null);
@@ -140,14 +155,16 @@ public final class ConversationMenuDialogView extends View {
   }
 
   private List<String> visibleOptions() {
-    List<String> options = new ArrayList<>(OPTIONS.length);
-    for (String option : OPTIONS) {
-      if (contactExists && "Add to contacts".equals(option)) continue;
-      if (muted && "Mute notifications".equals(option)) option = "Unmute notifications";
-      if (blocked && "Block".equals(option)) option = "Unblock";
-      options.add(option);
+    List<String> visible = new ArrayList<>(options.length);
+    for (String option : options) {
+      if (conversationOptions && contactExists && "Add to contacts".equals(option)) continue;
+      if (conversationOptions && muted && "Mute notifications".equals(option)) {
+        option = "Unmute notifications";
+      }
+      if (conversationOptions && blocked && "Block".equals(option)) option = "Unblock";
+      visible.add(option);
     }
-    return options;
+    return visible;
   }
 
   private void addOption(int index, String option, float scale) {

@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <external-path name="pinggo_media" path="PingGo/" />
+    <cache-path name="selected_media_edits" path="selected_media_edits/" />
+    <cache-path name="camera_captures" path="camera_captures/" />
 </paths>

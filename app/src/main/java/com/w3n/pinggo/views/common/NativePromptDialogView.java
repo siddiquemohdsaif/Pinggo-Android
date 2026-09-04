@@ -34,12 +34,13 @@ public final class NativePromptDialogView extends View {
   public interface InputChangedHandler { void onChanged(String value); }
   public interface ActionHandler { void onAction(int index); }
 
-  private enum Mode { MESSAGE, INPUT, ACTIONS }
+  private enum Mode { MESSAGE, INPUT, ACTIONS, CONFIRM }
 
   private final ZLayerGroup layers = new ZLayerGroup(this);
   private final ZLayer dialogLayer = layers.addLayer("prompt_dialog_layer");
   private final Bitmap secondary = colorBitmap(0xFFF0F3F6);
   private final Bitmap primary = colorBitmap(0xFF019CC4);
+  private final Bitmap destructive = colorBitmap(0xFFD92D20);
   private final Mode mode;
   private final String title;
   private final String message;
@@ -49,6 +50,8 @@ public final class NativePromptDialogView extends View {
   private final InputHandler inputHandler;
   private final InputChangedHandler inputChangedHandler;
   private final ActionHandler actionHandler;
+  private final String confirmLabel;
+  private final Runnable confirmHandler;
   private final Runnable dismissHandler;
   private Dialog dialog;
   private TextField field;
@@ -56,7 +59,8 @@ public final class NativePromptDialogView extends View {
 
   private NativePromptDialogView(Context context, Mode mode, String title, String message,
       String initialValue, int inputType, List<String> actions, InputHandler inputHandler,
-      InputChangedHandler inputChangedHandler, ActionHandler actionHandler, Runnable dismissHandler) {
+      InputChangedHandler inputChangedHandler, ActionHandler actionHandler, String confirmLabel,
+      Runnable confirmHandler, Runnable dismissHandler) {
     super(context);
     this.mode = mode;
     this.title = title == null ? "" : title;
@@ -67,6 +71,8 @@ public final class NativePromptDialogView extends View {
     this.inputHandler = inputHandler;
     this.inputChangedHandler = inputChangedHandler;
     this.actionHandler = actionHandler;
+    this.confirmLabel = confirmLabel;
+    this.confirmHandler = confirmHandler;
     this.dismissHandler = dismissHandler;
     setClickable(true);
     setFocusableInTouchMode(true);
@@ -76,25 +82,31 @@ public final class NativePromptDialogView extends View {
   public static NativePromptDialogView message(Context context, String title, String message,
       Runnable onDismiss) {
     return new NativePromptDialogView(context, Mode.MESSAGE, title, message, "", 0,
-        null, null, null, null, onDismiss);
+        null, null, null, null, null, null, onDismiss);
   }
 
   public static NativePromptDialogView input(Context context, String title, String initialValue,
       int inputType, InputHandler handler, Runnable onDismiss) {
     return new NativePromptDialogView(context, Mode.INPUT, title, "", initialValue, inputType,
-        null, handler, null, null, onDismiss);
+        null, handler, null, null, null, null, onDismiss);
   }
 
   public static NativePromptDialogView input(Context context, String title, String initialValue,
       int inputType, InputChangedHandler changedHandler, InputHandler handler, Runnable onDismiss) {
     return new NativePromptDialogView(context, Mode.INPUT, title, "", initialValue, inputType,
-        null, handler, changedHandler, null, onDismiss);
+        null, handler, changedHandler, null, null, null, onDismiss);
   }
 
   public static NativePromptDialogView actions(Context context, List<String> actions,
       ActionHandler handler, Runnable onDismiss) {
     return new NativePromptDialogView(context, Mode.ACTIONS, "", "", "", 0,
-        actions, null, null, handler, onDismiss);
+        actions, null, null, handler, null, null, onDismiss);
+  }
+
+  public static NativePromptDialogView confirm(Context context, String title, String message,
+      String confirmLabel, Runnable onConfirm, Runnable onDismiss) {
+    return new NativePromptDialogView(context, Mode.CONFIRM, title, message, "", 0,
+        null, null, null, null, confirmLabel, onConfirm, onDismiss);
   }
 
   @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
@@ -134,7 +146,7 @@ public final class NativePromptDialogView extends View {
         .setTextSizePx(px(57.75f)).setTextColor(0xFF000E1A)
         .setAlignment(Text.Alignment.CENTER).setVerticalAlignment(Text.VerticalAlignment.CENTER)
         .setMaxLines(1));
-    if (mode == Mode.MESSAGE) {
+    if (mode == Mode.MESSAGE || mode == Mode.CONFIRM) {
       content.add(new Text.Builder(getContext(), scope.id("message"), message,
           scope.rect(px(60.5f), px(187f), width - px(121f), px(192.5f)))
           .setFont(NativeFonts.INTER).setFontVariations(FontVariation.REGULAR)
@@ -168,6 +180,17 @@ public final class NativePromptDialogView extends View {
               nativeDialog.dismiss(Dialog.DismissReason.ACTION);
             }
           }));
+    } else if (mode == Mode.CONFIRM) {
+      float gap = px(27.5f), pad = px(60.5f);
+      float buttonWidth = (width - pad * 2 - gap) / 2;
+      content.add(button(scope, "cancel", secondary, getContext().getString(android.R.string.cancel),
+          pad, buttonTop, buttonWidth, 0xFF000E1A,
+          id -> nativeDialog.dismiss(Dialog.DismissReason.ACTION)));
+      content.add(button(scope, "confirm", destructive, confirmLabel,
+          pad + buttonWidth + gap, buttonTop, buttonWidth, Color.WHITE, id -> {
+            nativeDialog.dismiss(Dialog.DismissReason.ACTION);
+            if (confirmHandler != null) confirmHandler.run();
+          }));
     } else {
       content.add(button(scope, "ok", primary, getContext().getString(android.R.string.ok),
           px(60.5f), buttonTop, width - px(121f), Color.WHITE,
@@ -195,7 +218,12 @@ public final class NativePromptDialogView extends View {
   @Override public boolean onKeyDown(int code, KeyEvent event) {
     return layers.onKeyDown(code, event) || super.onKeyDown(code, event);
   }
-  public void release() { layers.release(); secondary.recycle(); primary.recycle(); }
+  public void release() {
+    layers.release();
+    secondary.recycle();
+    primary.recycle();
+    destructive.recycle();
+  }
   private float px(float value) {
     return figmaConfig.toRuntime(value, Math.max(1, getResources().getDisplayMetrics().widthPixels));
   }

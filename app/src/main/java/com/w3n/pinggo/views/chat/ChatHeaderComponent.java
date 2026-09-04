@@ -47,8 +47,12 @@ final class ChatHeaderComponent {
 
   float build(ZLayer background, ZLayer content, float width, float top, float scale) {
     float bottom = top + 170f * scale;
-    background.add(new Image.Builder(context, "status_bar_background", statusBarBackground,
-        new RectF(0, 0, width, top)).setScaleType(Image.ScaleType.FIT_XY));
+    // Hiding the status bar dispatches a legitimate zero top inset. The native Image
+    // primitive rejects zero-height bounds, so omit this layer until the inset returns.
+    if (top > 0f && Float.isFinite(top)) {
+      background.add(new Image.Builder(context, "status_bar_background", statusBarBackground,
+          new RectF(0, 0, width, top)).setScaleType(Image.ScaleType.FIT_XY));
+    }
     background.add(new Image.Builder(context, "header_background", headerBackground,
         new RectF(0, top, width, bottom)).setScaleType(Image.ScaleType.FIT_XY));
     iconButton(content, "back", back,

@@ -379,6 +379,10 @@ public final class ChatView extends View {
     invalidate();
   }
 
+  public void revealMessage(String messageId) {
+    scrollToMessageId(messageId);
+  }
+
   /** Keeps the composer focused after send without restarting an already visible IME. */
   public void restoreComposerAfterSend() {
     if (!keepKeyboardAfterSend) return;

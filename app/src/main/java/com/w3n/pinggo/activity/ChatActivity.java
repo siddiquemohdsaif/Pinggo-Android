@@ -3,16 +3,22 @@ package com.w3n.pinggo.activity;
 import android.Manifest;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.ComponentName;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.database.Cursor;
+import android.graphics.Color;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.media.MediaRecorder;
+import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -23,6 +29,7 @@ import android.os.Environment;
 import android.os.SystemClock;
 import android.provider.OpenableColumns;
 import android.provider.ContactsContract;
+import android.provider.MediaStore;
 import android.provider.Settings;
 import android.telephony.PhoneNumberUtils;
 import android.text.InputType;
@@ -40,6 +47,7 @@ import androidx.core.content.FileProvider;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.lifecycle.LiveData;
 import com.google.gson.JsonObject;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
@@ -53,6 +61,12 @@ import com.w3n.pinggo.views.chat.ChatPerformanceProfiler;
 import com.w3n.pinggo.views.chat.ConversationMenuDialogView;
 import com.w3n.pinggo.call.ActiveCallRegistry;
 import com.w3n.pinggo.views.common.NativePromptDialogView;
+import com.w3n.pinggo.views.ImagePreviewView;
+import com.w3n.pinggo.views.NativeMediaScreenView;
+import com.w3n.pinggo.views.VideoPreviewView;
+import com.w3n.pinggo.views.SelectedMediaOverlayView;
+import com.w3n.pinggo.views.SelectedMediaPreviewView;
+import com.w3n.pinggo.views.CameraCaptureView;
 import com.w3n.pinggo.views.common.BlockingProgressView;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import java.text.DateFormat;
@@ -70,7 +84,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 
 public class ChatActivity extends AppCompatActivity implements ChatViewListener {
   private static final String TESTING_TAG = "PARVEZ_TESTING";
@@ -87,6 +104,9 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private static final int ATTACHMENT_DOWNLOAD_REQUIRED = 1;
   private static final int ATTACHMENT_DOWNLOADING = 2;
   private MessageEntity pendingDownloadMessage;
+  private Uri pendingPreviewSaveUri;
+  private MessageEntity pendingPreviewSaveMessage;
+  private boolean pendingPreviewSaveVideo;
   public static final String EXTRA_CHAT_NAME = "com.w3n.pinggo.EXTRA_CHAT_NAME",
       EXTRA_CHAT_ID = "com.w3n.pinggo.EXTRA_CHAT_ID",
       EXTRA_PROFILE_PHOTO_URL = "com.w3n.pinggo.EXTRA_PROFILE_PHOTO_URL",
@@ -95,46 +115,27 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private final Handler typingHandler = new Handler(Looper.getMainLooper());
   private long lastSocketErrorToastAt;
   private ChatView chatView;
+  private ImagePreviewView imagePreviewView;
+  private VideoPreviewView videoPreviewView;
+  private SelectedMediaPreviewView selectedMediaPreviewView;
+  private CameraCaptureView cameraCaptureView;
+  private int mediaPreviousOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
+  private boolean mediaOrientationLocked;
   private String selectedAttachmentType;
   private Uri selectedAttachmentUri;
   private final ActivityResultLauncher<String[]> attachmentPicker =
       registerForActivityResult(
           new ActivityResultContracts.OpenMultipleDocuments(), this::onAttachmentsPicked);
-  private final ActivityResultLauncher<Intent> cameraCapture =
+  private final ActivityResultLauncher<String[]> cameraGalleryPicker =
       registerForActivityResult(
-          new ActivityResultContracts.StartActivityForResult(), result -> {
-            if (result.getResultCode() != RESULT_OK || result.getData() == null) return;
-            Intent data = result.getData();
-            handleSelectedMediaResult(data);
-          });
-  private final ActivityResultLauncher<Intent> attachmentPreview =
+          new ActivityResultContracts.OpenMultipleDocuments(), this::onCameraGalleryPicked);
+  private final ActivityResultLauncher<String[]> selectedMediaAddPicker =
       registerForActivityResult(
-          new ActivityResultContracts.StartActivityForResult(), result -> {
-            if (result.getResultCode() != RESULT_OK || result.getData() == null) return;
-            handleSelectedMediaResult(result.getData());
-          });
-
-  private void handleSelectedMediaResult(Intent data) {
-            if (data == null) return;
-            List<Uri> uris = new ArrayList<>();
-            ClipData clip = data.getClipData();
-            if (clip != null) {
-              for (int index = 0; index < clip.getItemCount(); index++) {
-                Uri uri = clip.getItemAt(index).getUri();
-                if (uri != null && !uris.contains(uri)) uris.add(uri);
-              }
-            }
-            if (uris.isEmpty() && data.getData() != null) uris.add(data.getData());
-            if (uris.isEmpty()) return;
-            ArrayList<String> types = data.getStringArrayListExtra(
-                CameraCaptureActivity.EXTRA_MEDIA_TYPES);
-            if (types == null || types.size() != uris.size()) {
-              String fallback = data.getStringExtra(CameraCaptureActivity.EXTRA_MEDIA_TYPE);
-              if (fallback == null) fallback = "Image";
-              types = new ArrayList<>(Collections.nCopies(uris.size(), fallback));
-            }
-            sendSelectedAttachments(uris, types);
-  }
+          new ActivityResultContracts.OpenMultipleDocuments(), this::onSelectedMediaAdded);
+  private final ActivityResultLauncher<String[]> cameraPermissions =
+      registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), result -> {
+        if (cameraCaptureView != null) cameraCaptureView.onPermissionsResult(result);
+      });
   private final ActivityResultLauncher<String[]> locationPermission =
       registerForActivityResult(
           new ActivityResultContracts.RequestMultiplePermissions(), this::onLocationPermission);
@@ -146,9 +147,18 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       });
   private final ActivityResultLauncher<String> storagePermission =
       registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
-        if (granted && pendingDownloadMessage != null) startAttachmentDownload(pendingDownloadMessage);
-        else if (!granted) Toast.makeText(this, "Storage permission is required.", Toast.LENGTH_SHORT).show();
+        if (granted && pendingPreviewSaveUri != null) {
+          savePreviewMediaCopy(
+              pendingPreviewSaveUri, pendingPreviewSaveMessage, pendingPreviewSaveVideo);
+        } else if (granted && pendingDownloadMessage != null) {
+          startAttachmentDownload(pendingDownloadMessage);
+        } else if (!granted) {
+          Toast.makeText(this, "Storage permission is required.", Toast.LENGTH_SHORT).show();
+        }
         pendingDownloadMessage = null;
+        pendingPreviewSaveUri = null;
+        pendingPreviewSaveMessage = null;
+        pendingPreviewSaveVideo = false;
       });
   private final ActivityResultLauncher<Intent> allFilesAccess =
       registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
@@ -175,6 +185,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private final ExecutorService messagePreparationExecutor =
       Executors.newSingleThreadExecutor();
   private final ExecutorService contactLookupExecutor = Executors.newSingleThreadExecutor();
+  private final ExecutorService previewActionExecutor = Executors.newSingleThreadExecutor();
   private ChatPerformanceProfiler profiler;
   private ChatRepository repository;
   private NativePromptDialogView promptDialog;
@@ -343,6 +354,24 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         new OnBackPressedCallback(true) {
           @Override
           public void handleOnBackPressed() {
+            if (imagePreviewView != null) {
+              if (imagePreviewView.dismissMenu()) return;
+              closeImagePreview();
+              return;
+            }
+            if (videoPreviewView != null) {
+              if (videoPreviewView.dismissMenu()) return;
+              closeVideoPreview();
+              return;
+            }
+            if (selectedMediaPreviewView != null) {
+              selectedMediaPreviewView.onBackPressed();
+              return;
+            }
+            if (cameraCaptureView != null) {
+              cameraCaptureView.onBackPressed();
+              return;
+            }
             if (chatView != null && chatView.dismissSearch()) return;
             if (chatView != null && chatView.dismissAttachmentPanel()) return;
             if (chatView != null && chatView.clearMessageSelection()) return;
@@ -1009,6 +1038,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void sendSelectedAttachments(List<Uri> uris, List<String> types) {
+    sendSelectedAttachments(uris, types, chatView.getDraft());
+  }
+
+  private void sendSelectedAttachments(List<Uri> uris, List<String> types, String caption) {
     if (uris == null || uris.isEmpty() || attachmentSending) return;
     if (chatId == null || chatId.isEmpty() || receiverId.isEmpty()) {
       Toast.makeText(this, "Chat information missing.", Toast.LENGTH_SHORT).show();
@@ -1021,7 +1054,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     chatView.scrollToBottom();
     uploadCameraAttachment(
         new ArrayList<>(uris), new ArrayList<>(types), 0,
-        chatView.getDraft(), replyingId);
+        caption == null ? "" : caption, replyingId);
   }
 
   private void uploadCameraAttachment(
@@ -1420,7 +1453,62 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void startActivityForResultCamera() {
-    cameraCapture.launch(new Intent(this, CameraCaptureActivity.class));
+    closeCameraCapture();
+    lockMediaOrientation();
+    cameraCaptureView = new CameraCaptureView(this, new CameraCaptureView.Listener() {
+      @Override public void onPermissionsRequired(String[] permissions) {
+        cameraPermissions.launch(permissions);
+      }
+      @Override public void onPreviewRequested(ArrayList<Uri> uris, ArrayList<String> types,
+          boolean captured) {
+        showSelectedMediaPreview(uris, types, captured, new SelectedMediaOverlayView.Listener() {
+          @Override public void onSend(ArrayList<Uri> selected, ArrayList<String> selectedTypes) {
+            CameraCaptureView camera = cameraCaptureView;
+            if (camera != null) camera.onPreviewResult(true, selected, selectedTypes);
+          }
+          @Override public void onSend(ArrayList<Uri> selected, ArrayList<String> selectedTypes,
+              String caption) {
+            CameraCaptureView camera = cameraCaptureView;
+            if (camera != null) camera.onPreviewResult(true, selected, selectedTypes, caption);
+          }
+          @Override public void onCancel(ArrayList<Uri> selected, ArrayList<String> selectedTypes) {
+            CameraCaptureView camera = cameraCaptureView;
+            if (camera != null) camera.onPreviewResult(false, selected, selectedTypes);
+          }
+        });
+      }
+      @Override public void onGalleryRequested(boolean videoOnly) {
+        cameraGalleryPicker.launch(videoOnly
+            ? new String[] {"video/*"}
+            : new String[] {"image/*", "video/*"});
+      }
+      @Override public void onSend(ArrayList<Uri> uris, ArrayList<String> types) {
+        closeCameraCapture();
+        sendSelectedAttachments(uris, types);
+      }
+      @Override public void onSend(ArrayList<Uri> uris, ArrayList<String> types, String caption) {
+        closeCameraCapture();
+        sendSelectedAttachments(uris, types, caption);
+      }
+      @Override public void onClose() { closeCameraCapture(); }
+    });
+    cameraCaptureView.setOnSystemBarsChangedListener(this::updateMediaSystemBars);
+    ((ViewGroup) findViewById(android.R.id.content)).addView(cameraCaptureView,
+        new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT));
+    updateMediaSystemBars();
+    ViewCompat.requestApplyInsets(cameraCaptureView);
+  }
+
+  private void closeCameraCapture() {
+    closeSelectedMediaPreview();
+    CameraCaptureView current = cameraCaptureView;
+    cameraCaptureView = null;
+    if (current == null) return;
+    if (current.getParent() instanceof ViewGroup) ((ViewGroup) current.getParent()).removeView(current);
+    current.release();
+    restoreMediaOrientationIfPossible();
+    updateMediaSystemBars();
   }
 
   private void onAttachmentsPicked(List<Uri> picked) {
@@ -1439,12 +1527,107 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       types.add(selectedPreviewType(uri, pickerType));
     }
     if (uris.isEmpty()) return;
-    Intent preview = new Intent(this, SelectedMediaPreviewActivity.class);
-    preview.putParcelableArrayListExtra(SelectedMediaPreviewActivity.EXTRA_URIS, uris);
-    preview.putStringArrayListExtra(SelectedMediaPreviewActivity.EXTRA_TYPES, types);
-    preview.putExtra(SelectedMediaPreviewActivity.EXTRA_CAPTURED, false);
-    preview.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-    attachmentPreview.launch(preview);
+    showSelectedMediaPreview(uris, types, false, null);
+  }
+
+  private void onCameraGalleryPicked(List<Uri> picked) {
+    CameraCaptureView camera = cameraCaptureView;
+    if (camera == null || picked == null || picked.isEmpty()) return;
+    ArrayList<Uri> uris = new ArrayList<>();
+    ArrayList<String> types = new ArrayList<>();
+    for (Uri uri : picked) {
+      if (uri == null) continue;
+      try {
+        getContentResolver().takePersistableUriPermission(
+            uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+      } catch (SecurityException ignored) {
+      }
+      uris.add(uri);
+      types.add(selectedPreviewType(uri, null));
+    }
+    if (!uris.isEmpty()) camera.onExternalGalleryPicked(uris, types);
+  }
+
+  private void onSelectedMediaAdded(List<Uri> picked) {
+    SelectedMediaPreviewView preview = selectedMediaPreviewView;
+    if (preview == null || picked == null || picked.isEmpty()) return;
+    ArrayList<Uri> uris = new ArrayList<>();
+    ArrayList<String> types = new ArrayList<>();
+    for (Uri uri : picked) {
+      if (uri == null) continue;
+      try {
+        getContentResolver().takePersistableUriPermission(
+            uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+      } catch (SecurityException ignored) {}
+      uris.add(uri);
+      types.add(selectedPreviewType(uri, null));
+    }
+    preview.addItems(uris, types);
+  }
+
+  private void showSelectedMediaPreview(ArrayList<Uri> uris, ArrayList<String> types,
+      boolean captured, SelectedMediaOverlayView.Listener downstream) {
+    closeSelectedMediaPreview();
+    lockMediaOrientation();
+    selectedMediaPreviewView = new SelectedMediaPreviewView(this, uris, types, captured, receiverId,
+        new SelectedMediaOverlayView.Listener() {
+          @Override public void onSend(ArrayList<Uri> selected, ArrayList<String> selectedTypes) {
+            closeSelectedMediaPreview();
+            if (downstream != null) downstream.onSend(selected, selectedTypes);
+            else sendSelectedAttachments(selected, selectedTypes);
+          }
+          @Override public void onSend(ArrayList<Uri> selected, ArrayList<String> selectedTypes,
+              String caption) {
+            closeSelectedMediaPreview();
+            if (downstream != null) downstream.onSend(selected, selectedTypes, caption);
+            else sendSelectedAttachments(selected, selectedTypes, caption);
+          }
+          @Override public void onCancel(ArrayList<Uri> selected, ArrayList<String> selectedTypes) {
+            closeSelectedMediaPreview();
+            if (downstream != null) downstream.onCancel(selected, selectedTypes);
+          }
+          @Override public void onAddMedia() {
+            selectedMediaAddPicker.launch(new String[] {"image/*", "video/*"});
+          }
+          @Override public void onCameraRequested(
+              ArrayList<Uri> selected, ArrayList<String> selectedTypes) {
+            closeSelectedMediaPreview();
+            if (downstream != null) {
+              downstream.onCancel(selected, selectedTypes);
+            } else {
+              startActivityForResultCamera();
+            }
+          }
+        });
+    selectedMediaPreviewView.setOnSystemBarsChangedListener(this::updateMediaSystemBars);
+    ((ViewGroup) findViewById(android.R.id.content)).addView(selectedMediaPreviewView,
+        new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT));
+    updateMediaSystemBars();
+    ViewCompat.requestApplyInsets(selectedMediaPreviewView);
+  }
+
+  private void closeSelectedMediaPreview() {
+    SelectedMediaPreviewView current = selectedMediaPreviewView;
+    selectedMediaPreviewView = null;
+    if (current == null) return;
+    if (current.getParent() instanceof ViewGroup) ((ViewGroup) current.getParent()).removeView(current);
+    current.release();
+    restoreMediaOrientationIfPossible();
+    updateMediaSystemBars();
+  }
+
+  private void lockMediaOrientation() {
+    if (mediaOrientationLocked) return;
+    mediaPreviousOrientation = getRequestedOrientation();
+    mediaOrientationLocked = true;
+    setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LOCKED);
+  }
+
+  private void restoreMediaOrientationIfPossible() {
+    if (!mediaOrientationLocked || selectedMediaPreviewView != null || cameraCaptureView != null) return;
+    setRequestedOrientation(mediaPreviousOrientation);
+    mediaOrientationLocked = false;
   }
 
   private String selectedPreviewType(Uri uri, String pickerType) {
@@ -2036,14 +2219,393 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void openMediaPreview(String source, String mediaType, MessageEntity message) {
-    Intent preview = new Intent(this,
-        "video".equals(mediaType) ? VideoPreviewActivity.class : ImagePreviewActivity.class);
-    preview.putExtra(ImagePreviewActivity.EXTRA_URI, source);
-    preview.putExtra(ImagePreviewActivity.EXTRA_PHONE_NUMBER, receiverId);
-    preview.putExtra(ImagePreviewActivity.EXTRA_CHAT_ID, chatId);
-    preview.putExtra(ImagePreviewActivity.EXTRA_MESSAGE_ID,
-        message == null ? null : message.messageId);
-    startActivity(preview);
+    if ("video".equals(mediaType)) showVideoPreview(source, message);
+    else showImagePreview(source, message);
+  }
+
+  private void showImagePreview(String source, MessageEntity message) {
+    closeVideoPreview();
+    closeImagePreview();
+    final String messageId = message == null ? null : message.messageId;
+    String senderId = message == null || message.senderId == null
+        ? receiverId : normalize(message.senderId);
+    String sentTime = message == null || message.sentTime <= 0 ? ""
+        : DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
+            .format(new Date(message.sentTime));
+    imagePreviewView = new ImagePreviewView(this, source, senderId, sentTime,
+        new ImagePreviewView.Listener() {
+          @Override public void onClose() { closeImagePreview(); }
+          @Override public void onForward() { forwardPreviewMessage(messageId); }
+          @Override public void onShowInChat() { showPreviewMessageInChat(messageId); }
+          @Override public void onDownload() { downloadPreviewImage(source, message); }
+          @Override public void onShare() { sharePreviewImage(source, message); }
+          @Override public void onDelete() { deletePreviewMessage(message, false); }
+          @Override public void onViewInGallery() { viewPreviewImage(source, message); }
+          @Override public void onReply(String text) { sendPreviewReply(message, text, false); }
+        });
+    imagePreviewView.setOnSystemBarsChangedListener(this::updateMediaSystemBars);
+    ((ViewGroup) findViewById(android.R.id.content)).addView(imagePreviewView,
+        new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT));
+    updateMediaSystemBars();
+    ViewCompat.requestApplyInsets(imagePreviewView);
+  }
+
+  private void showPreviewMessageInChat(String messageId) {
+    closeImagePreview();
+    if (chatView != null && messageId != null && !messageId.isEmpty()) {
+      chatView.revealMessage(messageId);
+    }
+  }
+
+  private void downloadPreviewImage(String source, MessageEntity message) {
+    withPreviewMediaUri(source, message, "Image",
+        uri -> savePreviewMediaCopy(uri, message, false));
+  }
+
+  private void downloadPreviewVideo(String source, MessageEntity message) {
+    withPreviewMediaUri(source, message, "Video",
+        uri -> savePreviewMediaCopy(uri, message, true));
+  }
+
+  private void savePreviewMediaCopy(Uri source, MessageEntity message, boolean video) {
+    if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
+        && ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        != PackageManager.PERMISSION_GRANTED) {
+      pendingPreviewSaveUri = source;
+      pendingPreviewSaveMessage = message;
+      pendingPreviewSaveVideo = video;
+      storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+      return;
+    }
+    String fileName = uniquePreviewMediaName(message, video);
+    String mimeType = previewMediaMimeType(message, video);
+    previewActionExecutor.execute(() -> {
+      try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+          savePreviewMediaToMediaStore(source, fileName, mimeType, video);
+        } else {
+          savePreviewMediaLegacy(source, fileName, mimeType, video);
+        }
+        runOnUiThread(() -> Toast.makeText(
+            ChatActivity.this, (video ? "Video" : "Image") + " saved to gallery.",
+            Toast.LENGTH_SHORT).show());
+      } catch (IOException | RuntimeException error) {
+        Log.e(TESTING_TAG, "Unable to save preview media", error);
+        runOnUiThread(() -> Toast.makeText(
+            ChatActivity.this, "Unable to save " + (video ? "video." : "image."),
+            Toast.LENGTH_SHORT).show());
+      }
+    });
+  }
+
+  private void savePreviewMediaToMediaStore(
+      Uri source, String fileName, String mimeType, boolean video) throws IOException {
+    ContentValues values = new ContentValues();
+    values.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
+    values.put(MediaStore.MediaColumns.MIME_TYPE, mimeType);
+    values.put(MediaStore.MediaColumns.RELATIVE_PATH,
+        (video ? Environment.DIRECTORY_MOVIES : Environment.DIRECTORY_PICTURES) + "/PingGo");
+    values.put(MediaStore.MediaColumns.IS_PENDING, 1);
+    Uri collection = video
+        ? MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        : MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+    Uri destination = getContentResolver().insert(
+        collection, values);
+    if (destination == null) throw new IOException("Unable to create gallery media");
+    boolean complete = false;
+    try {
+      copyPreviewMedia(source, getContentResolver().openOutputStream(destination));
+      ContentValues ready = new ContentValues();
+      ready.put(MediaStore.MediaColumns.IS_PENDING, 0);
+      getContentResolver().update(destination, ready, null, null);
+      complete = true;
+    } finally {
+      if (!complete) getContentResolver().delete(destination, null, null);
+    }
+  }
+
+  private void savePreviewMediaLegacy(
+      Uri source, String fileName, String mimeType, boolean video) throws IOException {
+    File directory = new File(
+        Environment.getExternalStoragePublicDirectory(
+            video ? Environment.DIRECTORY_MOVIES : Environment.DIRECTORY_PICTURES), "PingGo");
+    if (!directory.exists() && !directory.mkdirs()) {
+      throw new IOException("Unable to create gallery directory");
+    }
+    File destination = new File(directory, fileName);
+    boolean complete = false;
+    try {
+      copyPreviewMedia(source, new FileOutputStream(destination));
+      complete = true;
+    } finally {
+      if (!complete && destination.exists() && !destination.delete()) {
+        Log.w(TESTING_TAG, "Unable to remove incomplete image " + destination);
+      }
+    }
+    MediaScannerConnection.scanFile(
+        this, new String[] {destination.getAbsolutePath()}, new String[] {mimeType}, null);
+  }
+
+  private void copyPreviewMedia(Uri source, OutputStream destination) throws IOException {
+    try (InputStream input = getContentResolver().openInputStream(source);
+         OutputStream output = destination) {
+      if (input == null || output == null) throw new IOException("Image stream unavailable");
+      byte[] buffer = new byte[16 * 1024];
+      int count;
+      while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+    }
+  }
+
+  private String uniquePreviewMediaName(MessageEntity message, boolean video) {
+    String mimeType = previewMediaMimeType(message, video);
+    String extension;
+    if (video) {
+      extension = "video/webm".equals(mimeType) ? ".webm"
+          : "video/3gpp".equals(mimeType) ? ".3gp"
+          : "video/quicktime".equals(mimeType) ? ".mov"
+          : "video/x-matroska".equals(mimeType) ? ".mkv" : ".mp4";
+    } else {
+      extension = "image/png".equals(mimeType) ? ".png"
+          : "image/webp".equals(mimeType) ? ".webp"
+          : "image/gif".equals(mimeType) ? ".gif" : ".jpg";
+    }
+    return "PingGo_" + System.currentTimeMillis() + "_"
+        + UUID.randomUUID().toString().substring(0, 8) + extension;
+  }
+
+  private static String previewMediaMimeType(MessageEntity message, boolean video) {
+    String mimeType = message == null ? null : message.attachmentMimeType;
+    String prefix = video ? "video/" : "image/";
+    return mimeType == null || !mimeType.startsWith(prefix)
+        ? (video ? "video/mp4" : "image/jpeg") : mimeType;
+  }
+
+  private void sharePreviewImage(String source, MessageEntity message) {
+    sharePreviewMedia(source, message, false);
+  }
+
+  private void sharePreviewVideo(String source, MessageEntity message) {
+    sharePreviewMedia(source, message, true);
+  }
+
+  private void sharePreviewMedia(String source, MessageEntity message, boolean video) {
+    withPreviewMediaUri(source, message, video ? "Video" : "Image", uri -> {
+      Uri shared = "file".equals(uri.getScheme())
+          ? FileProvider.getUriForFile(this, getPackageName() + ".files", new File(uri.getPath()))
+          : uri;
+      Intent intent = new Intent(Intent.ACTION_SEND);
+      intent.setType(previewMediaMimeType(message, video));
+      intent.putExtra(Intent.EXTRA_STREAM, shared);
+      intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+      startActivity(Intent.createChooser(intent, video ? "Share video" : "Share image"));
+    });
+  }
+
+  private void viewPreviewImage(String source, MessageEntity message) {
+    withPreviewMediaUri(source, message, "Image",
+        uri -> openInExternalGallery(uri, previewMediaMimeType(message, false)));
+  }
+
+  private void viewPreviewVideo(String source, MessageEntity message) {
+    withPreviewMediaUri(source, message, "Video",
+        uri -> openInExternalGallery(uri, previewMediaMimeType(message, true)));
+  }
+
+  private void openInExternalGallery(Uri uri, String mimeType) {
+    Uri shared = "file".equals(uri.getScheme())
+        ? FileProvider.getUriForFile(this, getPackageName() + ".files", new File(uri.getPath()))
+        : uri;
+    Intent baseIntent = new Intent(Intent.ACTION_VIEW);
+    baseIntent.setDataAndType(shared, mimeType);
+    baseIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+        | Intent.FLAG_ACTIVITY_NEW_TASK
+        | Intent.FLAG_ACTIVITY_NEW_DOCUMENT
+        | Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
+    List<ResolveInfo> handlers = getPackageManager().queryIntentActivities(
+        baseIntent, PackageManager.MATCH_DEFAULT_ONLY);
+    List<Intent> externalIntents = new ArrayList<>();
+    Set<String> externalComponents = new HashSet<>();
+    for (ResolveInfo handler : handlers) {
+      if (handler.activityInfo == null
+          || getPackageName().equals(handler.activityInfo.packageName)) continue;
+      ComponentName component = new ComponentName(
+          handler.activityInfo.packageName, handler.activityInfo.name);
+      if (!externalComponents.add(component.flattenToString())) continue;
+      externalIntents.add(new Intent(baseIntent).setComponent(component));
+    }
+    if (externalIntents.isEmpty()) {
+      Toast.makeText(this, "No gallery app is available.", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    try {
+      if (externalIntents.size() == 1) {
+        startActivity(externalIntents.get(0));
+      } else {
+        Intent chooser = Intent.createChooser(externalIntents.remove(0), "View in gallery");
+        chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS,
+            externalIntents.toArray(new Intent[0]));
+        chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+            | Intent.FLAG_ACTIVITY_NEW_DOCUMENT
+            | Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
+        startActivity(chooser);
+      }
+    } catch (RuntimeException error) {
+      Toast.makeText(this, "No gallery app is available.", Toast.LENGTH_SHORT).show();
+    }
+  }
+
+  private void withPreviewMediaUri(
+      String source, MessageEntity message, String mediaName, PreviewMediaUriAction action) {
+    Uri local = readablePreviewMediaUri(source, message);
+    if (local != null) {
+      action.accept(local);
+      return;
+    }
+    if (message == null) {
+      Toast.makeText(this, mediaName + " is not available locally.", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    repository.downloadAttachment(message, new ChatRepository.DownloadCallback() {
+      @Override public void onAvailable(Uri uri) { action.accept(uri); }
+      @Override public void onQueued() {
+        Toast.makeText(ChatActivity.this, mediaName + " download queued.",
+            Toast.LENGTH_SHORT).show();
+      }
+      @Override public void onError(String error) {
+        Toast.makeText(ChatActivity.this, error, Toast.LENGTH_SHORT).show();
+      }
+    });
+  }
+
+  private Uri readablePreviewMediaUri(String source, MessageEntity message) {
+    String localSource = message == null ? null : message.attachmentLocalUri;
+    if (localSource == null || localSource.trim().isEmpty()) localSource = source;
+    if (localSource == null || localSource.trim().isEmpty()) return null;
+    Uri uri = Uri.parse(localSource);
+    if (uri.getScheme() == null) uri = Uri.fromFile(new File(localSource));
+    String scheme = uri.getScheme();
+    return ("file".equals(scheme) || "content".equals(scheme)) && canRead(uri) ? uri : null;
+  }
+
+  private void deletePreviewMessage(MessageEntity message, boolean video) {
+    if (message == null || !hasServerMessageId(message)) {
+      Toast.makeText(this, "Message cannot be deleted.", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    String mediaName = video ? "video" : "image";
+    showPrompt(NativePromptDialogView.confirm(
+        this, "Delete " + mediaName + "?", "Delete this " + mediaName + " message?",
+        "Delete", () -> {
+          boolean own = currentUser.equals(normalize(message.senderId));
+          if (video) closeVideoPreview();
+          else closeImagePreview();
+          if (own) repository.deleteOwnMessage(chatId, message.messageId);
+          else repository.deleteOpponentMessage(chatId, message.messageId);
+        }, this::removePrompt));
+  }
+
+  private void sendPreviewReply(MessageEntity message, String text, boolean video) {
+    if (message == null || !hasServerMessageId(message)) {
+      Toast.makeText(this, "Message cannot be replied to yet.", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    String reply = text == null ? "" : text.trim();
+    if (reply.isEmpty()) return;
+    repository.sendMessage(chatId, receiverId, reply, message.messageId);
+    if (video) closeVideoPreview();
+    else closeImagePreview();
+    if (chatView != null) chatView.scrollToBottom();
+  }
+
+  private interface PreviewMediaUriAction {
+    void accept(Uri uri);
+  }
+
+  private void showVideoPreview(String source, MessageEntity message) {
+    closeImagePreview();
+    closeVideoPreview();
+    final String messageId = message == null ? null : message.messageId;
+    String senderId = message == null || message.senderId == null
+        ? receiverId : normalize(message.senderId);
+    String sentTime = message == null || message.sentTime <= 0 ? ""
+        : DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
+            .format(new Date(message.sentTime));
+    videoPreviewView = new VideoPreviewView(this, source, senderId, sentTime,
+        new VideoPreviewView.Listener() {
+          @Override public void onClose() { closeVideoPreview(); }
+          @Override public void onForward() { forwardPreviewMessage(messageId); }
+          @Override public void onShowInChat() {
+            closeVideoPreview();
+            showPreviewMessageInChat(messageId);
+          }
+          @Override public void onDownload() { downloadPreviewVideo(source, message); }
+          @Override public void onShare() { sharePreviewVideo(source, message); }
+          @Override public void onDelete() { deletePreviewMessage(message, true); }
+          @Override public void onViewInGallery() { viewPreviewVideo(source, message); }
+          @Override public void onReply(String text) { sendPreviewReply(message, text, true); }
+        });
+    videoPreviewView.setOnSystemBarsChangedListener(this::updateMediaSystemBars);
+    ((ViewGroup) findViewById(android.R.id.content)).addView(videoPreviewView,
+        new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT));
+    updateMediaSystemBars();
+    ViewCompat.requestApplyInsets(videoPreviewView);
+  }
+
+  private void forwardPreviewMessage(String messageId) {
+    if (chatId == null || chatId.isEmpty() || messageId == null || messageId.isEmpty()) {
+      Toast.makeText(this, "Message cannot be forwarded.", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    Intent intent = new Intent(this, NewChatActivity.class);
+    intent.putExtra(NewChatActivity.EXTRA_FORWARD_SOURCE_CHAT_ID, chatId);
+    ArrayList<String> ids = new ArrayList<>();
+    ids.add(messageId);
+    intent.putStringArrayListExtra(NewChatActivity.EXTRA_FORWARD_MESSAGE_IDS, ids);
+    startActivity(intent);
+  }
+
+  private void closeImagePreview() {
+    ImagePreviewView current = imagePreviewView;
+    imagePreviewView = null;
+    if (current == null) return;
+    if (current.getParent() instanceof ViewGroup) ((ViewGroup) current.getParent()).removeView(current);
+    current.release();
+    updateMediaSystemBars();
+  }
+
+  private void closeVideoPreview() {
+    VideoPreviewView current = videoPreviewView;
+    videoPreviewView = null;
+    if (current == null) return;
+    if (current.getParent() instanceof ViewGroup) ((ViewGroup) current.getParent()).removeView(current);
+    current.release();
+    updateMediaSystemBars();
+  }
+
+  private void updateMediaSystemBars() {
+    NativeMediaScreenView activeMedia = selectedMediaPreviewView != null
+        ? selectedMediaPreviewView
+        : cameraCaptureView != null
+            ? cameraCaptureView
+            : videoPreviewView != null ? videoPreviewView : imagePreviewView;
+    boolean mediaVisible = activeMedia != null;
+    boolean mediaNavigationVisible = mediaVisible && activeMedia.isNavigationBarVisible();
+    getWindow().setStatusBarColor(
+        mediaNavigationVisible ? activeMedia.getNavigationBarColor() : DEFAULT_STATUS_BAR_COLOR);
+    getWindow().setNavigationBarColor(mediaVisible ? Color.BLACK : DEFAULT_STATUS_BAR_COLOR);
+    WindowInsetsControllerCompat controller = new WindowInsetsControllerCompat(
+        getWindow(), getWindow().getDecorView());
+    if (mediaVisible && !mediaNavigationVisible) {
+      controller.hide(WindowInsetsCompat.Type.statusBars());
+      controller.setSystemBarsBehavior(
+          WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+    } else {
+      controller.show(WindowInsetsCompat.Type.statusBars());
+    }
+    controller.setAppearanceLightStatusBars(!mediaVisible);
+    controller.setAppearanceLightNavigationBars(!mediaVisible);
   }
 
   private static String attachmentMediaType(MessageEntity message) {
@@ -2362,8 +2924,26 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     return n.startsWith("+") ? n.substring(1) : n;
   }
 
+  @Override protected void onResume() {
+    super.onResume();
+    if (videoPreviewView != null) videoPreviewView.onHostResume();
+    if (selectedMediaPreviewView != null) selectedMediaPreviewView.onHostResume();
+    if (cameraCaptureView != null) cameraCaptureView.onHostResume();
+  }
+
+  @Override protected void onPause() {
+    if (videoPreviewView != null) videoPreviewView.onHostPause();
+    if (selectedMediaPreviewView != null) selectedMediaPreviewView.onHostPause();
+    if (cameraCaptureView != null) cameraCaptureView.onHostPause();
+    super.onPause();
+  }
+
   @Override
   protected void onDestroy() {
+    closeImagePreview();
+    closeVideoPreview();
+    closeSelectedMediaPreview();
+    closeCameraCapture();
     finishAudioRecording(false);
     stopAudioPlayback();
     removePrompt();
@@ -2377,6 +2957,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     messagePreparationExecutor.shutdownNow();
     contactLookupGeneration++;
     contactLookupExecutor.shutdownNow();
+    previewActionExecutor.shutdownNow();
     typingHandler.removeCallbacksAndMessages(null);
     locationPending = false;
     removeLocationUpdates();
