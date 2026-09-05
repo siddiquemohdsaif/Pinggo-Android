@@ -18,6 +18,7 @@ import java.util.Map;
 
 /** Per-image freehand/text editor used by the selected-media preview. */
 final class SelectedImageEditorView extends View {
+  interface TextEditListener { void onTextEditRequested(String value, int color); }
   private static final int EDIT_COLOR = 0xFF22C56E;
   private final Map<String, State> states = new HashMap<>();
   private final Matrix displayMatrix = new Matrix();
@@ -30,9 +31,19 @@ final class SelectedImageEditorView extends View {
   private boolean drawing;
   private boolean strokeInProgress;
   private TextItem draggingText;
+  private TextItem scalingText;
+  private TextItem editingText;
   private float dragOffsetX;
   private float dragOffsetY;
+  private float pinchStartDistance;
+  private float pinchStartScale;
+  private float textTouchStartX;
+  private float textTouchStartY;
+  private boolean textMoved;
   private Runnable historyChangedListener;
+  private TextEditListener textEditListener;
+  private int drawingColor = EDIT_COLOR;
+  private int textColor = Color.WHITE;
 
   SelectedImageEditorView(Context context) {
     super(context);
@@ -68,6 +79,12 @@ final class SelectedImageEditorView extends View {
     drawing = enabled;
   }
 
+  void setDrawingColor(int color) { drawingColor = color; }
+
+  void setTextColor(int color) { textColor = color; }
+
+  void setTextEditListener(TextEditListener listener) { textEditListener = listener; }
+
   boolean isDrawing() { return drawing; }
 
   void setHistoryChangedListener(Runnable listener) {
@@ -98,8 +115,20 @@ final class SelectedImageEditorView extends View {
     String text = value == null ? "" : value.trim();
     if (text.isEmpty() || state.bitmap == null) return;
     state.texts.add(new TextItem(
-        text, state.bitmap.getWidth() / 2f, state.bitmap.getHeight() / 2f));
+        text, state.bitmap.getWidth() / 2f, state.bitmap.getHeight() / 2f, textColor));
     invalidate();
+  }
+
+  boolean commitEditedText(String value, int color) {
+    if (editingText == null) return false;
+    String normalized = value == null ? "" : value.trim();
+    if (!normalized.isEmpty()) {
+      editingText.value = normalized;
+      editingText.color = color;
+    }
+    editingText = null;
+    invalidate();
+    return true;
   }
 
   void rotateClockwise() {
@@ -111,7 +140,7 @@ final class SelectedImageEditorView extends View {
     Matrix annotationRotation = new Matrix();
     annotationRotation.setRotate(90f);
     annotationRotation.postTranslate(old.getHeight(), 0f);
-    for (Path path : state.strokes) path.transform(annotationRotation);
+    for (Stroke stroke : state.strokes) stroke.path.transform(annotationRotation);
     for (TextItem text : state.texts) {
       float oldX = text.x;
       text.x = old.getHeight() - text.y;
@@ -139,6 +168,25 @@ final class SelectedImageEditorView extends View {
     return output;
   }
 
+  Bitmap activeExport() {
+    if (state == null) return null;
+    for (Map.Entry<String, State> entry : states.entrySet()) {
+      if (entry.getValue() == state) return export(entry.getKey());
+    }
+    return null;
+  }
+
+  void replaceActiveBitmap(Bitmap bitmap) {
+    if (state == null || bitmap == null) return;
+    state.bitmap = bitmap;
+    state.strokes.clear();
+    state.texts.clear();
+    state.edited = true;
+    rebuildMatrix();
+    notifyHistoryChanged();
+    invalidate();
+  }
+
   @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
     rebuildMatrix();
   }
@@ -158,13 +206,39 @@ final class SelectedImageEditorView extends View {
     if (target.bitmap == null) return;
     float unit = Math.max(target.bitmap.getWidth(), target.bitmap.getHeight());
     strokePaint.setStrokeWidth(unit * 0.007f);
-    for (Path path : target.strokes) canvas.drawPath(path, strokePaint);
-    textPaint.setTextSize(unit * 0.075f);
+    for (Stroke stroke : target.strokes) {
+      strokePaint.setColor(stroke.color);
+      canvas.drawPath(stroke.path, strokePaint);
+    }
     for (TextItem text : target.texts) {
-      RectF background = textBounds(text, target);
-      float radius = unit * 0.018f;
-      canvas.drawRoundRect(background, radius, radius, textBackgroundPaint);
-      canvas.drawText(text.value, text.x, text.y, textPaint);
+      textPaint.setTextSize(unit * 0.075f * text.scale * lineScale(text.value));
+      textPaint.setColor(text.color);
+      textBackgroundPaint.setColor(contrastBackground(text.color));
+      String[] lines = text.value.split("\\n", -1);
+      Paint.FontMetrics metrics = textPaint.getFontMetrics();
+      float lineHeight = metrics.descent - metrics.ascent;
+      float baseline = text.y - (lines.length - 1) * lineHeight / 2f;
+      float backgroundRadius = textPaint.getTextSize() * .16f;
+      // Paint every opaque background first. Otherwise the following line's background can
+      // cover the descenders of the line above it.
+      for (String line : lines) {
+        float halfWidth = textPaint.measureText(line) / 2f;
+        float horizontalPadding = unit * .015f;
+        float verticalPadding = unit * .004f;
+        RectF lineBackground = new RectF(
+            text.x - halfWidth - horizontalPadding,
+            baseline + metrics.ascent - verticalPadding,
+            text.x + halfWidth + horizontalPadding,
+            baseline + metrics.descent + verticalPadding);
+        canvas.drawRoundRect(
+            lineBackground, backgroundRadius, backgroundRadius, textBackgroundPaint);
+        baseline += lineHeight;
+      }
+      baseline = text.y - (lines.length - 1) * lineHeight / 2f;
+      for (String line : lines) {
+        canvas.drawText(line, text.x, baseline, textPaint);
+        baseline += lineHeight;
+      }
     }
   }
 
@@ -174,25 +248,59 @@ final class SelectedImageEditorView extends View {
     inverseMatrix.mapPoints(point);
     float x = point[0], y = point[1];
     if (drawing) return drawTouch(event, x, y);
-    if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+    int action = event.getActionMasked();
+    if (action == MotionEvent.ACTION_POINTER_DOWN && event.getPointerCount() >= 2) {
+      float[] midpoint = {(event.getX(0) + event.getX(1)) / 2f,
+          (event.getY(0) + event.getY(1)) / 2f};
+      inverseMatrix.mapPoints(midpoint);
+      scalingText = findTextAt(midpoint[0], midpoint[1]);
+      if (scalingText != null) {
+        pinchStartDistance = pointerDistance(event);
+        pinchStartScale = scalingText.scale;
+        draggingText = null;
+        return true;
+      }
+    }
+    if (action == MotionEvent.ACTION_MOVE && scalingText != null && event.getPointerCount() >= 2) {
+      float distance = pointerDistance(event);
+      if (pinchStartDistance > 0f) {
+        scalingText.scale = clamp(pinchStartScale * distance / pinchStartDistance,
+            minimumTextScale(scalingText), 5f);
+        invalidate();
+      }
+      return true;
+    }
+    if (action == MotionEvent.ACTION_DOWN) {
       draggingText = findTextAt(x, y);
       if (draggingText != null) {
         dragOffsetX = draggingText.x - x;
         dragOffsetY = draggingText.y - y;
+        textTouchStartX = x;
+        textTouchStartY = y;
+        textMoved = false;
         return true;
       }
     }
-    if (event.getActionMasked() == MotionEvent.ACTION_MOVE && draggingText != null) {
+    if (action == MotionEvent.ACTION_MOVE && draggingText != null) {
+      float threshold = 8f / Math.max(.001f, displayScale());
+      if (Math.hypot(x - textTouchStartX, y - textTouchStartY) > threshold) textMoved = true;
       draggingText.x = clamp(x + dragOffsetX, 0f, state.bitmap.getWidth());
       draggingText.y = clamp(y + dragOffsetY, 0f, state.bitmap.getHeight());
       invalidate();
       return true;
     }
-    if (event.getActionMasked() == MotionEvent.ACTION_UP
-        || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
-      draggingText = null;
+    boolean handled = draggingText != null || scalingText != null;
+    if (action == MotionEvent.ACTION_UP && draggingText != null && !textMoved) {
+      editingText = draggingText;
+      if (textEditListener != null) {
+        textEditListener.onTextEditRequested(editingText.value, editingText.color);
+      }
     }
-    return draggingText != null;
+    if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+      draggingText = null;
+      scalingText = null;
+    }
+    return handled;
   }
 
   private boolean drawTouch(MotionEvent event, float x, float y) {
@@ -200,11 +308,11 @@ final class SelectedImageEditorView extends View {
       if (!insideBitmap(x, y)) return false;
       Path path = new Path();
       path.moveTo(x, y);
-      state.strokes.add(path);
+      state.strokes.add(new Stroke(path, drawingColor));
       strokeInProgress = true;
       notifyHistoryChanged();
     } else if (event.getActionMasked() == MotionEvent.ACTION_MOVE && strokeInProgress) {
-      state.strokes.get(state.strokes.size() - 1).lineTo(
+      state.strokes.get(state.strokes.size() - 1).path.lineTo(
           clamp(x, 0f, state.bitmap.getWidth()),
           clamp(y, 0f, state.bitmap.getHeight()));
     } else if (event.getActionMasked() == MotionEvent.ACTION_UP
@@ -217,9 +325,10 @@ final class SelectedImageEditorView extends View {
 
   private TextItem findTextAt(float x, float y) {
     if (state == null || state.bitmap == null) return null;
-    textPaint.setTextSize(Math.max(state.bitmap.getWidth(), state.bitmap.getHeight()) * 0.075f);
     for (int index = state.texts.size() - 1; index >= 0; index--) {
       TextItem text = state.texts.get(index);
+      textPaint.setTextSize(Math.max(state.bitmap.getWidth(), state.bitmap.getHeight())
+          * 0.075f * text.scale * lineScale(text.value));
       if (textBounds(text, state).contains(x, y)) return text;
     }
     return null;
@@ -227,14 +336,43 @@ final class SelectedImageEditorView extends View {
 
   private RectF textBounds(TextItem text, State target) {
     float unit = Math.max(target.bitmap.getWidth(), target.bitmap.getHeight());
-    float horizontalPadding = unit * 0.025f;
+    float horizontalPadding = unit * 0.015f;
     float verticalPadding = unit * 0.014f;
     Paint.FontMetrics metrics = textPaint.getFontMetrics();
-    float halfWidth = textPaint.measureText(text.value) / 2f;
+    String[] lines = text.value.split("\\n", -1);
+    float halfWidth = 0f;
+    for (String line : lines) halfWidth = Math.max(halfWidth, textPaint.measureText(line) / 2f);
+    float lineHeight = metrics.descent - metrics.ascent;
+    float firstBaseline = text.y - (lines.length - 1) * lineHeight / 2f;
     return new RectF(text.x - halfWidth - horizontalPadding,
-        text.y + metrics.top - verticalPadding,
+        firstBaseline + metrics.top - verticalPadding,
         text.x + halfWidth + horizontalPadding,
-        text.y + metrics.bottom + verticalPadding);
+        firstBaseline + metrics.bottom + (lines.length - 1) * lineHeight + verticalPadding);
+  }
+
+  private static float pointerDistance(MotionEvent event) {
+    if (event.getPointerCount() < 2) return 0f;
+    return (float) Math.hypot(event.getX(1) - event.getX(0),
+        event.getY(1) - event.getY(0));
+  }
+
+  private float displayScale() {
+    float[] values = new float[9];
+    displayMatrix.getValues(values);
+    return Math.max(Math.abs(values[Matrix.MSCALE_X]), Math.abs(values[Matrix.MSCALE_Y]));
+  }
+
+  private static int contrastBackground(int foreground) {
+    double luminance = (Color.red(foreground) * .299
+        + Color.green(foreground) * .587 + Color.blue(foreground) * .114) / 255d;
+    return luminance > .58d ? 0xFF252A30 : 0xFFE4E7EA;
+  }
+
+  private float minimumTextScale(TextItem text) { return .05f; }
+
+  private static float lineScale(String value) {
+    int lines = value == null || value.isEmpty() ? 1 : value.split("\\n", -1).length;
+    return lines <= 5 ? 1f : Math.max(.55f, 1f - (lines - 5) * .07f);
   }
 
   private boolean insideBitmap(float x, float y) {
@@ -266,22 +404,35 @@ final class SelectedImageEditorView extends View {
 
   private static final class State {
     Bitmap bitmap;
-    final List<Path> strokes = new ArrayList<>();
+    final List<Stroke> strokes = new ArrayList<>();
     final List<TextItem> texts = new ArrayList<>();
     boolean edited;
 
     State(Bitmap bitmap) { this.bitmap = bitmap; }
   }
 
+  private static final class Stroke {
+    final Path path;
+    final int color;
+
+    Stroke(Path path, int color) {
+      this.path = path;
+      this.color = color;
+    }
+  }
+
   private static final class TextItem {
-    final String value;
+    String value;
+    int color;
     float x;
     float y;
+    float scale = 1f;
 
-    TextItem(String value, float x, float y) {
+    TextItem(String value, float x, float y, int color) {
       this.value = value;
       this.x = x;
       this.y = y;
+      this.color = color;
     }
   }
 }

@@ -59,7 +59,7 @@ final class NativeSelectedVideoToolsView extends View {
         .setFontVariations(FontVariation.SEMI_BOLD)
         .setTextSizePx(16 * getResources().getDisplayMetrics().scaledDensity)
         .setTextColor(Color.WHITE)
-        .setRippleEnabled(true)
+        .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
         .setOnClickListener(id -> listener.onNoiseToggle()));
     layer.add(new Button.Builder(getContext(), "metadata", background, metadata,
         new RectF(px(260), 0, Math.min(width, px(620)), height))

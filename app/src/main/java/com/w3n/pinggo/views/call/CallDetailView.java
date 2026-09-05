@@ -186,7 +186,7 @@ public final class CallDetailView extends View {
             .setFontVariations(FontVariation.SEMI_BOLD)
             .setTextSizePx(sp(16))
             .setTextColor(color)
-            .setRippleEnabled(true)
+            .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
             .setRippleColor(0x22019CC4)
             .setOnClickListener(click));
   }

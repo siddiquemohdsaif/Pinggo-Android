@@ -118,6 +118,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private ImagePreviewView imagePreviewView;
   private VideoPreviewView videoPreviewView;
   private SelectedMediaPreviewView selectedMediaPreviewView;
+  private String pendingMediaComposerDraft;
   private CameraCaptureView cameraCaptureView;
   private int mediaPreviousOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
   private boolean mediaOrientationLocked;
@@ -1490,7 +1491,14 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         closeCameraCapture();
         sendSelectedAttachments(uris, types, caption);
       }
-      @Override public void onClose() { closeCameraCapture(); }
+      @Override public void onClose() {
+        closeCameraCapture();
+        if (pendingMediaComposerDraft != null) {
+          String draft = pendingMediaComposerDraft;
+          pendingMediaComposerDraft = null;
+          chatView.setDraft(draft);
+        }
+      }
     });
     cameraCaptureView.setOnSystemBarsChangedListener(this::updateMediaSystemBars);
     ((ViewGroup) findViewById(android.R.id.content)).addView(cameraCaptureView,
@@ -1567,24 +1575,36 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   private void showSelectedMediaPreview(ArrayList<Uri> uris, ArrayList<String> types,
       boolean captured, SelectedMediaOverlayView.Listener downstream) {
+    if (pendingMediaComposerDraft == null) pendingMediaComposerDraft = chatView.getDraft();
+    final String composerCaption = pendingMediaComposerDraft;
+    chatView.clearDraft();
     closeSelectedMediaPreview();
     lockMediaOrientation();
     selectedMediaPreviewView = new SelectedMediaPreviewView(this, uris, types, captured, receiverId,
         new SelectedMediaOverlayView.Listener() {
           @Override public void onSend(ArrayList<Uri> selected, ArrayList<String> selectedTypes) {
             closeSelectedMediaPreview();
+            pendingMediaComposerDraft = null;
             if (downstream != null) downstream.onSend(selected, selectedTypes);
             else sendSelectedAttachments(selected, selectedTypes);
           }
           @Override public void onSend(ArrayList<Uri> selected, ArrayList<String> selectedTypes,
               String caption) {
             closeSelectedMediaPreview();
+            pendingMediaComposerDraft = null;
             if (downstream != null) downstream.onSend(selected, selectedTypes, caption);
             else sendSelectedAttachments(selected, selectedTypes, caption);
           }
           @Override public void onCancel(ArrayList<Uri> selected, ArrayList<String> selectedTypes) {
             closeSelectedMediaPreview();
-            if (downstream != null) downstream.onCancel(selected, selectedTypes);
+            if (downstream != null) {
+              // Returning to the in-app camera is still part of the media flow. Restoring the
+              // composer here requests focus and reopens its keyboard underneath the camera.
+              downstream.onCancel(selected, selectedTypes);
+            } else {
+              chatView.setDraft(composerCaption);
+              pendingMediaComposerDraft = null;
+            }
           }
           @Override public void onAddMedia() {
             selectedMediaAddPicker.launch(new String[] {"image/*", "video/*"});
@@ -1599,6 +1619,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
             }
           }
         });
+    selectedMediaPreviewView.setCaption(composerCaption);
     selectedMediaPreviewView.setOnSystemBarsChangedListener(this::updateMediaSystemBars);
     ((ViewGroup) findViewById(android.R.id.content)).addView(selectedMediaPreviewView,
         new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,

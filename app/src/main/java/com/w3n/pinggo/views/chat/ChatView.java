@@ -44,6 +44,8 @@ import java.util.Locale;
 
 /** AAR-native conversation screen and message composer. */
 public final class ChatView extends View {
+  private static final float COMPOSER_TEXT_LEFT = 155f;
+  private static final float COMPOSER_TEXT_RIGHT = 690f;
   /** Opaque full-list render data prepared away from the UI thread. */
   public static final class PreparedMessages {
     private final ChatMessageAdapter.PreparedSubmission submission;
@@ -560,6 +562,16 @@ public final class ChatView extends View {
     updateComposerActionIcon();
   }
 
+  public void hideComposerKeyboard() {
+    if (input != null) {
+      composer.draft = input.getText();
+      input.clearFocus();
+    }
+    InputMethodManager keyboard =
+        (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+    if (keyboard != null) keyboard.hideSoftInputFromWindow(getWindowToken(), 0);
+  }
+
   public void showReply(String value) {
     composer.replyPreview = value == null ? "" : value;
     composer.replySender = "";
@@ -687,6 +699,7 @@ public final class ChatView extends View {
   }
 
   private void toggleAttachmentPanel() {
+    hideComposerKeyboard();
     composer.attachmentPanelVisible = !composer.attachmentPanelVisible;
     build();
   }
@@ -975,8 +988,8 @@ public final class ChatView extends View {
             new TextField.Builder(
                     getContext(),
                     "composer",
-                    new RectF(155f * scale, composerTop + 8f * scale,
-                        885f * scale, composerBottom - 8f * scale))
+                    new RectF(COMPOSER_TEXT_LEFT * scale, composerTop + 8f * scale,
+                        COMPOSER_TEXT_RIGHT * scale, composerBottom - 8f * scale))
                 .setText(composer.draft)
                 .setHint("Message")
                 .setMaxLength(4000)
@@ -1003,7 +1016,7 @@ public final class ChatView extends View {
                       updateComposerActionIcon();
                       scheduleComposerResize();
                     }));
-      input.setMultilineBottomEndInsetPx(189f * scale);
+      input.setMultilineBottomEndInsetPx(0f);
       iconButton(
         overlay,
         "emoji",
@@ -1030,7 +1043,10 @@ public final class ChatView extends View {
             860f * scale, composerBottom - 39f * scale),
         new RectF(783f * scale, composerBottom - 116f * scale,
             882f * scale, composerBottom - 17f * scale),
-        id -> listener.onCameraSelected());
+        id -> {
+          hideComposerKeyboard();
+          listener.onCameraSelected();
+        });
     }
     composerActionIcon =
         overlay.add(
@@ -1048,7 +1064,7 @@ public final class ChatView extends View {
                         1072f * scale, microphoneBottom + 12f * scale))
                 .setImageScaleType(Image.ScaleType.FIT_XY)
                 .setCornerRadiusPx(0)
-                .setRippleEnabled(true)
+                .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                 .setRippleColor(0x16019CC4)
                 .setOnClickListener(id -> {
                   if (composer.recording) listener.onAudioRecordingSend();
@@ -1142,9 +1158,9 @@ public final class ChatView extends View {
   private float composerHeightForText(String value, float scale) {
     float minimumHeight = 134f * scale;
     String measuredValue = value == null || value.isEmpty() ? "Message" : value;
-    int textWidth = Math.max(1, (int) Math.floor(730f * scale));
-    int bottomEndInset = Math.max(0, Math.round(189f * scale));
-    StaticLayout layout = composerTextLayout(measuredValue, textWidth, bottomEndInset);
+    int textWidth = Math.max(1,
+        (int) Math.floor((COMPOSER_TEXT_RIGHT - COMPOSER_TEXT_LEFT) * scale));
+    StaticLayout layout = composerTextLayout(measuredValue, textWidth, 0);
     float visibleTextHeight = layout.getHeight();
     if (layout.getLineCount() > MAX_VISIBLE_COMPOSER_LINES) {
       visibleTextHeight = layout.getLineBottom(MAX_VISIBLE_COMPOSER_LINES - 1);
@@ -1277,9 +1293,9 @@ public final class ChatView extends View {
     composerBackground.setBounds(
         new RectF(30f * scale, composerTop, 898f * scale, composerBottom));
     input.setRegion(
-            new RectF(155f * scale, composerTop + 8f * scale,
-                885f * scale, composerBottom - 8f * scale))
-        .setMultilineBottomEndInsetPx(189f * scale);
+            new RectF(COMPOSER_TEXT_LEFT * scale, composerTop + 8f * scale,
+                COMPOSER_TEXT_RIGHT * scale, composerBottom - 8f * scale))
+        .setMultilineBottomEndInsetPx(0f);
 
     baseListBottom = listBottom;
     if (replyText != null && composer.hasReply()) {
@@ -1500,7 +1516,7 @@ public final class ChatView extends View {
             .setFontVariations(FontVariation.SEMI_BOLD)
             .setTextSizePx(sp(18))
             .setTextColor(c)
-            .setRippleEnabled(true)
+            .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
             .setRippleColor(0x22019CC4)
             .setOnClickListener(click));
   }
@@ -1515,7 +1531,7 @@ public final class ChatView extends View {
         new Button.Builder(getContext(), id + "_touch", transparent, "", touchBounds)
             .setImageScaleType(Image.ScaleType.FIT_XY)
             .setCornerRadiusPx(0)
-            .setRippleEnabled(true)
+            .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
             .setRippleColor(0x16019CC4)
             .setOnClickListener(click));
   }

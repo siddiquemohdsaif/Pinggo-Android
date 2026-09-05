@@ -141,7 +141,7 @@ public final class VoiceActiveCallView extends View {
     return content.add(new Button.Builder(getContext(), id, image, label, rect)
         .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(px(66f)).setFont(NativeFonts.INTER)
         .setFontVariations(FontVariation.SEMI_BOLD).setTextSizePx(sp(13)).setTextColor(color)
-        .setRippleEnabled(true).setRippleColor(0x33FFFFFF).setOnClickListener(click));
+        .setRippleEnabled(true).setWaitForRippleBeforeClick(true).setRippleColor(0x33FFFFFF).setOnClickListener(click));
   }
   @Override protected void onDraw(Canvas canvas) { super.onDraw(canvas); layers.draw(canvas); }
   @Override public boolean onTouchEvent(MotionEvent event) {

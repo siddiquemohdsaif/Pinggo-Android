@@ -126,7 +126,7 @@ public final class HomeMenuDialogView extends View {
                 .setMaxLines(doubleLine ? 2 : 1));
         menuLayer.add(new Button.Builder(getContext(), id + "_touch", transparent, "",
                 new RectF(menuBounds.left, top, menuBounds.right, top + 137f * scale))
-                .setImageScaleType(Image.ScaleType.FIT_XY).setRippleEnabled(true)
+                .setImageScaleType(Image.ScaleType.FIT_XY).setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                 .setRippleColor(0x12019CC4).setOnClickListener(value -> {
                     dismissIfShowing();
                     action.run();

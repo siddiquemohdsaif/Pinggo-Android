@@ -140,7 +140,7 @@ public class FlashCallLoginView extends View {
                 position(87f, 95f + designUnits(statusBarInset)),
                 new Size(64f, 64f))
             .setImageScaleType(Image.ScaleType.FIT_CENTER)
-            .setRippleEnabled(true)
+            .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
             .setRippleColor(0x22000000)
             .setOnClickListener(
                 id -> {

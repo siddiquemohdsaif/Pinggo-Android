@@ -7,6 +7,7 @@ import com.w3n.pinggo.Database.CloudFunction.RestApi.API;
 import com.w3n.pinggo.Database.CloudFunction.RestApi.APIAuth;
 import com.w3n.pinggo.Database.CloudFunction.RestApi.AppRestAPI;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatHandler;
+import com.w3n.pinggo.Database.CloudFunction.Utils.CallLogHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.EmailOtpHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.GoogleAuthHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginHandler;
@@ -117,6 +118,10 @@ public class AppFunctionManager {
 
   public void getChatList(String phoneNumber, Callback callback) {
     ChatHandler.getChatList(appApi, phoneNumber, callback);
+  }
+
+  public void getCallList(String phoneNumber, Callback callback) {
+    CallLogHandler.getCallList(appApi, phoneNumber, callback);
   }
 
   public void getChatList(String phoneNumber, int pageSize, String cursor, Callback callback) {

@@ -65,7 +65,7 @@ public final class NativeVideoControlsView extends View {
         .setFontVariations(FontVariation.SEMI_BOLD)
         .setTextSizePx(17 * getResources().getDisplayMetrics().scaledDensity)
         .setTextColor(Color.WHITE)
-        .setRippleEnabled(true)
+        .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
         .setRippleColor(0x33FFFFFF)
         .setOnClickListener(listener);
   }

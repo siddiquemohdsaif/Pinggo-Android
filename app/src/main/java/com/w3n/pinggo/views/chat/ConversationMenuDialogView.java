@@ -197,7 +197,7 @@ public final class ConversationMenuDialogView extends View {
                 "",
                 new RectF(menuBounds.left, rowTop, rowRight, rowTop + ROW_HEIGHT * scale))
             .setImageScaleType(Image.ScaleType.FIT_XY)
-            .setRippleEnabled(true)
+            .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
             .setRippleColor(0x12019CC4)
             .setOnClickListener(value -> {
               dismissIfShowing();

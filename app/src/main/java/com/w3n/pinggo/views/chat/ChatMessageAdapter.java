@@ -249,8 +249,8 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       float contentScale = measured.bubbleWidth / baseWidth;
       int width = Math.max(64, Math.round(
           measured.bubbleWidth - 2f * MEDIA_PADDING_PX * contentScale));
-      int height = Math.max(64, Math.round(measured.bubbleHeight - measured.forwardedHeight
-          - measured.replyHeight - 2f * MEDIA_PADDING_PX * contentScale));
+      int height = Math.max(64, Math.round(measured.attachmentHeight
+          - 2f * MEDIA_PADDING_PX * contentScale));
       String requestKey = source + '|' + video + '|' + width + 'x' + height;
       MediaPreviewCache.Thumbnail cached =
           MediaPreviewCache.memoryThumbnail(source, video, width, height);
@@ -727,17 +727,20 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
             ? NOTICE_PADDING_PX : MESSAGE_TOP_PADDING_PX);
     float attachmentTop = (attachmentPreview || call) && (model.forwarded || hasReply)
         ? headingTop + metrics.forwardedHeight + metrics.replyHeight : bubbleTop;
+    boolean hasAttachmentCaption = hasAttachmentCaption(model);
+    float attachmentBottom = hasAttachmentCaption
+        ? attachmentTop + metrics.attachmentHeight : bubbleBottom;
     RectF clickRegion = new RectF(left, bubbleTop, right, bubbleBottom);
     if (media) {
       clickRegion.set(
           left + MEDIA_PADDING_PX * attachmentContentScale,
           attachmentTop + MEDIA_PADDING_PX * attachmentContentScale,
           right - MEDIA_PADDING_PX * attachmentContentScale,
-          bubbleBottom - MEDIA_PADDING_PX * attachmentContentScale);
+          attachmentBottom - MEDIA_PADDING_PX * attachmentContentScale);
     } else if (file || location) {
       float inset = MEDIA_PADDING_PX * attachmentContentScale;
       clickRegion.set(left + inset, attachmentTop + inset,
-          right - inset, bubbleBottom - inset);
+          right - inset, attachmentBottom - inset);
     }
     bubble
         .setHitRegion(positiveRect(
@@ -766,7 +769,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
           positiveRect(left + MEDIA_PADDING_PX * attachmentContentScale,
               attachmentTop + MEDIA_PADDING_PX * attachmentContentScale,
               right - MEDIA_PADDING_PX * attachmentContentScale,
-              bubbleBottom - MEDIA_PADDING_PX * attachmentContentScale),
+              attachmentBottom - MEDIA_PADDING_PX * attachmentContentScale),
           source == null ? "" : source,
           "video".equals(message.messageType),
           attachmentContentScale);
@@ -778,7 +781,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       String size = message.attachmentSize == null ? "" : formatSize(message.attachmentSize);
       String subtitle = fileType(message);
       if (!size.isEmpty()) subtitle += "  .  " + size;
-      filePreview.bind(new RectF(left, attachmentTop, right, bubbleBottom),
+      filePreview.bind(new RectF(left, attachmentTop, right, attachmentBottom),
           message.attachmentName, subtitle);
     } else {
       filePreview.hide();
@@ -837,7 +840,9 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     }
     long replyFinishedNanos = SystemClock.elapsedRealtimeNanos();
 
-    float messageTop = headingTop + metrics.forwardedHeight + metrics.replyHeight;
+    float messageTop = hasAttachmentCaption
+        ? attachmentBottom + MESSAGE_TOP_PADDING_PX
+        : headingTop + metrics.forwardedHeight + metrics.replyHeight;
     CallPreviewComponent callPreview = item.find("call_preview", CallPreviewComponent.class);
     if (call) {
       callPreview.bind(new RectF(left, attachmentTop, right, bubbleBottom),
@@ -865,7 +870,8 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
                 fullTextRight,
                 textLeft + metrics.renderedTextWidth + MESSAGE_TEXT_WIDTH_SAFETY_PX);
     float textBottom = messageTop + metrics.textHeight;
-    boolean showMessageText = !attachmentPreview && !model.deleted && !call;
+    boolean showMessageText = (!attachmentPreview || hasAttachmentCaption)
+        && !model.deleted && !call;
     item.find("message_text", PreparedMessageTextComponent.class).bind(
         positiveRect(textLeft, messageTop, textRight, textBottom),
         metrics.messageLayout, showMessageText).setHighlight(searchQuery);
@@ -885,7 +891,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
             ? tickLeft - MESSAGE_TIME_TICK_GAP_PX : metadataRight;
     float timeLeft = timeRight - metrics.timeWidth;
     float timeBottom = bubbleBottom
-        - (attachmentPreview || call
+        - ((attachmentPreview || call) && !hasAttachmentCaption
             ? (MEDIA_PADDING_PX + 8f) * attachmentContentScale : MESSAGE_TIME_BOTTOM_PX);
     RectF timeBounds = positiveRect(timeLeft - MESSAGE_TIME_RECT_EXTRA_PX,
         timeBottom - metrics.timeHeight, timeRight, timeBottom);
@@ -899,15 +905,16 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     } else {
       deletedNotice.hide();
     }
+    float metadataBottom = bubbleBottom - (hasAttachmentCaption
+        ? MESSAGE_TICK_BOTTOM_PX : MESSAGE_TICK_BOTTOM_PX * attachmentContentScale);
     RectF deliveryBounds = positiveRect(tickLeft,
-        bubbleBottom - MESSAGE_TICK_BOTTOM_PX * attachmentContentScale - MESSAGE_TICK_HEIGHT_PX,
-        tickRight, bubbleBottom - MESSAGE_TICK_BOTTOM_PX * attachmentContentScale);
+        metadataBottom - MESSAGE_TICK_HEIGHT_PX, tickRight, metadataBottom);
     RectF pinnedBounds = positiveRect(pinLeft,
-        bubbleBottom - MESSAGE_TICK_BOTTOM_PX * attachmentContentScale - MESSAGE_TICK_HEIGHT_PX,
-        pinRight, bubbleBottom - MESSAGE_TICK_BOTTOM_PX * attachmentContentScale);
+        metadataBottom - MESSAGE_TICK_HEIGHT_PX, pinRight, metadataBottom);
     item.find("message_metadata", MessageMetadataComponent.class).bind(
         timeBounds, metrics.timeLayout, messageStatusIcon(message), deliveryBounds,
-        model.showDelivery, messagePinnedIcon, pinnedBounds, model.pinned);
+        model.showDelivery, messagePinnedIcon, pinnedBounds, model.pinned,
+        media && !hasAttachmentCaption);
     if (profiler != null) {
       long bindFinishedNanos = SystemClock.elapsedRealtimeNanos();
       profiler.rowBindSections(position, message.messageId,
@@ -1028,6 +1035,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       desiredHeight *= ATTACHMENT_SCALE;
       float scale = Math.min(1f, availableWidth / desiredWidth);
       float finalWidth = desiredWidth * scale;
+      float attachmentHeight = desiredHeight * scale;
       float replyHeight = model.repliedMessageId == null || model.repliedMessageId.isEmpty()
           ? 0f : replyBlockHeight(replySender, replyValue,
               finalWidth - REPLY_BOX_INSET_PX * 2f);
@@ -1036,10 +1044,28 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
           : replyHeight > 0f ? NOTICE_PADDING_PX : 0f;
       Paint mediaTimePaint = new Paint(measurementTools.get().timePaint);
       Paint.FontMetrics timeFont = mediaTimePaint.getFontMetrics();
+      boolean hasCaption = hasAttachmentCaption(model);
+      StaticLayout captionLayout = null;
+      float captionHeight = 0f;
+      if (hasCaption) {
+        int captionWidth = Math.max(1, Math.round(
+            finalWidth - MESSAGE_HORIZONTAL_PADDING_PX * 2f));
+        captionLayout = StaticLayout.Builder.obtain(model.displayText, 0,
+                model.displayText.length(), measurementTools.get().messagePaint, captionWidth)
+            .setIncludePad(false)
+            .setLineSpacing(MESSAGE_LINE_SPACING_PX, 1f)
+            .build();
+        captionHeight = MESSAGE_TOP_PADDING_PX + captionLayout.getHeight()
+            + MESSAGE_LINE_SPACING_PX
+            + Math.max(MESSAGE_TICK_HEIGHT_PX,
+                (float) Math.ceil(timeFont.descent - timeFont.ascent))
+            + MESSAGE_BOTTOM_PADDING_PX;
+      }
       MessageMetrics mediaMetrics = new MessageMetrics(
           finalWidth,
-          desiredHeight * scale + headerHeight + replyHeight,
-          1f, 1f,
+          attachmentHeight + headerHeight + replyHeight + captionHeight,
+          hasCaption ? finalWidth - MESSAGE_HORIZONTAL_PADDING_PX * 2f : 1f,
+          hasCaption ? captionLayout.getHeight() : 1f,
           model.forwarded
               ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX + FORWARDED_EXTRA_HEIGHT_PX
               : 0f,
@@ -1047,8 +1073,13 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
           mediaTimePaint.measureText(model.formattedTime)
               + MESSAGE_TIME_RECT_EXTRA_PX,
           (float) Math.ceil(timeFont.descent - timeFont.ascent),
-          true);
-      mediaMetrics.timeLayout = timeLayout(model.formattedTime, mediaMetrics.timeWidth);
+          !hasCaption);
+      // Forwarded attachment rows already reserve their leading notice padding separately.
+      mediaMetrics.attachmentHeight = Math.max(1f,
+          attachmentHeight - (model.forwarded ? NOTICE_PADDING_PX : 0f));
+      mediaMetrics.messageLayout = captionLayout;
+      mediaMetrics.timeLayout = timeLayout(
+          model.formattedTime, mediaMetrics.timeWidth, !hasCaption);
       synchronized (metricsCache) { metricsCache.put(cacheKey, mediaMetrics); }
       return mediaMetrics;
     }
@@ -1196,7 +1227,12 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   }
 
   private StaticLayout timeLayout(String value, float width) {
+    return timeLayout(value, width, false);
+  }
+
+  private StaticLayout timeLayout(String value, float width, boolean overMedia) {
     TextPaint paint = new TextPaint(measurementTools.get().timePaint);
+    if (overMedia) paint.setColor(0xFFFFFFFF);
     return StaticLayout.Builder.obtain(value, 0, value.length(), paint,
             Math.max(1, Math.round(width)))
         .setIncludePad(false)
@@ -1280,9 +1316,9 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
               + ", "
               + formatCoordinate(message.longitude)
               + "\nTap to open map";
-    } else if ("image".equals(type) || "video".equals(type)) {
-      displayed = "";
-    } else if ("file".equals(type) || "audio".equals(type)) {
+    } else if ("image".equals(type) || "video".equals(type) || "file".equals(type)) {
+      displayed = message.text == null ? "" : message.text.trim();
+    } else if ("audio".equals(type)) {
       displayed = "";
     } else if (isCallType(type)) {
       displayed = stripCallLabel(message.text);
@@ -1622,6 +1658,14 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
 
   private String captionSuffix(String caption) {
     return caption == null || caption.trim().isEmpty() ? "" : " — " + caption.trim();
+  }
+
+  private static boolean hasAttachmentCaption(MessageRenderModel model) {
+    if (model == null || model.displayText == null || model.displayText.trim().isEmpty()) {
+      return false;
+    }
+    return "image".equals(model.mediaType) || "video".equals(model.mediaType)
+        || "file".equals(model.mediaType);
   }
 
   private static String normalize(String value) {

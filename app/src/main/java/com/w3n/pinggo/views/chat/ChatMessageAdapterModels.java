@@ -107,6 +107,7 @@ final class ChatMessageAdapterModels {
     final float timeWidth;
     final float timeHeight;
     final boolean metadataInline;
+    float attachmentHeight;
     StaticLayout messageLayout;
     StaticLayout timeLayout;
 

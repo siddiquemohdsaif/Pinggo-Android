@@ -136,7 +136,7 @@ public final class ProfileSetupView extends View {
         foreground.add(new Button.Builder(getContext(), "back_button", backBitmap,
                 pos(87f, 95f + offset), new Size(64f, 64f))
                 .setImageScaleType(Image.ScaleType.FIT_CENTER)
-                .setRippleEnabled(true)
+                .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                 .setRippleColor(0x22000000)
                 .setOnClickListener(id -> {
                     if (backListener != null) backListener.onBack();
@@ -164,7 +164,7 @@ public final class ProfileSetupView extends View {
                 string(R.string.next), pos(132f, 1552f + offset), new Size(816f, 140f))
                 .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadius(28f)
                 .setFont(NativeFonts.INTER).setFontVariations(FontVariation.BOLD)
-                .setTextSize(38f).setTextColor(Color.WHITE).setRippleEnabled(true)
+                .setTextSize(38f).setTextColor(Color.WHITE).setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                 .setRippleColor(0x33FFFFFF).setRippleDuration(320L)
                 .setRippleOrigin(Button.RippleOrigin.TOUCH)
                 .setOnClickListener(id -> submit()));
@@ -180,11 +180,11 @@ public final class ProfileSetupView extends View {
                 .setScaleType(Image.ScaleType.FIT_XY));
         cardLayer.add(new Button.Builder(getContext(), "avatar_touch", transparent,
                 pos(340f, 769f + offset), new Size(400f, 400f))
-                .setImageScaleType(Image.ScaleType.FIT_XY).setRippleEnabled(true)
+                .setImageScaleType(Image.ScaleType.FIT_XY).setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                 .setRippleColor(0x22019CC4).setOnClickListener(id -> selectPhoto()));
         cardLayer.add(new Button.Builder(getContext(), "camera", cameraBitmap,
                 pos(622f, 1050f + offset), new Size(112f, 112f))
-                .setImageScaleType(Image.ScaleType.FIT_XY).setRippleEnabled(true)
+                .setImageScaleType(Image.ScaleType.FIT_XY).setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                 .setRippleColor(0x33FFFFFF).setOnClickListener(id -> selectPhoto()));
     }
 

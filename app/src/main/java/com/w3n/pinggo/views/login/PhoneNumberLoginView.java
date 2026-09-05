@@ -369,7 +369,7 @@ public class PhoneNumberLoginView extends View {
                 transparentBitmap, cardPosition(card, 749.718f, 332.113f),
                 new Size(101.408f, 103.944f))
                 .setImageScaleType(Image.ScaleType.FIT_XY)
-                .setRippleEnabled(true)
+                .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                 .setRippleColor(0x22019CC4)
                 .setOnClickListener(id -> openUnfilteredCountryPopup())
                 .build(this);
@@ -476,7 +476,7 @@ public class PhoneNumberLoginView extends View {
                 .setFontVariations(FontVariation.BOLD)
                 .setTextSize(38.028f)
                 .setTextColor(Color.WHITE)
-                .setRippleEnabled(true)
+                .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                 .setRippleColor(0x33FFFFFF)
                 .setRippleDuration(320L)
                 .setRippleOrigin(Button.RippleOrigin.TOUCH)

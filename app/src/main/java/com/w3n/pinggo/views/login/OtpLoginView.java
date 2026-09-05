@@ -173,7 +173,7 @@ public class OtpLoginView extends View {
                 position(87f, 95f + designUnits(statusBarInset)),
                 new Size(64f, 64f))
             .setImageScaleType(Image.ScaleType.FIT_CENTER)
-            .setRippleEnabled(true)
+            .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
             .setRippleColor(0x22000000)
             .setOnClickListener(
                 id -> {
@@ -356,7 +356,7 @@ public class OtpLoginView extends View {
                 bottomPosition(startX + 2f * (keyWidth + horizontalGap), lastRowBottomOffset),
                 new Size(keyWidth, keyHeight))
             .setImageScaleType(Image.ScaleType.FIT_XY)
-            .setRippleEnabled(true)
+            .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
             .setRippleColor(0x22019CC4)
             .setOnClickListener(id -> removeLastDigit()));
   }
@@ -377,7 +377,7 @@ public class OtpLoginView extends View {
             .setFontVariations(FontVariation.REGULAR)
             .setTextSize(57f)
             .setTextColor(PRIMARY_TEXT_COLOR)
-            .setRippleEnabled(true)
+            .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
             .setRippleColor(0x22019CC4)
             .setOnClickListener(id -> appendDigit(value)));
   }

@@ -204,7 +204,7 @@ public final class NativePromptDialogView extends View {
         scope.rect(left, top, width, px(137.5f)))
         .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(px(35.75f))
         .setFont(NativeFonts.INTER).setFontVariations(FontVariation.MEDIUM)
-        .setTextSizePx(px(44f)).setTextColor(textColor).setRippleEnabled(true)
+        .setTextSizePx(px(44f)).setTextColor(textColor).setRippleEnabled(true).setWaitForRippleBeforeClick(true)
         .setOnClickListener(listener).build(this);
   }
 

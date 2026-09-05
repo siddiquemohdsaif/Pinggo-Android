@@ -110,7 +110,7 @@ public final class NativeMediaTopBarView extends View {
     chrome.add(new Button.Builder(getContext(), id + "_touch", transparent, "", touchBounds)
         .setImageScaleType(Image.ScaleType.FIT_XY)
         .setCornerRadiusPx(0)
-        .setRippleEnabled(true)
+        .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
         .setRippleColor(0x16019CC4)
         .setOnClickListener(click));
   }

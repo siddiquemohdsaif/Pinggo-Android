@@ -348,6 +348,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 chatId, requested == Integer.MAX_VALUE ? requested : requested + 1);
     }
 
+    /** Call history is stored by the server as voice_call/video_call chat messages. */
+    public LiveData<List<MessageEntity>> observeCallMessages() {
+        return messageDao.observeCallMessages();
+    }
+
     /** Loads quoted messages outside the visible Room page without adding them to the timeline. */
     public void loadReplyTargets(String chatId, List<MessageEntity> visibleMessages,
                                  ReplyTargetsCallback callback) {

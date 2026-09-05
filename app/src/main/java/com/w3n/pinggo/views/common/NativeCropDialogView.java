@@ -117,7 +117,7 @@ public final class NativeCropDialogView extends FrameLayout {
         .setFontVariations(FontVariation.MEDIUM)
         .setTextSizePx(px(44f))
         .setTextColor(textColor)
-        .setRippleEnabled(true)
+        .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
         .setOnClickListener(listener)
         .build(this);
   }

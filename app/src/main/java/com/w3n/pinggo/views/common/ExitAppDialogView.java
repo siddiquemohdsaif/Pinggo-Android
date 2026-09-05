@@ -113,7 +113,7 @@ public final class ExitAppDialogView extends View {
                             .setFontVariations(FontVariation.MEDIUM)
                             .setTextSizePx(px(44f))
                             .setTextColor(PRIMARY_TEXT)
-                            .setRippleEnabled(true)
+                            .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                             .setRippleColor(0x16000000)
                             .setOnClickListener(id -> nativeDialog.dismiss(
                                     Dialog.DismissReason.ACTION)));
@@ -127,7 +127,7 @@ public final class ExitAppDialogView extends View {
                             .setFontVariations(FontVariation.BOLD)
                             .setTextSizePx(px(44f))
                             .setTextColor(Color.WHITE)
-                            .setRippleEnabled(true)
+                            .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                             .setRippleColor(0x33FFFFFF)
                             .setOnClickListener(id -> exitAction.run()));
                 }));

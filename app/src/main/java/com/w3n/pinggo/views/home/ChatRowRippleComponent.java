@@ -6,6 +6,7 @@ import android.graphics.RectF;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.util.Log;
 import android.view.MotionEvent;
 import android.view.ViewConfiguration;
 import com.ogfa.nativeviews.component.Component;
@@ -17,12 +18,14 @@ final class ChatRowRippleComponent implements Component {
   private static final long EXPAND_DURATION_MS = 260L;
   private static final long FADE_DURATION_MS = 150L;
   private static final int RIPPLE_COLOR = 0xFFE9EDF0;
+  private static final String RIPPLE_TIMING_TAG = "RippleTiming";
   private final String id;
   private final RectF bounds = new RectF();
   private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
   private ComponentHost host;
   private Runnable clickAction;
   private Runnable longClickAction;
+  private Runnable pendingClickAction;
   private float originX;
   private float originY;
   private float maximumRadius;
@@ -33,6 +36,7 @@ final class ChatRowRippleComponent implements Component {
   private boolean fading;
   private boolean visible;
   private boolean released;
+  private final Runnable dispatchPendingClick;
   private final Runnable triggerLongClick = () -> {
     if (!pressed || released || longClickAction == null) return;
     longPressed = true;
@@ -46,6 +50,7 @@ final class ChatRowRippleComponent implements Component {
         visible = false;
         fading = false;
         invalidate();
+        dispatchPendingClick.run();
         return;
       }
       MAIN.postDelayed(this, 16L);
@@ -54,11 +59,24 @@ final class ChatRowRippleComponent implements Component {
 
   ChatRowRippleComponent(String id, RectF initialBounds) {
     this.id = id;
+    dispatchPendingClick = () -> {
+      Runnable action = pendingClickAction;
+      pendingClickAction = null;
+      if (!released && action != null) {
+        long now = SystemClock.uptimeMillis();
+        Log.i(RIPPLE_TIMING_TAG, "component=chat_row event=action_dispatch id=" + this.id
+            + " uptimeMs=" + now
+            + " elapsedFromRippleStartMs=" + Math.max(0L, now - startedAt)
+            + " elapsedFromFadeStartMs=" + Math.max(0L, now - fadeStartedAt));
+        action.run();
+      }
+    };
     bounds.set(initialBounds);
     paint.setColor(RIPPLE_COLOR);
   }
 
   ChatRowRippleComponent bind(RectF region, Runnable click, Runnable longClick) {
+    cancelPendingClick();
     bounds.set(region);
     clickAction = click;
     longClickAction = longClick;
@@ -68,7 +86,9 @@ final class ChatRowRippleComponent implements Component {
   @Override public String getId() { return id; }
   @Override public RectF getBounds() { return bounds; }
   @Override public boolean isVisible() { return !released; }
-  @Override public boolean isEnabled() { return !released && clickAction != null; }
+  @Override public boolean isEnabled() {
+    return !released && clickAction != null && pendingClickAction == null;
+  }
 
   @Override
   public boolean onTouchEvent(MotionEvent event) {
@@ -84,6 +104,10 @@ final class ChatRowRippleComponent implements Component {
       originY = event.getY();
       maximumRadius = farthestCornerRadius(originX, originY);
       startedAt = SystemClock.uptimeMillis();
+      Log.i(RIPPLE_TIMING_TAG, "component=chat_row event=ripple_start id=" + id
+          + " uptimeMs=" + startedAt
+          + " expandDurationMs=" + EXPAND_DURATION_MS
+          + " fadeDurationMs=" + FADE_DURATION_MS);
       MAIN.removeCallbacks(triggerLongClick);
       MAIN.removeCallbacks(animate);
       MAIN.postDelayed(triggerLongClick, ViewConfiguration.getLongPressTimeout());
@@ -94,6 +118,7 @@ final class ChatRowRippleComponent implements Component {
       if (!bounds.contains(event.getX(), event.getY())) {
         pressed = false;
         MAIN.removeCallbacks(triggerLongClick);
+        cancelPendingClick();
         startFade();
       }
       return true;
@@ -102,15 +127,20 @@ final class ChatRowRippleComponent implements Component {
       boolean activate = pressed && bounds.contains(event.getX(), event.getY());
       MAIN.removeCallbacks(triggerLongClick);
       pressed = false;
-      if (activate && !longPressed) clickAction.run();
+      if (activate && !longPressed) {
+        pendingClickAction = clickAction;
+        startFade();
+      } else {
+        startFade();
+      }
       longPressed = false;
-      startFade();
       return true;
     }
     if (action == MotionEvent.ACTION_CANCEL) {
       MAIN.removeCallbacks(triggerLongClick);
       pressed = false;
       longPressed = false;
+      cancelPendingClick();
       startFade();
       return true;
     }
@@ -141,6 +171,7 @@ final class ChatRowRippleComponent implements Component {
     visible = false;
     clickAction = null;
     longClickAction = null;
+    cancelPendingClick();
     MAIN.removeCallbacks(triggerLongClick);
     MAIN.removeCallbacks(animate);
     host = null;
@@ -150,8 +181,18 @@ final class ChatRowRippleComponent implements Component {
     if (!visible) return;
     fading = true;
     fadeStartedAt = SystemClock.uptimeMillis();
+    if (pendingClickAction != null) {
+      Log.i(RIPPLE_TIMING_TAG, "component=chat_row event=fade_start id=" + id
+          + " uptimeMs=" + fadeStartedAt
+          + " elapsedFromRippleStartMs=" + Math.max(0L, fadeStartedAt - startedAt));
+    }
     MAIN.removeCallbacks(animate);
     MAIN.post(animate);
+  }
+
+  private void cancelPendingClick() {
+    pendingClickAction = null;
+    MAIN.removeCallbacks(dispatchPendingClick);
   }
 
   private float farthestCornerRadius(float x, float y) {

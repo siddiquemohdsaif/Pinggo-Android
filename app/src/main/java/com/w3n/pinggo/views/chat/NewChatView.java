@@ -241,7 +241,7 @@ public final class NewChatView extends View {
               .setFontVariations(FontVariation.SEMI_BOLD)
               .setTextSizePx(sp(13))
               .setTextColor(Color.WHITE)
-              .setRippleEnabled(true)
+              .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
               .setOnClickListener(
                   id -> {
                     int p = item.getPosition();
@@ -320,7 +320,7 @@ public final class NewChatView extends View {
             .setFontVariations(FontVariation.SEMI_BOLD)
             .setTextSizePx(sp(18))
             .setTextColor(color)
-            .setRippleEnabled(true)
+            .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
             .setOnClickListener(click));
   }
 

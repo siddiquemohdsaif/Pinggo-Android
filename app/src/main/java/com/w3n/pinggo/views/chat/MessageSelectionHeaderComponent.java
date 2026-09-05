@@ -127,7 +127,7 @@ final class MessageSelectionHeaderComponent {
     return layer.add(new Button.Builder(context, id + "_touch", transparent, "", touchBounds)
         .setImageScaleType(Image.ScaleType.FIT_XY)
         .setCornerRadiusPx(0)
-        .setRippleEnabled(true)
+        .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
         .setRippleColor(0x16019CC4)
         .setOnClickListener(click));
   }

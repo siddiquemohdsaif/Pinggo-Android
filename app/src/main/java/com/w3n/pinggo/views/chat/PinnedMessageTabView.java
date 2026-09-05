@@ -113,7 +113,7 @@ final class PinnedMessageTabView {
         .setFontVariations(FontVariation.SEMI_BOLD)
         .setTextSizePx(sp(18f))
         .setTextColor(PRIMARY)
-        .setRippleEnabled(true)
+        .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
         .setRippleColor(0x22019CC4)
         .setOnClickListener(componentId -> {
           if (navigateListener != null) navigateListener.onNavigate(direction);

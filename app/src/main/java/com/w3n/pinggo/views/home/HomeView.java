@@ -302,7 +302,7 @@ public final class HomeView extends ZLayerViewGroup {
         contentLayer.add(new Button.Builder(getContext(), "selection_back_touch",
                 transparentBitmap, "", new RectF(30f * scale, top + 40f * scale,
                         121f * scale, top + 131f * scale))
-                .setImageScaleType(Image.ScaleType.FIT_XY).setRippleEnabled(true)
+                .setImageScaleType(Image.ScaleType.FIT_XY).setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                 .setOnClickListener(id -> clearChatSelection()));
         contentLayer.add(text("selection_count", String.valueOf(selectedChats.size()),
                 new RectF(165f * scale, top + 57f * scale,
@@ -333,7 +333,7 @@ public final class HomeView extends ZLayerViewGroup {
         contentLayer.add(new Button.Builder(getContext(), id, bitmap, "",
                 new RectF(left * scale, top + 60f * scale,
                         (left + iconWidth) * scale, top + 111f * scale))
-                .setImageScaleType(Image.ScaleType.FIT_CENTER).setRippleEnabled(true)
+                .setImageScaleType(Image.ScaleType.FIT_CENTER).setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                 .setRippleColor(0x18019CC4).setOnClickListener(value -> action.run()));
     }
 
@@ -396,7 +396,7 @@ public final class HomeView extends ZLayerViewGroup {
         return layer.add(new Button.Builder(getContext(), id, bitmap, label, bounds)
                 .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(radius)
                 .setFont(NativeFonts.INTER).setFontVariations(FontVariation.SEMI_BOLD)
-                .setTextSizePx(sp(15)).setTextColor(color).setRippleEnabled(true)
+                .setTextSizePx(sp(15)).setTextColor(color).setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                 .setRippleColor(0x22019CC4).setRippleOrigin(Button.RippleOrigin.TOUCH)
                 .setOnClickListener(click));
     }

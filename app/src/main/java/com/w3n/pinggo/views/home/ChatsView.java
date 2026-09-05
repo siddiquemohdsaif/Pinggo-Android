@@ -321,7 +321,7 @@ public final class ChatsView extends View {
                 new RectF(210f * emptyScale, 1100f * emptyScale,
                         width - 210f * emptyScale, 1220f * emptyScale))
                 .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(24f * emptyScale)
-                .setRippleEnabled(true).setRippleColor(0x33FFFFFF)
+                .setRippleEnabled(true).setWaitForRippleBeforeClick(true).setRippleColor(0x33FFFFFF)
                 .setOnClickListener(id -> openNewChat()));
         float startLabelWidth = 420f * emptyScale;
         // Native Text uses less visual width than its no-wrap bounds. This Figma
@@ -349,7 +349,7 @@ public final class ChatsView extends View {
                 .setImageScaleType(Image.ScaleType.FIT_XY)
                 .setFont(NativeFonts.INTER).setFontVariations(FontVariation.SEMI_BOLD)
                 .setTextSizePx(37f * emptyScale).setTextColor(ACCENT)
-                .setRippleEnabled(true).setRippleColor(0x18019CC4)
+                .setRippleEnabled(true).setWaitForRippleBeforeClick(true).setRippleColor(0x18019CC4)
                 .setOnClickListener(id -> {
                     if (newGroupListener != null) newGroupListener.run();
                 }));
@@ -363,7 +363,7 @@ public final class ChatsView extends View {
         floatingAction = stateLayer.add(new Button.Builder(getContext(), "new_chat_floating",
                 floatingActionBitmap, "",
                 actionBounds)
-                .setImageScaleType(Image.ScaleType.FIT_CENTER).setRippleEnabled(true)
+                .setImageScaleType(Image.ScaleType.FIT_CENTER).setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                 .setRippleColor(0x22FFFFFF).setOnClickListener(id -> openNewChat()));
         float initialProgressSize = 72f * scale;
         initialProgress = stateLayer.add(new Progress.Builder(getContext(),

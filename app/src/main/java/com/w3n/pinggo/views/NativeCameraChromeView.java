@@ -296,7 +296,7 @@ public final class NativeCameraChromeView extends View {
                 .setFontVariations(FontVariation.SEMI_BOLD)
                 .setTextSizePx(sp(textSize))
                 .setTextColor(textColor)
-                .setRippleEnabled(true)
+                .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                 .setRippleColor(0x33FFFFFF)
                 .setOnClickListener(clickListener);
     }

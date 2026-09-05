@@ -15,19 +15,25 @@ final class MessageMetadataComponent implements Component {
   private final RectF bounds = new RectF();
   private final RectF deliveryBounds = new RectF();
   private final RectF pinnedBounds = new RectF();
+  private final RectF shadeBounds = new RectF();
   private final Paint bitmapPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+  private final Paint shadePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
   private ComponentHost host;
   private StaticLayout timeLayout;
   private Bitmap delivery;
   private Bitmap pinned;
   private boolean showDelivery;
   private boolean showPinned;
+  private boolean showShade;
 
-  MessageMetadataComponent(String id) { this.id = id; }
+  MessageMetadataComponent(String id) {
+    this.id = id;
+    shadePaint.setColor(0x73000000);
+  }
 
   MessageMetadataComponent bind(RectF timeRegion, StaticLayout time, Bitmap deliveryBitmap,
       RectF deliveryRegion, boolean deliveryVisible, Bitmap pinnedBitmap,
-      RectF pinnedRegion, boolean pinnedVisible) {
+      RectF pinnedRegion, boolean pinnedVisible, boolean shadeVisible) {
     bounds.set(timeRegion);
     timeLayout = time;
     delivery = deliveryBitmap;
@@ -36,6 +42,11 @@ final class MessageMetadataComponent implements Component {
     pinned = pinnedBitmap;
     pinnedBounds.set(pinnedRegion);
     showPinned = pinnedVisible;
+    showShade = shadeVisible;
+    shadeBounds.set(timeRegion);
+    if (deliveryVisible) shadeBounds.union(deliveryRegion);
+    if (pinnedVisible) shadeBounds.union(pinnedRegion);
+    shadeBounds.inset(-10f, -5f);
     return this;
   }
 
@@ -45,6 +56,7 @@ final class MessageMetadataComponent implements Component {
     pinned = null;
     showDelivery = false;
     showPinned = false;
+    showShade = false;
     return this;
   }
 
@@ -60,6 +72,10 @@ final class MessageMetadataComponent implements Component {
 
   @Override public void draw(Canvas canvas) {
     if (timeLayout == null) return;
+    if (showShade) {
+      float radius = shadeBounds.height() / 2f;
+      canvas.drawRoundRect(shadeBounds, radius, radius, shadePaint);
+    }
     canvas.save();
     canvas.translate(bounds.left, bounds.top);
     timeLayout.draw(canvas);

@@ -8,6 +8,9 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.widget.FrameLayout;
 import android.widget.Toast;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 
 import androidx.activity.EdgeToEdge;
 import androidx.activity.OnBackPressedCallback;
@@ -24,6 +27,7 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.data.local.ChatEntity;
+import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.modals.CallLog;
 import com.w3n.pinggo.modals.Chat;
@@ -32,7 +36,13 @@ import com.w3n.pinggo.views.home.HomeMenuDialogView;
 import com.w3n.pinggo.views.home.HomeView;
 
 import java.util.ArrayList;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 /** Hosts the AAR-native home surface and owns lifecycle, data, and navigation. */
 public class HomeActivity extends AppCompatActivity implements HomeView.Listener {
@@ -41,6 +51,9 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
     private HomeView homeView;
     private HomeMenuDialogView homeMenuDialog;
     private ChatRepository repository;
+    private List<ChatEntity> latestChatEntities = new ArrayList<>();
+    private List<MessageEntity> latestCallMessages = new ArrayList<>();
+    private JsonArray latestServerCalls;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -103,8 +116,15 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         // Covers a fresh login completed after Application.onCreate().
         repository.connect();
         repository.observeChats().observe(this, entities -> {
+            latestChatEntities = entities == null ? new ArrayList<>() : entities;
             homeView.submitChats(toChats(entities));
+            if (latestServerCalls != null) submitServerCalls(latestServerCalls);
+            else submitCalls();
             repository.acknowledgePendingIncomingDeliveries();
+        });
+        repository.observeCallMessages().observe(this, messages -> {
+            latestCallMessages = messages == null ? new ArrayList<>() : messages;
+            if (latestServerCalls == null) submitCalls();
         });
         String uid = LoginStateManager.getInstance().getUID(this);
         if (uid != null && !uid.trim().isEmpty()) {
@@ -129,6 +149,7 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
     @Override protected void onResume() {
         super.onResume();
         if (repository == null) return;
+        loadServerCalls();
         repository.acknowledgePendingIncomingDeliveries();
         repository.setEventListener(new ChatRepository.EventListener() {
             @Override public void onTyping(String chatId, String userId, boolean typing) {
@@ -139,6 +160,69 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                 if (homeView != null) homeView.setTotalUnread(totalUnread);
             }
         });
+    }
+
+    private void loadServerCalls() {
+        String uid = LoginStateManager.getInstance().getUID(this);
+        if (uid == null || uid.trim().isEmpty()) return;
+        AppFunctionManager.getInstance().getCallList(uid, new AppFunctionManager.Callback() {
+            @Override public void onSuccess(Object object) {
+                if (!(object instanceof JsonObject)) return;
+                JsonArray values = ((JsonObject) object).getAsJsonArray("calls");
+                if (values == null) return;
+                latestServerCalls = values.deepCopy();
+                submitServerCalls(latestServerCalls);
+            }
+            @Override public void onError(String error) { /* Keep locally cached call rows. */ }
+        });
+    }
+
+    private void submitServerCalls(JsonArray values) {
+        List<CallLog> calls = new ArrayList<>();
+        Map<String, ChatEntity> chatsById = new HashMap<>();
+        for (ChatEntity chat : latestChatEntities) chatsById.put(chat.chatId, chat);
+        String ownId = normalizeAccountId(LoginStateManager.getInstance().getUID(this));
+        DateFormat rowTime = new SimpleDateFormat("MMM d, h:mm a", Locale.getDefault());
+        DateFormat fullTime = DateFormat.getDateTimeInstance(
+                DateFormat.LONG, DateFormat.SHORT, Locale.getDefault());
+        for (JsonElement element : values) {
+            if (!element.isJsonObject()) continue;
+            JsonObject call = element.getAsJsonObject();
+            String chatId = jsonString(call, "chatId");
+            String callerId = jsonString(call, "callerId");
+            String receiverId = jsonString(call, "receiverId");
+            String otherId = ownId.equals(normalizeAccountId(callerId))
+                    ? receiverId : callerId;
+            ChatEntity chat = chatsById.get(chatId);
+            String contact = chat != null && chat.contactName != null
+                    && !chat.contactName.trim().isEmpty() ? chat.contactName : otherId;
+            long endedAt = jsonLong(call, "endedAt");
+            long duration = jsonLong(call, "durationSeconds");
+            Date date = new Date(endedAt > 0 ? endedAt : jsonLong(call, "createdAt"));
+            calls.add(new CallLog(contact, rowTime.format(date), fullTime.format(date),
+                    formatCallDuration(duration),
+                    "video".equals(jsonString(call, "mediaType"))));
+        }
+        if (homeView != null) homeView.submitCalls(calls);
+    }
+
+    private static String jsonString(JsonObject object, String name) {
+        JsonElement value = object.get(name);
+        return value == null || value.isJsonNull() ? "" : value.getAsString();
+    }
+
+    private static long jsonLong(JsonObject object, String name) {
+        JsonElement value = object.get(name);
+        return value == null || value.isJsonNull() ? 0L : value.getAsLong();
+    }
+
+    private static String formatCallDuration(long seconds) {
+        if (seconds <= 0) return "0 sec";
+        long hours = seconds / 3600;
+        long minutes = (seconds % 3600) / 60;
+        long remaining = seconds % 60;
+        if (hours > 0) return String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, remaining);
+        return String.format(Locale.getDefault(), "%d:%02d", minutes, remaining);
     }
 
     @Override public void onOpenCall(CallLog callLog) {
@@ -253,6 +337,37 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                     entity.isOnline, entity.lastSeen));
         }
         return chats;
+    }
+
+    private void submitCalls() {
+        if (homeView == null) return;
+        Map<String, ChatEntity> chatsById = new HashMap<>();
+        for (ChatEntity chat : latestChatEntities) chatsById.put(chat.chatId, chat);
+        String ownId = normalizeAccountId(LoginStateManager.getInstance().getUID(this));
+        DateFormat rowTime = new SimpleDateFormat("MMM d, h:mm a", Locale.getDefault());
+        DateFormat fullTime = DateFormat.getDateTimeInstance(
+                DateFormat.LONG, DateFormat.SHORT, Locale.getDefault());
+        List<CallLog> calls = new ArrayList<>();
+        for (MessageEntity message : latestCallMessages) {
+            ChatEntity chat = chatsById.get(message.chatId);
+            String otherId = ownId.equals(normalizeAccountId(message.senderId))
+                    ? message.receiverId : message.senderId;
+            String contactName = chat != null && chat.contactName != null
+                    && !chat.contactName.trim().isEmpty() ? chat.contactName : otherId;
+            Date date = new Date(message.sentTime);
+            calls.add(new CallLog(contactName, rowTime.format(date), fullTime.format(date),
+                    callDuration(message.text), "video_call".equals(message.messageType)));
+        }
+        homeView.submitCalls(calls);
+    }
+
+    private static String callDuration(String text) {
+        if (text == null) return "0 sec";
+        int close = text.indexOf(']');
+        String value = close >= 0 ? text.substring(close + 1).trim() : text.trim();
+        if (value.isEmpty() || value.toLowerCase(Locale.US).contains("missed")
+                || value.toLowerCase(Locale.US).contains("connect")) return "0 sec";
+        return value;
     }
 
     private String homeMessagePreview(ChatEntity entity) {

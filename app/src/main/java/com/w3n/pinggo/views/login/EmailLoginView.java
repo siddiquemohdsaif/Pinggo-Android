@@ -168,7 +168,7 @@ public class EmailLoginView extends View {
         foregroundLayer.add(new Button.Builder(getContext(), "back_button", backBitmap,
                 position(87f, 95f + topOffset), new Size(64f, 64f))
                 .setImageScaleType(Image.ScaleType.FIT_CENTER)
-                .setRippleEnabled(true)
+                .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                 .setRippleColor(0x22000000)
                 .setOnClickListener(id -> {
                     if (backListener != null) backListener.onBack();
@@ -295,7 +295,7 @@ public class EmailLoginView extends View {
                 .setFontVariations(FontVariation.BOLD)
                 .setTextSize(38.028f)
                 .setTextColor(Color.WHITE)
-                .setRippleEnabled(true)
+                .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                 .setRippleColor(0x33FFFFFF)
                 .setRippleDuration(320L)
                 .setRippleOrigin(Button.RippleOrigin.TOUCH)
@@ -320,7 +320,7 @@ public class EmailLoginView extends View {
                 .setFontVariations(FontVariation.BOLD)
                 .setTextSize(36f)
                 .setTextColor(0xFF001B48)
-                .setRippleEnabled(true)
+                .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
                 .setRippleColor(0x16019CC4)
                 .setOnClickListener(id -> {
                     if (googleListener != null) googleListener.onGoogleClick();

@@ -22,6 +22,11 @@ public interface MessageDao {
             + "ORDER BY sentTime ASC, messageId ASC")
     LiveData<List<MessageEntity>> observeLatestMessages(String chatId, int limit);
 
+    @Query("SELECT * FROM messages WHERE invisible = 0 AND "
+            + "messageType IN ('voice_call', 'video_call') "
+            + "ORDER BY sentTime DESC, messageId DESC")
+    LiveData<List<MessageEntity>> observeCallMessages();
+
     @Query("SELECT * FROM messages WHERE clientMessageId = :clientMessageId LIMIT 1")
     MessageEntity findByClientMessageId(String clientMessageId);
 
