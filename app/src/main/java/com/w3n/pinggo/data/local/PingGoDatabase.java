@@ -15,7 +15,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase;
                 PresenceEntity.class,
                 TransferEntity.class
         },
-        version = 17,
+        version = 18,
         exportSchema = false
 )
 public abstract class PingGoDatabase extends RoomDatabase {
@@ -102,6 +102,14 @@ public abstract class PingGoDatabase extends RoomDatabase {
             db.execSQL("ALTER TABLE `messages` ADD COLUMN `pinnedBy` TEXT");
         }
     };
+    private static final Migration MIGRATION_17_18 = new Migration(17, 18) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `attachmentWidth` INTEGER");
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `attachmentHeight` INTEGER");
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `attachmentOrientation` TEXT");
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `attachmentDurationMs` INTEGER");
+        }
+    };
 
     public static PingGoDatabase getInstance(Context context) {
         if (instance != null) {
@@ -118,7 +126,7 @@ public abstract class PingGoDatabase extends RoomDatabase {
                                 MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                                 MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
                                 MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
-                                MIGRATION_15_16, MIGRATION_16_17)
+                                MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18)
                         .fallbackToDestructiveMigration()
                         .build();
             }

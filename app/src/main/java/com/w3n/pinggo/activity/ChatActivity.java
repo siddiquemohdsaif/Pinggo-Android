@@ -182,7 +182,11 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result ->
           refreshContactState(false));
   private final Set<String> pendingSeen = new HashSet<>();
+  private final Set<String> observedMessageKeys = new HashSet<>();
+  private final Set<String> automaticFileDownloads = new HashSet<>();
   private final Map<String, Integer> attachmentStates = new ConcurrentHashMap<>();
+  private final Map<String, Long> attachmentDownloadedBytes = new ConcurrentHashMap<>();
+  private final Map<String, Long> attachmentTotalBytes = new ConcurrentHashMap<>();
   private final ExecutorService messagePreparationExecutor =
       Executors.newSingleThreadExecutor();
   private final ExecutorService contactLookupExecutor = Executors.newSingleThreadExecutor();
@@ -480,8 +484,16 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     observeMessageWindow();
     repository.observeTransfers(chatId).observe(this, values -> {
       Map<String, Integer> nextStates = new HashMap<>();
+      Map<String, Long> nextDownloadedBytes = new HashMap<>();
+      Map<String, Long> nextTotalBytes = new HashMap<>();
       if (values != null) for (com.w3n.pinggo.data.local.TransferEntity transfer : values) {
         if (!"download".equals(transfer.direction) || transfer.attachmentId == null) continue;
+        Log.d("PingGoAttachmentTransfer", "stage=transfer_observed chatId=" + chatId
+            + " attachmentId=" + transfer.attachmentId + " status=" + transfer.status
+            + " transferredBytes=" + transfer.transferredBytes
+            + " totalSize=" + transfer.totalSize);
+        nextDownloadedBytes.put(transfer.attachmentId, Math.max(0L, transfer.transferredBytes));
+        nextTotalBytes.put(transfer.attachmentId, Math.max(0L, transfer.totalSize));
         if ("queued".equals(transfer.status) || "downloading".equals(transfer.status)
             || "retrying".equals(transfer.status)) {
           nextStates.put(transfer.attachmentId, ATTACHMENT_DOWNLOADING);
@@ -489,9 +501,15 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
           nextStates.put(transfer.attachmentId, ATTACHMENT_AVAILABLE);
         }
       }
-      if (!attachmentStates.equals(nextStates)) {
+      if (!attachmentStates.equals(nextStates)
+          || !attachmentDownloadedBytes.equals(nextDownloadedBytes)
+          || !attachmentTotalBytes.equals(nextTotalBytes)) {
         attachmentStates.clear();
         attachmentStates.putAll(nextStates);
+        attachmentDownloadedBytes.clear();
+        attachmentDownloadedBytes.putAll(nextDownloadedBytes);
+        attachmentTotalBytes.clear();
+        attachmentTotalBytes.putAll(nextTotalBytes);
         refreshAttachmentRows();
       }
     });
@@ -621,6 +639,16 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     raw = deduplicateMessages(raw);
     LocalMessageWindow window = trimLocalMessageSentinel(raw);
     List<MessageEntity> snapshot = window.messages;
+    startAutomaticFileDownloads(snapshot);
+    if (!snapshot.isEmpty()) {
+      MessageEntity newest = snapshot.get(snapshot.size() - 1);
+      Log.d("PingGoMessageTrace", "stage=activity_room_observed"
+          + " chatId=" + newest.chatId
+          + " messageId=" + newest.messageId
+          + " clientMessageId=" + newest.clientMessageId
+          + " messageType=" + newest.messageType
+          + " rowCount=" + snapshot.size());
+    }
     int generation = ++replyTargetLoadGeneration;
     repository.loadReplyTargets(chatId, snapshot, replyTargets -> {
       if (generation != replyTargetLoadGeneration || isFinishing() || isDestroyed()) return;
@@ -648,6 +676,63 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       return "client:" + message.clientMessageId;
     }
     return "";
+  }
+
+  private void startAutomaticFileDownloads(List<MessageEntity> messages) {
+    Set<String> currentKeys = new HashSet<>();
+    if (messages != null) {
+      for (MessageEntity message : messages) {
+        String messageKey = stableMessageKey(message);
+        if (!messageKey.isEmpty()) currentKeys.add(messageKey);
+        if (messageKey.isEmpty() || observedMessageKeys.contains(messageKey)) continue;
+        if (!"file".equals(message.messageType)
+            || currentUser.equals(normalize(message.senderId))
+            || message.attachmentId == null || message.attachmentId.trim().isEmpty()
+            || message.attachmentUrl == null || message.attachmentUrl.trim().isEmpty()
+            || (message.attachmentLocalUri != null
+                && canRead(Uri.parse(message.attachmentLocalUri)))) continue;
+        if (automaticFileDownloads.add(message.attachmentId)) {
+          startAutomaticFileDownload(message);
+        }
+      }
+    }
+    observedMessageKeys.addAll(currentKeys);
+  }
+
+  private void startAutomaticFileDownload(MessageEntity message) {
+    String key = attachmentKey(message);
+    long totalSize = message.attachmentSize == null ? 0L : Math.max(0L, message.attachmentSize);
+    attachmentStates.put(key, ATTACHMENT_DOWNLOADING);
+    attachmentDownloadedBytes.put(key, 0L);
+    attachmentTotalBytes.put(key, totalSize);
+    Log.d("PingGoAttachmentTransfer", "stage=automatic_download_requested chatId=" + chatId
+        + " messageId=" + message.messageId + " attachmentId=" + message.attachmentId
+        + " transferredBytes=0 totalSize=" + totalSize);
+    refreshAttachmentRows();
+    repository.downloadAttachment(message, new ChatRepository.DownloadCallback() {
+      @Override public void onAvailable(Uri uri) {
+        attachmentStates.put(key, ATTACHMENT_AVAILABLE);
+        Log.d("PingGoAttachmentTransfer", "stage=automatic_download_available attachmentId="
+            + message.attachmentId + " uri=" + uri);
+        refreshAttachmentRows();
+      }
+
+      @Override public void onQueued() {
+        attachmentStates.put(key, ATTACHMENT_DOWNLOADING);
+        Log.d("PingGoAttachmentTransfer", "stage=automatic_download_queued attachmentId="
+            + message.attachmentId);
+        refreshAttachmentRows();
+      }
+
+      @Override public void onError(String error) {
+        attachmentStates.put(key, ATTACHMENT_DOWNLOAD_REQUIRED);
+        attachmentDownloadedBytes.remove(key);
+        attachmentTotalBytes.remove(key);
+        Log.e("PingGoAttachmentTransfer", "stage=automatic_download_error attachmentId="
+            + message.attachmentId + " error=" + error);
+        refreshAttachmentRows();
+      }
+    });
   }
 
   /** Keeps every pin while removing the extra timeline row used as a has-more sentinel. */
@@ -816,6 +901,16 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     boolean changed = backgroundPreparation == null
         ? chatView.submitMessages(latestMessages)
         : chatView.submitPreparedMessages(backgroundPreparation);
+    if (!latestMessages.isEmpty()) {
+      MessageEntity newest = latestMessages.get(latestMessages.size() - 1);
+      Log.d("PingGoMessageTrace", "stage=chat_view_submitted"
+          + " chatId=" + newest.chatId
+          + " messageId=" + newest.messageId
+          + " clientMessageId=" + newest.clientMessageId
+          + " messageType=" + newest.messageType
+          + " changed=" + changed
+          + " renderedCount=" + latestMessages.size());
+    }
     profiler.contentSubmitted(latestMessages.size());
     long renderDurationMs = (System.nanoTime() - renderStarted) / 1_000_000L;
     Log.d(TESTING_TAG, "message_list source=render phase=" + phase + "_complete chatId="
@@ -2176,17 +2271,36 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void startAttachmentDownload(MessageEntity message) {
+    String key = attachmentKey(message);
+    long totalSize = message.attachmentSize == null ? 0L : Math.max(0L, message.attachmentSize);
+    attachmentStates.put(key, ATTACHMENT_DOWNLOADING);
+    attachmentDownloadedBytes.put(key, 0L);
+    attachmentTotalBytes.put(key, totalSize);
+    Log.d("PingGoAttachmentTransfer", "stage=download_requested chatId=" + chatId
+        + " messageId=" + message.messageId + " attachmentId=" + message.attachmentId
+        + " transferredBytes=0 totalSize=" + totalSize);
+    refreshAttachmentRows();
     repository.downloadAttachment(message, new ChatRepository.DownloadCallback() {
       @Override public void onAvailable(Uri uri) {
         attachmentStates.put(attachmentKey(message), ATTACHMENT_AVAILABLE);
+        Log.d("PingGoAttachmentTransfer", "stage=download_available attachmentId="
+            + message.attachmentId + " uri=" + uri);
         refreshAttachmentRows();
         openAttachment(message, uri);
       }
       @Override public void onQueued() {
         attachmentStates.put(attachmentKey(message), ATTACHMENT_DOWNLOADING);
+        Log.d("PingGoAttachmentTransfer", "stage=download_queued attachmentId="
+            + message.attachmentId);
         refreshAttachmentRows();
       }
       @Override public void onError(String error) {
+        attachmentStates.put(attachmentKey(message), ATTACHMENT_DOWNLOAD_REQUIRED);
+        attachmentDownloadedBytes.remove(attachmentKey(message));
+        attachmentTotalBytes.remove(attachmentKey(message));
+        Log.e("PingGoAttachmentTransfer", "stage=download_error attachmentId="
+            + message.attachmentId + " error=" + error);
+        refreshAttachmentRows();
         Toast.makeText(ChatActivity.this, error, Toast.LENGTH_SHORT).show();
       }
     });
@@ -2943,6 +3057,20 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     String n = v.trim();
     if (n.startsWith("<plus>")) n = n.substring(6);
     return n.startsWith("+") ? n.substring(1) : n;
+  }
+
+  @Override
+  public long attachmentDownloadedBytes(MessageEntity message) {
+    Long value = attachmentDownloadedBytes.get(attachmentKey(message));
+    return value == null ? 0L : value;
+  }
+
+  @Override
+  public long attachmentTotalBytes(MessageEntity message) {
+    Long value = attachmentTotalBytes.get(attachmentKey(message));
+    if (value != null && value > 0L) return value;
+    return message != null && message.attachmentSize != null
+        ? Math.max(0L, message.attachmentSize) : 0L;
   }
 
   @Override protected void onResume() {

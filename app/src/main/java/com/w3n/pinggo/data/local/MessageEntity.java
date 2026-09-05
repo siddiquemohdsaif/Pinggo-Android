@@ -35,6 +35,10 @@ public class MessageEntity {
     public String attachmentUrl;
     public String attachmentLocalUri;
     public Long attachmentSize;
+    public Integer attachmentWidth;
+    public Integer attachmentHeight;
+    public String attachmentOrientation;
+    public Long attachmentDurationMs;
     public String attachmentSha256;
     public Double latitude;
     public Double longitude;

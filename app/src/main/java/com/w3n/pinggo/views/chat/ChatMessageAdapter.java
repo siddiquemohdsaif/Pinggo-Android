@@ -493,8 +493,11 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       MessageRenderModel model = renderModel(message);
       if ("image".equals(model.mediaType) || "video".equals(model.mediaType)) {
         boolean video = "video".equals(model.mediaType);
-        Boolean portrait = MediaPreviewCache.prepareOrientation(
-            context, model.attachmentSource, video);
+        Boolean portrait = attachmentPortrait(message);
+        if (portrait == null) {
+          portrait = MediaPreviewCache.prepareOrientation(
+              context, model.attachmentSource, video);
+        }
         if (portrait != null) {
           Boolean previous = mediaPortraits.put(model.attachmentSource, portrait);
           if (previous == null || previous != portrait) {
@@ -630,6 +633,13 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   public void onBindItem(ComponentList.Item item, MessageEntity message, int position) {
     long bindStartedNanos = SystemClock.elapsedRealtimeNanos();
     MessageRenderModel model = renderModel(message);
+    Log.d("PingGoMessageTrace", "stage=row_rendered"
+        + " chatId=" + message.chatId
+        + " messageId=" + message.messageId
+        + " clientMessageId=" + message.clientMessageId
+        + " messageType=" + message.messageType
+        + " mediaType=" + model.mediaType
+        + " position=" + position);
     boolean own = model.own;
     float rowWidth = item.getScope().width();
     float rowHeight = item.getScope().height();
@@ -772,7 +782,9 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
               attachmentBottom - MEDIA_PADDING_PX * attachmentContentScale),
           source == null ? "" : source,
           "video".equals(message.messageType),
-          attachmentContentScale);
+          attachmentContentScale,
+          message.attachmentDurationMs == null ? 0L : message.attachmentDurationMs,
+          message.attachmentSize == null ? 0L : message.attachmentSize);
     } else {
       preview.hide();
     }
@@ -781,8 +793,17 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       String size = message.attachmentSize == null ? "" : formatSize(message.attachmentSize);
       String subtitle = fileType(message);
       if (!size.isEmpty()) subtitle += "  .  " + size;
+      int attachmentState = attachmentStateProvider.attachmentState(message);
+      boolean downloading = attachmentState == 2;
+      android.util.Log.d("PingGoAttachmentTransfer", "stage=file_row_bound chatId="
+          + message.chatId + " messageId=" + message.messageId
+          + " attachmentId=" + message.attachmentId + " downloading=" + downloading
+          + " transferredBytes=" + attachmentStateProvider.downloadedBytes(message)
+          + " totalSize=" + attachmentStateProvider.totalBytes(message));
       filePreview.bind(new RectF(left, attachmentTop, right, attachmentBottom),
-          message.attachmentName, subtitle);
+          message.attachmentName, subtitle, attachmentState,
+          attachmentStateProvider.downloadedBytes(message),
+          attachmentStateProvider.totalBytes(message));
     } else {
       filePreview.hide();
     }
@@ -1270,7 +1291,8 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         stableId(displayed + '\u0001' + formattedTime + '\u0001'
             + String.valueOf(message.repliedMessageId) + '\u0001'
             + String.valueOf(message.forwardedFrom) + '\u0001' + message.pinned
-            + '\u0001' + deleted + '\u0001' + own));
+            + '\u0001' + deleted + '\u0001' + own
+            + '\u0001' + sourceSignature));
     synchronized (renderModelCache) {
       renderModelCache.put(cacheKey, created);
     }
@@ -1296,6 +1318,10 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         + String.valueOf(message.messageType) + '\u0001'
         + String.valueOf(message.attachmentName) + '\u0001'
         + String.valueOf(message.attachmentSize) + '\u0001'
+        + String.valueOf(message.attachmentWidth) + '\u0001'
+        + String.valueOf(message.attachmentHeight) + '\u0001'
+        + String.valueOf(message.attachmentOrientation) + '\u0001'
+        + String.valueOf(message.attachmentDurationMs) + '\u0001'
         + String.valueOf(message.attachmentUrl) + '\u0001'
         + String.valueOf(message.attachmentLocalUri) + '\u0001'
         + String.valueOf(message.latitude) + '\u0001'
@@ -1303,7 +1329,9 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         + String.valueOf(message.forwardedFrom) + '\u0001'
         + message.pinned + '\u0001' + String.valueOf(message.pinnedBy) + '\u0001'
         + String.valueOf(message.deletedText) + '\u0001'
-        + attachmentState;
+        + attachmentState + '\u0001'
+        + attachmentStateProvider.downloadedBytes(message) + '\u0001'
+        + attachmentStateProvider.totalBytes(message);
   }
 
   private String displayMessage(MessageEntity message, int attachmentState) {
@@ -1508,6 +1536,17 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     return "image".equals(type) || "video".equals(type) || "audio".equals(type)
         || "file".equals(type)
         || "voice_call".equals(type) || "video_call".equals(type) ? type : null;
+  }
+
+  private static Boolean attachmentPortrait(MessageEntity message) {
+    if (message == null) return null;
+    if (message.attachmentWidth != null && message.attachmentWidth > 0
+        && message.attachmentHeight != null && message.attachmentHeight > 0) {
+      return message.attachmentHeight > message.attachmentWidth;
+    }
+    if ("portrait".equalsIgnoreCase(message.attachmentOrientation)) return true;
+    if ("landscape".equalsIgnoreCase(message.attachmentOrientation)) return false;
+    return null;
   }
 
   private Bitmap callIcon(MessageEntity message, boolean own) {

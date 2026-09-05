@@ -7,6 +7,8 @@ import com.w3n.pinggo.data.local.MessageEntity;
 final class ChatMessageAdapterConfig {
   interface AttachmentStateProvider {
     int attachmentState(MessageEntity message);
+    long downloadedBytes(MessageEntity message);
+    long totalBytes(MessageEntity message);
   }
 
   interface MediaMetricsListener {

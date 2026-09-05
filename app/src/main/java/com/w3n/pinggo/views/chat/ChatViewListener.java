@@ -33,4 +33,6 @@ public interface ChatViewListener {
 
   /** 0 = locally available, 1 = needs download, 2 = downloading. */
   int attachmentState(MessageEntity message);
+  long attachmentDownloadedBytes(MessageEntity message);
+  long attachmentTotalBytes(MessageEntity message);
 }

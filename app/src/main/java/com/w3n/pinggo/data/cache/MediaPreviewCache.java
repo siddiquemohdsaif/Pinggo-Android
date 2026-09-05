@@ -31,6 +31,7 @@ public final class MediaPreviewCache {
   public interface Callback<T> {
     void onSuccess(T value);
     void onError();
+    default void onProgress(long downloadedBytes, long totalBytes) { }
   }
 
   public static final class Thumbnail {
@@ -217,7 +218,7 @@ public final class MediaPreviewCache {
         synchronized (lock) {
           result = MEMORY.get(memoryKey);
           if (result == null) {
-            result = createOrReadThumbnail(app, source, video, width, height);
+            result = createOrReadThumbnail(app, source, video, width, height, callback);
             result.bitmap.prepareToDraw();
             MEMORY.put(memoryKey, result);
           }
@@ -259,7 +260,8 @@ public final class MediaPreviewCache {
   }
 
   private static Thumbnail createOrReadThumbnail(
-      Context context, String source, boolean video, int width, int height) throws Exception {
+      Context context, String source, boolean video, int width, int height,
+      Callback<?> callback) throws Exception {
     if (source == null || source.trim().isEmpty()) throw new IllegalArgumentException();
     File directory = cacheDirectory(context);
     String key = hash(source + "|first-frame-v2|" + video + "|" + width + "x" + height);
@@ -273,7 +275,8 @@ public final class MediaPreviewCache {
       }
     }
 
-    Uri local = resolveMediaBlocking(context, source, video ? TYPE_VIDEO : TYPE_IMAGE);
+    Uri local = resolveMediaBlocking(
+        context, source, video ? TYPE_VIDEO : TYPE_IMAGE, callback);
     Bitmap bitmap;
     String duration = "";
     boolean portrait;
@@ -342,6 +345,11 @@ public final class MediaPreviewCache {
 
   private static Uri resolveMediaBlocking(
       Context context, String source, String mediaType) throws Exception {
+    return resolveMediaBlocking(context, source, mediaType, null);
+  }
+
+  private static Uri resolveMediaBlocking(
+      Context context, String source, String mediaType, Callback<?> callback) throws Exception {
     if (source == null || source.trim().isEmpty()) throw new IllegalArgumentException();
     Uri uri = Uri.parse(source);
     String scheme = uri.getScheme();
@@ -365,11 +373,31 @@ public final class MediaPreviewCache {
         connection.setConnectTimeout(12_000);
         connection.setReadTimeout(30_000);
         connection.setInstanceFollowRedirects(true);
+        long totalBytes = connection.getContentLengthLong();
         try (InputStream input = connection.getInputStream();
              FileOutputStream output = new FileOutputStream(temporary)) {
           byte[] buffer = new byte[32 * 1024];
           int read;
-          while ((read = input.read(buffer)) >= 0) output.write(buffer, 0, read);
+          long downloadedBytes = 0L;
+          long lastReportedBytes = 0L;
+          long lastReportedAt = android.os.SystemClock.elapsedRealtime();
+          while ((read = input.read(buffer)) >= 0) {
+            output.write(buffer, 0, read);
+            downloadedBytes += read;
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (callback != null && ((downloadedBytes - lastReportedBytes >= 64L * 1024L
+                && now - lastReportedAt >= 80L)
+                || (totalBytes > 0L && downloadedBytes >= totalBytes))) {
+              lastReportedBytes = downloadedBytes;
+              lastReportedAt = now;
+              long deliveredBytes = downloadedBytes;
+              MAIN.post(() -> callback.onProgress(deliveredBytes, totalBytes));
+            }
+          }
+          if (callback != null && downloadedBytes != lastReportedBytes) {
+            long deliveredBytes = downloadedBytes;
+            MAIN.post(() -> callback.onProgress(deliveredBytes, totalBytes));
+          }
         } finally {
           connection.disconnect();
         }

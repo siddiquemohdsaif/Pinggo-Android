@@ -9,6 +9,7 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.view.MotionEvent;
 import android.widget.Toast;
 import com.ogfa.nativeviews.component.Component;
@@ -38,11 +39,19 @@ final class MediaPreviewComponent implements Component {
   private int generation;
   private int loadedWidth;
   private int loadedHeight;
+  private long metadataDurationMs;
+  private long metadataTotalBytes;
+  private long downloadedBytes;
+  private long totalBytes;
   private float spinnerAngle;
   private float contentScale = 1f;
   private final Runnable animateSpinner = new Runnable() {
     @Override public void run() {
       if (!loading || released || !visible) return;
+      if (totalBytes > 0L) {
+        invalidate();
+        return;
+      }
       spinnerAngle = (spinnerAngle + 12f) % 360f;
       invalidate();
       MAIN.postDelayed(this, 16L);
@@ -57,30 +66,44 @@ final class MediaPreviewComponent implements Component {
     this.orientationListener = orientationListener;
   }
 
-  MediaPreviewComponent bind(RectF region, String value, boolean isVideo, float scale) {
+  MediaPreviewComponent bind(
+      RectF region, String value, boolean isVideo, float scale, long suppliedDurationMs,
+      long suppliedTotalBytes) {
     bounds.set(region);
     contentScale = Math.max(.1f, scale);
     visible = true;
     int targetWidth = Math.max(1, Math.round(region.width()));
     int targetHeight = Math.max(1, Math.round(region.height()));
     if (!source.equals(String.valueOf(value)) || video != isVideo
-        || loadedWidth != targetWidth || loadedHeight != targetHeight) {
+        || loadedWidth != targetWidth || loadedHeight != targetHeight
+        || metadataDurationMs != suppliedDurationMs
+        || metadataTotalBytes != suppliedTotalBytes) {
       source = String.valueOf(value);
       video = isVideo;
       loadedWidth = targetWidth;
       loadedHeight = targetHeight;
+      metadataDurationMs = suppliedDurationMs;
+      metadataTotalBytes = Math.max(0L, suppliedTotalBytes);
+      downloadedBytes = 0L;
+      totalBytes = metadataTotalBytes;
       bitmap = null;
-      duration = "";
+      duration = isVideo ? formatDuration(suppliedDurationMs) : "";
       MAIN.removeCallbacks(animateSpinner);
       int request = ++generation;
       MediaPreviewCache.Thumbnail cached = MediaPreviewCache.memoryThumbnail(
           source, video, targetWidth, targetHeight);
       if (cached != null) {
+        Log.d("PingGoMessageTrace", "stage=media_thumbnail_ready source=memory"
+            + " mediaType=" + (video ? "video" : "image")
+            + " sourceKey=" + Integer.toHexString(source.hashCode()));
         bitmap = cached.bitmap;
-        duration = cached.duration;
+        if (!cached.duration.isEmpty()) duration = cached.duration;
         loading = false;
         notifyOrientation(cached);
       } else if (!MediaPreviewCache.isDecodingPaused()) {
+        Log.d("PingGoMessageTrace", "stage=media_thumbnail_loading"
+            + " mediaType=" + (video ? "video" : "image")
+            + " sourceKey=" + Integer.toHexString(source.hashCode()));
         loading = true;
         MAIN.post(animateSpinner);
         MediaPreviewCache.loadThumbnail(context, source, video, targetWidth, targetHeight,
@@ -88,10 +111,20 @@ final class MediaPreviewComponent implements Component {
               @Override public void onSuccess(MediaPreviewCache.Thumbnail result) {
                 if (request != generation || released) return;
                 bitmap = result.bitmap;
-                duration = result.duration;
+                if (!result.duration.isEmpty()) duration = result.duration;
                 loading = false;
+                Log.d("PingGoMessageTrace", "stage=media_thumbnail_ready source=async"
+                    + " mediaType=" + (video ? "video" : "image")
+                    + " sourceKey=" + Integer.toHexString(source.hashCode()));
                 MAIN.removeCallbacks(animateSpinner);
                 notifyOrientation(result);
+                invalidate();
+              }
+
+              @Override public void onProgress(long downloaded, long total) {
+                if (request != generation || released) return;
+                downloadedBytes = Math.max(0L, downloaded);
+                totalBytes = total > 0L ? total : metadataTotalBytes;
                 invalidate();
               }
 
@@ -113,12 +146,19 @@ final class MediaPreviewComponent implements Component {
           source, video, targetWidth, targetHeight);
       if (warmed != null) {
         bitmap = warmed.bitmap;
-        duration = warmed.duration;
+        if (!warmed.duration.isEmpty()) duration = warmed.duration;
         notifyOrientation(warmed);
       }
     }
     invalidate();
     return this;
+  }
+
+  private static String formatDuration(long durationMs) {
+    if (durationMs <= 0L) return "";
+    long totalSeconds = durationMs / 1000L;
+    return String.format(java.util.Locale.US, "%d:%02d", totalSeconds / 60L,
+        totalSeconds % 60L);
   }
 
   MediaPreviewComponent hide() {
@@ -127,6 +167,10 @@ final class MediaPreviewComponent implements Component {
     source = "";
     loadedWidth = 0;
     loadedHeight = 0;
+    metadataDurationMs = 0L;
+    metadataTotalBytes = 0L;
+    downloadedBytes = 0L;
+    totalBytes = 0L;
     loading = false;
     MAIN.removeCallbacks(animateSpinner);
     bitmap = null;
@@ -164,6 +208,7 @@ final class MediaPreviewComponent implements Component {
       canvas.restore();
     }
     if (loading) drawSpinner(canvas);
+    else if (bitmap == null) drawDownloadRequired(canvas);
     if (video && bitmap != null) {
       paint.setColor(0xB3000000);
       canvas.drawCircle(bounds.centerX(), bounds.centerY(), px(74.25f) * contentScale, paint);
@@ -191,11 +236,65 @@ final class MediaPreviewComponent implements Component {
     paint.setStyle(Paint.Style.STROKE);
     paint.setStrokeWidth(px(8.25f) * contentScale);
     paint.setStrokeCap(Paint.Cap.ROUND);
-    paint.setColor(0xFF019CC4);
     float radius = px(44f) * contentScale;
-    canvas.drawArc(new RectF(bounds.centerX() - radius, bounds.centerY() - radius,
-        bounds.centerX() + radius, bounds.centerY() + radius), spinnerAngle, 275, false, paint);
+    RectF ring = new RectF(bounds.centerX() - radius, bounds.centerY() - radius,
+        bounds.centerX() + radius, bounds.centerY() + radius);
+    boolean determinate = totalBytes > 0L;
+    if (determinate) {
+      paint.setColor(0x40019CC4);
+      canvas.drawArc(ring, 0f, 360f, false, paint);
+      paint.setColor(0xFF019CC4);
+      float progress = Math.min(1f, downloadedBytes / (float) totalBytes);
+      canvas.drawArc(ring, -90f, 360f * progress, false, paint);
+    } else {
+      paint.setColor(0xFF019CC4);
+      canvas.drawArc(ring, spinnerAngle, 275f, false, paint);
+    }
     paint.setStyle(Paint.Style.FILL);
+    String progressText = formatSize(downloadedBytes) + " / "
+        + (totalBytes > 0L ? formatSize(totalBytes) : "unknown");
+    paint.setTextSize(px(25f) * contentScale);
+    paint.setColor(0xFF334155);
+    paint.setTextAlign(Paint.Align.CENTER);
+    canvas.drawText(progressText, bounds.centerX(),
+        bounds.centerY() + radius + px(42f) * contentScale, paint);
+    paint.setTextAlign(Paint.Align.LEFT);
+  }
+
+  private void drawDownloadRequired(Canvas canvas) {
+    float scale = contentScale;
+    float circleRadius = px(48f) * scale;
+    float centerX = bounds.centerX();
+    float centerY = bounds.centerY() - px(16f) * scale;
+    paint.setColor(0xE6FFFFFF);
+    paint.setStyle(Paint.Style.FILL);
+    canvas.drawCircle(centerX, centerY, circleRadius, paint);
+    paint.setColor(0xFF019CC4);
+    paint.setStyle(Paint.Style.STROKE);
+    paint.setStrokeWidth(px(7f) * scale);
+    paint.setStrokeCap(Paint.Cap.ROUND);
+    float shaftTop = centerY - px(23f) * scale;
+    float shaftBottom = centerY + px(13f) * scale;
+    canvas.drawLine(centerX, shaftTop, centerX, shaftBottom, paint);
+    canvas.drawLine(centerX, shaftBottom, centerX - px(18f) * scale,
+        centerY - px(4f) * scale, paint);
+    canvas.drawLine(centerX, shaftBottom, centerX + px(18f) * scale,
+        centerY - px(4f) * scale, paint);
+    paint.setStyle(Paint.Style.FILL);
+    String size = metadataTotalBytes > 0L ? formatSize(metadataTotalBytes) : "File";
+    paint.setTextSize(px(25f) * scale);
+    paint.setColor(0xFF334155);
+    paint.setTextAlign(Paint.Align.CENTER);
+    canvas.drawText(size, centerX, centerY + circleRadius + px(38f) * scale, paint);
+    paint.setTextAlign(Paint.Align.LEFT);
+  }
+
+  private static String formatSize(long bytes) {
+    if (bytes < 1024L) return bytes + " B";
+    if (bytes < 1024L * 1024L) {
+      return String.format(java.util.Locale.US, "%.1f KB", bytes / 1024d);
+    }
+    return String.format(java.util.Locale.US, "%.1f MB", bytes / (1024d * 1024d));
   }
 
   private static Rect centerCrop(int width, int height, RectF destination) {

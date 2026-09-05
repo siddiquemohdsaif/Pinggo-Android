@@ -26,6 +26,9 @@ final class FilePreviewComponent implements Component {
   private ComponentHost host;
   private String title = "";
   private String subtitle = "";
+  private int attachmentState;
+  private long downloadedBytes;
+  private long totalBytes;
   private boolean visible;
   private boolean released;
 
@@ -35,10 +38,15 @@ final class FilePreviewComponent implements Component {
     this.typeface = typeface;
   }
 
-  FilePreviewComponent bind(RectF region, String fileTitle, String fileSubtitle) {
+  FilePreviewComponent bind(
+      RectF region, String fileTitle, String fileSubtitle, int state,
+      long currentBytes, long fileBytes) {
     bounds.set(region);
     title = fileTitle == null || fileTitle.trim().isEmpty() ? "File" : fileTitle.trim();
     subtitle = fileSubtitle == null ? "" : fileSubtitle;
+    attachmentState = state;
+    downloadedBytes = Math.max(0L, currentBytes);
+    totalBytes = Math.max(0L, fileBytes);
     visible = true;
     invalidate();
     return this;
@@ -96,10 +104,68 @@ final class FilePreviewComponent implements Component {
     paint.setTypeface(typeface);
     paint.setColor(SUBTITLE_COLOR);
     paint.setTextSize(30f * scale);
-    String fittedSubtitle = ellipsize(subtitle, paint, Math.max(1f, textRight - textLeft));
+    boolean downloading = attachmentState == 2;
+    boolean downloadRequired = attachmentState == 1;
+    String shownSubtitle = downloading
+        ? formatSize(downloadedBytes) + " / "
+            + (totalBytes > 0L ? formatSize(totalBytes) : "unknown")
+        : downloadRequired
+            ? (totalBytes > 0L ? formatSize(totalBytes) : "File")
+        : subtitle;
     float subtitleTop = inner.top + 19f * scale + titleLayout.getHeight()
         + TITLE_SUBTITLE_GAP * scale;
-    drawFromTop(canvas, fittedSubtitle, textLeft, subtitleTop, paint);
+    float subtitleLeft = textLeft;
+    if (downloading) {
+      float progressRadius = 11f * scale;
+      float progressCenterX = textLeft + progressRadius;
+      Paint.FontMetrics subtitleMetrics = paint.getFontMetrics();
+      float progressCenterY = subtitleTop
+          + (subtitleMetrics.descent - subtitleMetrics.ascent) / 2f;
+      RectF progressRing = new RectF(
+          progressCenterX - progressRadius, progressCenterY - progressRadius,
+          progressCenterX + progressRadius, progressCenterY + progressRadius);
+      paint.setStyle(Paint.Style.STROKE);
+      paint.setStrokeCap(Paint.Cap.ROUND);
+      paint.setStrokeWidth(4f * scale);
+      paint.setColor(0xFFD7E5EA);
+      canvas.drawArc(progressRing, 0f, 360f, false, paint);
+      paint.setColor(0xFF019CC4);
+      if (totalBytes > 0L) {
+        float fraction = Math.min(1f, downloadedBytes / (float) totalBytes);
+        canvas.drawArc(progressRing, -90f, 360f * fraction, false, paint);
+      } else {
+        canvas.drawArc(progressRing, -90f, 270f, false, paint);
+      }
+      paint.setStyle(Paint.Style.FILL);
+      subtitleLeft += 34f * scale;
+    } else if (downloadRequired) {
+      float iconSize = 22f * scale;
+      float centerX = textLeft + iconSize / 2f;
+      Paint.FontMetrics subtitleMetrics = paint.getFontMetrics();
+      float centerY = subtitleTop + (subtitleMetrics.descent - subtitleMetrics.ascent) / 2f;
+      drawDownloadIcon(canvas, centerX, centerY, iconSize, scale);
+      subtitleLeft += 34f * scale;
+    }
+    paint.setColor(SUBTITLE_COLOR);
+    String fittedSubtitle = ellipsize(
+        shownSubtitle, paint, Math.max(1f, textRight - subtitleLeft));
+    drawFromTop(canvas, fittedSubtitle, subtitleLeft, subtitleTop, paint);
+  }
+
+  private void drawDownloadIcon(
+      Canvas canvas, float centerX, float centerY, float size, float scale) {
+    paint.setColor(0xFF019CC4);
+    paint.setStyle(Paint.Style.STROKE);
+    paint.setStrokeWidth(3.5f * scale);
+    paint.setStrokeCap(Paint.Cap.ROUND);
+    float top = centerY - size * .5f;
+    float bottom = centerY + size * .15f;
+    canvas.drawLine(centerX, top, centerX, bottom, paint);
+    canvas.drawLine(centerX, bottom, centerX - size * .3f, centerY - size * .12f, paint);
+    canvas.drawLine(centerX, bottom, centerX + size * .3f, centerY - size * .12f, paint);
+    canvas.drawLine(centerX - size * .38f, centerY + size * .45f,
+        centerX + size * .38f, centerY + size * .45f, paint);
+    paint.setStyle(Paint.Style.FILL);
   }
 
   private static void drawFromTop(
@@ -115,6 +181,14 @@ final class FilePreviewComponent implements Component {
     int end = value.length();
     while (end > 0 && paint.measureText(value, 0, end) + suffixWidth > maximumWidth) end--;
     return value.substring(0, end).trim() + suffix;
+  }
+
+  private static String formatSize(long bytes) {
+    if (bytes < 1024L) return bytes + " B";
+    if (bytes < 1024L * 1024L) {
+      return String.format(java.util.Locale.US, "%.1f KB", bytes / 1024d);
+    }
+    return String.format(java.util.Locale.US, "%.1f MB", bytes / (1024d * 1024d));
   }
 
   private void invalidate() { if (host != null) host.invalidateComponent(); }

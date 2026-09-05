@@ -24,6 +24,7 @@ import okhttp3.WebSocketListener;
 
 public class ChatWebSocketClient {
     private static final String TAG = "PingGoChatSocket";
+    private static final String MESSAGE_TRACE_TAG = "PingGoMessageTrace";
     public interface Listener {
         void onConnected();
 
@@ -84,6 +85,24 @@ public class ChatWebSocketClient {
                     return;
                 }
                 String type = JsonParserUtil.getString(event, "type");
+                if ("new_message".equals(type)) {
+                    JsonObject message = event.has("message") && event.get("message").isJsonObject()
+                            ? event.getAsJsonObject("message") : new JsonObject();
+                    JsonObject attachment = message.has("attachment")
+                            && message.get("attachment").isJsonObject()
+                            ? message.getAsJsonObject("attachment") : new JsonObject();
+                    Log.d(MESSAGE_TRACE_TAG, "stage=websocket_arrived"
+                            + " chatId=" + JsonParserUtil.getString(message, "chatId")
+                            + " messageId=" + JsonParserUtil.getString(message, "id")
+                            + " clientMessageId=" + JsonParserUtil.getString(message, "clientMessageId")
+                            + " messageType=" + JsonParserUtil.getString(message, "messageType")
+                            + " hasAttachment=" + message.has("attachment")
+                            + " width=" + JsonParserUtil.getLong(attachment, "width")
+                            + " height=" + JsonParserUtil.getLong(attachment, "height")
+                            + " orientation=" + JsonParserUtil.getString(attachment, "orientation")
+                            + " size=" + JsonParserUtil.getLong(attachment, "size")
+                            + " durationMs=" + JsonParserUtil.getLong(attachment, "durationMs"));
+                }
                 if (type.startsWith("call_") || "ice_candidate".equals(type)
                         || "auth_success".equals(type)) {
                     Log.d(TAG, "receive type=" + type + " callId="

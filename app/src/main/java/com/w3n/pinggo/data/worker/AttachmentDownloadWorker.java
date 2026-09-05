@@ -6,6 +6,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.work.Data;
@@ -47,6 +48,8 @@ public class AttachmentDownloadWorker extends Worker {
         String id = getInputData().getString(KEY_TRANSFER_ID);
         TransferEntity transfer = id == null ? null : transfers.find(id);
         if (transfer == null || transfer.remoteUrl == null) return Result.failure();
+        Log.d("PingGoAttachmentTransfer", "stage=worker_started transferId=" + id
+                + " attachmentId=" + transfer.attachmentId + " totalSize=" + transfer.totalSize);
         Uri destination = null;
         try {
             Uri existing = findExisting(transfer);
@@ -74,6 +77,9 @@ public class AttachmentDownloadWorker extends Worker {
                         output.write(buffer, 0, read);
                         digest.update(buffer, 0, read);
                         transfers.progress(id, total, "downloading", System.currentTimeMillis());
+                        Log.d("PingGoAttachmentTransfer", "stage=worker_progress transferId=" + id
+                                + " attachmentId=" + transfer.attachmentId
+                                + " transferredBytes=" + total + " totalSize=" + transfer.totalSize);
                         setProgressAsync(new Data.Builder().putLong("bytes", total)
                                 .putLong("total", transfer.totalSize).build());
                     }
@@ -88,8 +94,12 @@ public class AttachmentDownloadWorker extends Worker {
             transfers.completed(id, transfer.attachmentId, transfer.remoteUrl,
                     destination.toString(), System.currentTimeMillis());
             messages.updateAttachmentLocalUri(transfer.attachmentId, destination.toString());
+            Log.d("PingGoAttachmentTransfer", "stage=worker_completed transferId=" + id
+                    + " attachmentId=" + transfer.attachmentId);
             return Result.success();
         } catch (Exception error) {
+            Log.e("PingGoAttachmentTransfer", "stage=worker_error transferId=" + id
+                    + " attachmentId=" + transfer.attachmentId, error);
             if (destination != null) deleteDestination(destination);
             if (getRunAttemptCount() < 3) {
                 transfers.failed(id, "retrying", error.getMessage(), System.currentTimeMillis());
@@ -101,9 +111,7 @@ public class AttachmentDownloadWorker extends Worker {
     }
 
     private Uri createDestination(TransferEntity transfer) throws IOException {
-        String folder = "image".equals(transfer.kind) ? "Images"
-                : "video".equals(transfer.kind) ? "Videos"
-                : "audio".equals(transfer.kind) ? "Audio" : "Files";
+        String folder = destinationFolder(transfer);
         String safeName = (transfer.attachmentId + "-" + transfer.fileName)
                 .replaceAll("[^a-zA-Z0-9._-]", "_");
         File directory = new File(Environment.getExternalStorageDirectory(),
@@ -113,9 +121,7 @@ public class AttachmentDownloadWorker extends Worker {
     }
 
     private Uri findExisting(TransferEntity transfer) {
-        String folder = "image".equals(transfer.kind) ? "Images"
-                : "video".equals(transfer.kind) ? "Videos"
-                : "audio".equals(transfer.kind) ? "Audio" : "Files";
+        String folder = destinationFolder(transfer);
         String safeName = (transfer.attachmentId + "-" + transfer.fileName)
                 .replaceAll("[^a-zA-Z0-9._-]", "_");
         File file = new File(Environment.getExternalStorageDirectory(),
@@ -124,6 +130,36 @@ public class AttachmentDownloadWorker extends Worker {
         return file.isFile() && (transfer.totalSize <= 0 || file.length() == transfer.totalSize)
                 && (transfer.fileHash == null || transfer.fileHash.isEmpty()
                     || transfer.fileHash.equals(hashUri(uri))) ? uri : null;
+    }
+
+    private static String destinationFolder(TransferEntity transfer) {
+        String mime = transfer.mimeType == null
+                ? "" : transfer.mimeType.trim().toLowerCase(java.util.Locale.US);
+        String name = transfer.fileName == null
+                ? "" : transfer.fileName.trim().toLowerCase(java.util.Locale.US);
+        if (mime.startsWith("video/") || hasExtension(name,
+                ".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi", ".3gp")) {
+            return "Videos";
+        }
+        if (mime.startsWith("image/") || hasExtension(name,
+                ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".heif")) {
+            return "Images";
+        }
+        if (mime.startsWith("audio/") || hasExtension(name,
+                ".mp3", ".m4a", ".aac", ".wav", ".ogg", ".opus", ".flac")) {
+            return "Audio";
+        }
+        if ("video".equals(transfer.kind)) return "Videos";
+        if ("image".equals(transfer.kind)) return "Images";
+        if ("audio".equals(transfer.kind)) return "Audio";
+        return "Files";
+    }
+
+    private static boolean hasExtension(String name, String... extensions) {
+        for (String extension : extensions) {
+            if (name.endsWith(extension)) return true;
+        }
+        return false;
     }
 
     private OutputStream openOutput(Uri uri) throws IOException {

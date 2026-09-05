@@ -4,6 +4,8 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.database.Cursor;
+import android.graphics.BitmapFactory;
+import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
@@ -675,7 +677,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     chatId, senderId,
                     normalizedReceiverId, caption, repliedMessageId, System.currentTimeMillis(),
                     null, null, MessageStatus.SENDING, kind, null, kind, name, mime, null,
-                    uri.toString(), size < 0 ? null : size, null, null, null);
+                     uri.toString(), size < 0 ? null : size, null, null, null);
+            applyAttachmentMediaMetadata(localMessage, uri, kind);
             messageDao.upsert(localMessage);
             updateChatSummary(localMessage);
         } else {
@@ -717,6 +720,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     public void sendCompletedBackgroundAttachment(TransferEntity transfer, JsonObject attachment) {
         connect();
+        addAttachmentMediaMetadata(attachment, Uri.parse(transfer.sourceUri), transfer.kind);
         sendExistingMessage(transfer.clientMessageId, transfer.chatId, transfer.senderId,
                 transfer.receiverId, transfer.caption, transfer.repliedMessageId,
                 transfer.kind, attachment, null);
@@ -753,6 +757,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     caption, repliedMessageId, System.currentTimeMillis(), null, null,
                     MessageStatus.SENDING, kind, null, kind, name, mime, null, uri.toString(),
                     size < 0 ? null : size, null, null, null);
+            applyAttachmentMediaMetadata(localMessage, uri, kind);
             ioExecutor.execute(() -> {
                 messageDao.upsert(localMessage);
                 updateChatSummary(localMessage);
@@ -785,6 +790,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     callback.onError("Attachment upload failed.");
                     return;
                 }
+                addAttachmentMediaMetadata(attachment, uri, kind);
                 ioExecutor.execute(() -> messageDao.applyAttachmentUpload(
                         clientMessageId,
                         JsonParserUtil.getString(attachment, "id"),
@@ -861,6 +867,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                                 "Attachment assembly failed (HTTP " + response.code() + ").", null);
                         return;
                     }
+                    addAttachmentMediaMetadata(attachment, uri, kind);
                     finishAttachmentUpload(clientMessageId, chatId, senderId, receiverId,
                             caption, repliedMessageId, kind, attachment, callback);
                 }
@@ -991,6 +998,20 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         event.addProperty("text", text);
         event.addProperty("messageType", messageType);
         if (attachment != null) event.addProperty("attachmentId", JsonParserUtil.getString(attachment, "id"));
+        if (attachment != null && attachment.has("width")) {
+            event.addProperty("attachmentWidth", JsonParserUtil.getLong(attachment, "width"));
+        }
+        if (attachment != null && attachment.has("height")) {
+            event.addProperty("attachmentHeight", JsonParserUtil.getLong(attachment, "height"));
+        }
+        if (attachment != null && attachment.has("orientation")) {
+            event.addProperty("attachmentOrientation",
+                    JsonParserUtil.getString(attachment, "orientation"));
+        }
+        if (attachment != null && attachment.has("durationMs")) {
+            event.addProperty("attachmentDurationMs",
+                    JsonParserUtil.getLong(attachment, "durationMs"));
+        }
         if (location != null) event.add("location", location);
         if (repliedMessageId != null && !repliedMessageId.trim().isEmpty()) {
             event.addProperty("repliedMessageId", repliedMessageId);
@@ -1139,6 +1160,77 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         } catch (RuntimeException error) {
         }
         return -1;
+    }
+
+    /** Adds lightweight display metadata without decoding the full media payload. */
+    private void addAttachmentMediaMetadata(JsonObject attachment, Uri uri, String kind) {
+        if (attachment == null || uri == null || kind == null) return;
+        int width = 0;
+        int height = 0;
+        long durationMs = 0L;
+        try {
+            if ("video".equals(kind)) {
+                MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+                try {
+                    retriever.setDataSource(appContext, uri);
+                    width = parsePositiveInt(retriever.extractMetadata(
+                            MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH));
+                    height = parsePositiveInt(retriever.extractMetadata(
+                            MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT));
+                    int rotation = parsePositiveInt(retriever.extractMetadata(
+                            MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION));
+                    if (rotation == 90 || rotation == 270) {
+                        int swap = width;
+                        width = height;
+                        height = swap;
+                    }
+                    durationMs = parsePositiveLong(retriever.extractMetadata(
+                            MediaMetadataRetriever.METADATA_KEY_DURATION));
+                } finally {
+                    retriever.release();
+                }
+            } else if ("image".equals(kind)) {
+                BitmapFactory.Options bounds = new BitmapFactory.Options();
+                bounds.inJustDecodeBounds = true;
+                try (InputStream input = appContext.getContentResolver().openInputStream(uri)) {
+                    BitmapFactory.decodeStream(input, null, bounds);
+                }
+                width = Math.max(0, bounds.outWidth);
+                height = Math.max(0, bounds.outHeight);
+            }
+        } catch (IOException | RuntimeException ignored) {
+        }
+        if (width > 0 && height > 0) {
+            attachment.addProperty("width", width);
+            attachment.addProperty("height", height);
+            attachment.addProperty("orientation", height > width ? "portrait" : "landscape");
+        }
+        if ("video".equals(kind) && durationMs > 0L) {
+            attachment.addProperty("durationMs", durationMs);
+        }
+    }
+
+    private void applyAttachmentMediaMetadata(MessageEntity message, Uri uri, String kind) {
+        JsonObject metadata = new JsonObject();
+        addAttachmentMediaMetadata(metadata, uri, kind);
+        if (metadata.has("width")) {
+            message.attachmentWidth = (int) JsonParserUtil.getLong(metadata, "width");
+            message.attachmentHeight = (int) JsonParserUtil.getLong(metadata, "height");
+            message.attachmentOrientation = JsonParserUtil.getString(metadata, "orientation");
+        }
+        if (metadata.has("durationMs")) {
+            message.attachmentDurationMs = JsonParserUtil.getLong(metadata, "durationMs");
+        }
+    }
+
+    private static int parsePositiveInt(String value) {
+        try { return Math.max(0, Integer.parseInt(value)); }
+        catch (NumberFormatException ignored) { return 0; }
+    }
+
+    private static long parsePositiveLong(String value) {
+        try { return Math.max(0L, Long.parseLong(value)); }
+        catch (NumberFormatException ignored) { return 0L; }
     }
 
     private boolean canReadAttachment(Uri uri) {
@@ -2187,6 +2279,18 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         if (message == null) {
             return;
         }
+        Log.d("PingGoMessageTrace", "stage=repository_parsed"
+                + " chatId=" + message.chatId
+                + " messageId=" + message.messageId
+                + " clientMessageId=" + message.clientMessageId
+                + " messageType=" + message.messageType
+                + " width=" + message.attachmentWidth
+                + " height=" + message.attachmentHeight
+                + " orientation=" + message.attachmentOrientation
+                + " size=" + message.attachmentSize
+                + " durationMs=" + message.attachmentDurationMs
+                + " source=" + (message.attachmentLocalUri != null ? "local"
+                : message.attachmentUrl != null ? "remote" : "none"));
         ioExecutor.execute(() -> {
             boolean isNewMessage = !messageDao.existsByMessageId(message.messageId);
             ChatEntity chatBeforeMessage = chatDao.findByChatId(message.chatId);
@@ -2195,6 +2299,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     && !locallyReadChats.contains(message.chatId);
             preserveLocalAttachmentUri(message);
             messageDao.upsert(message);
+            Log.d("PingGoMessageTrace", "stage=room_upsert_complete"
+                    + " chatId=" + message.chatId
+                    + " messageId=" + message.messageId
+                    + " clientMessageId=" + message.clientMessageId
+                    + " messageType=" + message.messageType);
             Log.d(TESTING_TAG, "message_cache source=socket phase=room_upsert chatId="
                     + message.chatId + " messageId=" + message.messageId
                     + " sentTime=" + message.sentTime);
@@ -2495,6 +2604,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         );
         entity.attachmentSha256 = attachment == null ? null
                 : JsonParserUtil.getString(attachment, "sha256");
+        entity.attachmentWidth = nullablePositiveInt(attachment, "width");
+        entity.attachmentHeight = nullablePositiveInt(attachment, "height");
+        entity.attachmentOrientation = attachment == null ? null
+                : JsonParserUtil.getString(attachment, "orientation");
+        entity.attachmentDurationMs = getNullablePositiveLong(attachment, "durationMs");
         JsonElement pinnedElement = message.get("pinned");
         List<String> pinnedUsers = pinnedUsers(pinnedElement);
         entity.pinned = !pinnedUsers.isEmpty()
@@ -2510,6 +2624,17 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 ? JsonParserUtil.getString(message, "deletedText") : null;
         entity.invisible = invisible;
         return entity;
+    }
+
+    private static Integer nullablePositiveInt(JsonObject object, String field) {
+        Long value = getNullablePositiveLong(object, field);
+        return value == null || value > Integer.MAX_VALUE ? null : value.intValue();
+    }
+
+    private static Long getNullablePositiveLong(JsonObject object, String field) {
+        if (object == null || !object.has(field) || object.get(field).isJsonNull()) return null;
+        long value = JsonParserUtil.getLong(object, field);
+        return value > 0L ? value : null;
     }
 
     private boolean isInvisibleToCurrentUser(JsonObject message) {

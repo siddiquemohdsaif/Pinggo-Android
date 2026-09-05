@@ -223,7 +223,17 @@ public final class ChatView extends View {
                 callVideoIncomingIcon,
                 callVideoOutgoingIcon,
                 callVideoMissedIcon,
-                listener::attachmentState,
+                new ChatMessageAdapterConfig.AttachmentStateProvider() {
+                  @Override public int attachmentState(MessageEntity message) {
+                    return listener.attachmentState(message);
+                  }
+                  @Override public long downloadedBytes(MessageEntity message) {
+                    return listener.attachmentDownloadedBytes(message);
+                  }
+                  @Override public long totalBytes(MessageEntity message) {
+                    return listener.attachmentTotalBytes(message);
+                  }
+                },
                 this::onMediaMetricsChanged,
                 listener::onAudioPlaybackToggle,
                 this::scrollToMessageId,
