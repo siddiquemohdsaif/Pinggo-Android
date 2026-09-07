@@ -6,24 +6,59 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import androidx.core.app.RemoteInput;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import java.util.concurrent.atomic.AtomicBoolean;
+import com.google.gson.JsonObject;
 
 public class NotificationActionReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
         Context appContext = context.getApplicationContext();
-        if (!LoginStateManager.getInstance().isLoggedIn(appContext)) return;
+        String action = intent.getAction();
+        String callId = value(intent, PingGoNotificationManager.EXTRA_CALL_ID);
+        Log.i("PingGoCallTrace", "notification_action action=" + action
+                + " callId=" + callId);
+        if (!LoginStateManager.getInstance().isLoggedIn(appContext)) {
+            Log.w("PingGoCallTrace", "notification_action_ignored_not_logged_in callId=" + callId);
+            return;
+        }
         String chatId = value(intent, PingGoNotificationManager.EXTRA_CHAT_ID);
         String messageId = value(intent, PingGoNotificationManager.EXTRA_MESSAGE_ID);
         String senderId = value(intent, PingGoNotificationManager.EXTRA_SENDER_ID);
         if (chatId.isEmpty()) return;
 
         ChatRepository repository = ChatRepository.getInstance(appContext);
-        String action = intent.getAction();
+        if (PingGoNotificationManager.ACTION_CALL_DECLINE.equals(action)) {
+            PingGoNotificationManager.rememberCallAction(appContext, callId, action);
+            JsonObject event = new JsonObject();
+            event.addProperty("type", "call_reject");
+            event.addProperty("callId", callId);
+            event.addProperty("receiverId", senderId);
+            repository.connect();
+            repository.sendCallEvent(event);
+            PingGoNotificationManager.clearCallNotification(appContext, callId);
+            return;
+        }
+        if (PingGoNotificationManager.ACTION_CALL_ANSWER.equals(action)) {
+            PingGoNotificationManager.rememberCallAction(appContext, callId, action);
+            Log.i("PingGoCallTrace", "answer_saved_connecting_socket callId=" + callId
+                    + " chatId=" + chatId);
+            repository.connect();
+            PingGoNotificationManager.clearCallNotification(appContext,
+                    callId);
+            return;
+        }
+        if (PingGoNotificationManager.ACTION_CALL_OPEN.equals(action)) {
+            PingGoNotificationManager.rememberCallAction(appContext, callId, action);
+            Log.i("PingGoCallTrace", "open_saved_connecting_socket callId=" + callId
+                    + " chatId=" + chatId);
+            repository.connect();
+            return;
+        }
         if (PingGoNotificationManager.ACTION_REPLY.equals(action)) {
             Bundle results = RemoteInput.getResultsFromIntent(intent);
             CharSequence reply = results == null

@@ -32,6 +32,7 @@ import com.w3n.pinggo.call.ActiveCallRegistry;
 import com.w3n.pinggo.call.FloatingVideoCallController;
 import com.w3n.pinggo.call.VideoCallController;
 import com.w3n.pinggo.data.repository.ChatRepository;
+import com.w3n.pinggo.notification.PingGoNotificationManager;
 import com.w3n.pinggo.views.call.VideoActiveCallView;
 import java.util.Map;
 
@@ -69,6 +70,12 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
 
   @Override protected void onCreate(Bundle state) {
     super.onCreate(state);
+    Log.i("PingGoCallTrace", "video_activity_created callId="
+        + value(VoiceCallActivity.EXTRA_CALL_ID) + " hasOffer="
+        + !value(VoiceCallActivity.EXTRA_SDP_OFFER).isEmpty() + " autoAccept="
+        + getIntent().getBooleanExtra(VoiceCallActivity.EXTRA_AUTO_ACCEPT, false));
+    PingGoNotificationManager.clearCallNotification(this,
+        value(VoiceCallActivity.EXTRA_CALL_ID));
     WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     ActiveCallRegistry.getInstance().register(this, value(VoiceCallActivity.EXTRA_CALL_CHAT_ID),
         ActiveCallRegistry.TYPE_VIDEO);
@@ -119,6 +126,9 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
         == PackageManager.PERMISSION_GRANTED;
     boolean microphone = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
         == PackageManager.PERMISSION_GRANTED;
+    Log.i("PingGoCallTrace", "video_permission_check callId="
+        + value(VoiceCallActivity.EXTRA_CALL_ID) + " camera=" + camera
+        + " microphone=" + microphone);
     if (camera && microphone) onMediaPermissionsReady();
     else permissions.launch(new String[] { Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO });
   }
@@ -132,13 +142,23 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
     return view;
   }
   private void onPermissionsResult(Map<String, Boolean> result) {
+    Log.i("PingGoCallTrace", "video_permission_result callId="
+        + value(VoiceCallActivity.EXTRA_CALL_ID) + " result=" + result);
     if (Boolean.TRUE.equals(result.get(Manifest.permission.CAMERA)) &&
         Boolean.TRUE.equals(result.get(Manifest.permission.RECORD_AUDIO))) onMediaPermissionsReady();
     else { Toast.makeText(this, "Camera and microphone permissions are required.",
         Toast.LENGTH_LONG).show(); finish(); }
   }
   private void onMediaPermissionsReady() {
+    Log.i("PingGoCallTrace", "video_media_ready callId="
+        + value(VoiceCallActivity.EXTRA_CALL_ID) + " incomingUnanswered="
+        + controller.isIncomingUnanswered() + " autoAccept="
+        + getIntent().getBooleanExtra(VoiceCallActivity.EXTRA_AUTO_ACCEPT, false));
     controller.onPermissionsReady();
+    if (controller.isIncomingUnanswered()
+        && getIntent().getBooleanExtra(VoiceCallActivity.EXTRA_AUTO_ACCEPT, false)) {
+      onAccept();
+    }
   }
 
   @Override protected void onResume() {
@@ -170,12 +190,19 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
   @Override public void onFlipCamera() { controller.flipCamera(); }
   @Override public void onCamera() { controller.toggleCamera(); }
   @Override public void onAccept() {
+    Log.i("PingGoCallTrace", "video_answer_requested callId="
+        + value(VoiceCallActivity.EXTRA_CALL_ID) + " incomingUnanswered="
+        + controller.isIncomingUnanswered());
     stopIncomingRingtone(); controller.accept(); callView.showIncomingPrompt(false);
   }
   @Override public void onReject() { stopCallTones(); controller.reject(); }
   @Override public void onState(VideoCallController.CallState state,
       VideoCallController.ChannelState signaling, VideoCallController.ChannelState audio,
       VideoCallController.ChannelState video, String status) {
+    Log.i("PingGoCallTrace", "video_state callId="
+        + value(VoiceCallActivity.EXTRA_CALL_ID) + " state=" + state
+        + " signaling=" + signaling + " audio=" + audio + " video=" + video
+        + " status=" + status);
     runOnUiThread(() -> {
       if (callView == null) return;
       callView.setCallStatus(status);

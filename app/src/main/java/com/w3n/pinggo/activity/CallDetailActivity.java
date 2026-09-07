@@ -4,6 +4,7 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.lifecycle.LiveData;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
@@ -12,6 +13,9 @@ import com.w3n.pinggo.R;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.modals.CallLog;
+import com.w3n.pinggo.data.local.CallEntity;
+import com.w3n.pinggo.data.repository.CallRepository;
+import com.w3n.pinggo.contacts.DeviceContactResolver;
 import com.w3n.pinggo.views.call.CallDetailView;
 import java.util.UUID;
 import com.google.gson.JsonArray;
@@ -34,6 +38,15 @@ public class CallDetailActivity extends AppCompatActivity implements CallDetailV
   public static final String EXTRA_DURATION = "com.w3n.pinggo.EXTRA_DURATION";
   public static final String EXTRA_IS_VIDEO_CALL = "com.w3n.pinggo.EXTRA_IS_VIDEO_CALL";
   private CallDetailView detailView;
+  private static final int CALL_PAGE_SIZE = 50;
+  private String callHistoryChatId = "";
+  private String nextCallCursor;
+  private boolean callHistoryHasMore = true;
+  private boolean callHistoryLoading;
+  private boolean firstCallPageLoaded;
+  private int callHistoryLimit = CALL_PAGE_SIZE;
+  private CallRepository callRepository;
+  private LiveData<List<CallEntity>> callHistorySource;
 
   @Override
   protected void onCreate(Bundle state) {
@@ -43,7 +56,7 @@ public class CallDetailActivity extends AppCompatActivity implements CallDetailV
     detailView =
         new CallDetailView(
             this,
-            value(EXTRA_CONTACT_NAME, getString(R.string.call)),
+            DeviceContactResolver.nameOrPhone(this, value(EXTRA_PHONE_NUMBER, "")),
             value(EXTRA_PHONE_NUMBER, ""),
             value(EXTRA_FULL_CALLED_DATE_TIME, calledTime),
             value(EXTRA_DURATION, getString(R.string.unknown_duration)),
@@ -58,47 +71,77 @@ public class CallDetailActivity extends AppCompatActivity implements CallDetailV
           return insets;
         });
     ViewCompat.requestApplyInsets(detailView);
-    loadCallHistory(value(EXTRA_CHAT_ID, ""));
+    callHistoryChatId = value(EXTRA_CHAT_ID, "");
+    callRepository = CallRepository.getInstance(this);
+    observeCallHistory();
+    loadCallHistory(null);
   }
 
-  private void loadCallHistory(String chatId) {
+  private void observeCallHistory() {
+    if (callHistorySource != null) callHistorySource.removeObservers(this);
+    String userId = LoginStateManager.getInstance().getUID(this);
+    callHistorySource = callRepository.observeCallHistory(
+        userId, callHistoryChatId, callHistoryLimit);
+    callHistorySource.observe(this, entities -> {
+      if ((entities == null || entities.isEmpty()) && !firstCallPageLoaded) return;
+      detailView.submitCalls(toCallLogs(entities));
+    });
+  }
+
+  private void loadCallHistory(String cursor) {
+    String chatId = callHistoryChatId;
     if (chatId.isEmpty()) {
       detailView.showError("Call history unavailable.");
       return;
     }
+    if (callHistoryLoading || (cursor != null && !callHistoryHasMore)) return;
     String userId = LoginStateManager.getInstance().getUID(this);
-    detailView.showLoading();
-    AppFunctionManager.getInstance().getCallLogs(userId, chatId,
+    callHistoryLoading = true;
+    if (cursor == null) detailView.showLoading();
+    AppFunctionManager.getInstance().getCallLogs(userId, chatId, CALL_PAGE_SIZE, cursor,
         new AppFunctionManager.Callback() {
           @Override public void onSuccess(Object object) {
+            callHistoryLoading = false;
             if (isFinishing() || !(object instanceof JsonObject)) return;
-            JsonArray values = ((JsonObject) object).getAsJsonArray("calls");
-            List<CallLog> calls = new ArrayList<>();
-            DateFormat rowTime = new SimpleDateFormat("MMM d, h:mm a", Locale.getDefault());
-            DateFormat fullTime = DateFormat.getDateTimeInstance(
-                DateFormat.LONG, DateFormat.SHORT, Locale.getDefault());
-            String currentUser = normalize(LoginStateManager.getInstance().getUID(
-                CallDetailActivity.this));
-            if (values != null) for (JsonElement element : values) {
-              if (!element.isJsonObject()) continue;
-              JsonObject call = element.getAsJsonObject();
-              long endedAt = number(call, "endedAt");
-              Date date = new Date(endedAt > 0 ? endedAt : number(call, "createdAt"));
-              calls.add(new CallLog(chatId, string(call, "messageId"),
-                  value(EXTRA_PHONE_NUMBER, ""),
-                  value(EXTRA_CONTACT_NAME, getString(R.string.call)),
-                  rowTime.format(date), fullTime.format(date),
-                  formatDuration(number(call, "durationSeconds")),
-                  "video".equals(string(call, "mediaType")),
-                  currentUser.equals(normalize(string(call, "callerId"))),
-                  number(call, "connectedAt") <= 0));
+            JsonObject response = (JsonObject) object;
+            JsonArray values = response.getAsJsonArray("calls");
+            if (values == null) values = new JsonArray();
+            nextCallCursor = string(response, "nextCursor");
+            callHistoryHasMore = response.has("hasMore")
+                && response.get("hasMore").getAsBoolean() && !nextCallCursor.isEmpty();
+            firstCallPageLoaded = true;
+            if (cursor != null) {
+              callHistoryLimit += values.size();
+              observeCallHistory();
             }
-            detailView.submitCalls(calls);
+            callRepository.cachePage(userId, values);
+            if (cursor == null && values.size() == 0) detailView.submitCalls(toCallLogs(null));
           }
           @Override public void onError(String error) {
-            if (!isFinishing()) detailView.showError("Unable to load call history.");
+            callHistoryLoading = false;
+            if (!isFinishing() && cursor == null) {
+              detailView.showError("Unable to load call history.");
+            }
           }
         });
+  }
+
+  private List<CallLog> toCallLogs(List<CallEntity> entities) {
+    List<CallLog> calls = new ArrayList<>();
+    if (entities == null) return calls;
+    DateFormat rowTime = new SimpleDateFormat("MMM d, h:mm a", Locale.getDefault());
+    DateFormat fullTime = DateFormat.getDateTimeInstance(
+        DateFormat.LONG, DateFormat.SHORT, Locale.getDefault());
+    String currentUser = normalize(LoginStateManager.getInstance().getUID(this));
+    for (CallEntity call : entities) {
+      Date date = new Date(call.endedAt > 0 ? call.endedAt : call.createdAt);
+      calls.add(new CallLog(call.chatId, call.messageId, value(EXTRA_PHONE_NUMBER, ""),
+          value(EXTRA_CONTACT_NAME, getString(R.string.call)), rowTime.format(date),
+          fullTime.format(date), formatDuration(call.durationSeconds),
+          "video".equals(call.mediaType), currentUser.equals(normalize(call.callerId)),
+          call.connectedAt == null || call.connectedAt <= 0));
+    }
+    return calls;
   }
 
   private static String string(JsonObject object, String key) {
@@ -148,8 +191,14 @@ public class CallDetailActivity extends AppCompatActivity implements CallDetailV
     Intent intent = new Intent(this, ChatActivity.class);
     intent.putExtra(ChatActivity.EXTRA_CHAT_ID, value(EXTRA_CHAT_ID, ""));
     intent.putExtra(ChatActivity.EXTRA_CHAT_NAME,
-        value(EXTRA_CONTACT_NAME, getString(R.string.call)));
+        DeviceContactResolver.cachedNameOrPhone(value(EXTRA_PHONE_NUMBER, "")));
     startActivity(intent);
+  }
+
+  @Override public void onLoadMoreCalls() {
+    if (callHistoryHasMore && nextCallCursor != null && !nextCallCursor.isEmpty()) {
+      loadCallHistory(nextCallCursor);
+    }
   }
 
   private void openCall(boolean video) {
@@ -159,7 +208,7 @@ public class CallDetailActivity extends AppCompatActivity implements CallDetailV
     intent.putExtra(VoiceCallActivity.EXTRA_CALL_ID, UUID.randomUUID().toString());
     intent.putExtra(VoiceCallActivity.EXTRA_CALLER_ID, phone);
     intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER,
-        phone.isEmpty() ? "Unknown" : "+" + phone);
+        DeviceContactResolver.cachedNameOrPhone(phone));
     startActivity(intent);
   }
 

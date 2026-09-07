@@ -30,6 +30,9 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.data.local.ChatEntity;
+import com.w3n.pinggo.data.local.CallEntity;
+import com.w3n.pinggo.data.repository.CallRepository;
+import com.w3n.pinggo.contacts.DeviceContactResolver;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.modals.CallLog;
 import com.w3n.pinggo.modals.Chat;
@@ -54,9 +57,18 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
     private HomeMenuDialogView homeMenuDialog;
     private ChatRepository repository;
     private List<ChatEntity> latestChatEntities = new ArrayList<>();
-    private JsonArray latestServerCalls;
+    private CallRepository callRepository;
+    private List<CallEntity> latestCallEntities = new ArrayList<>();
+    private String nextCallCursor;
+    private boolean callListHasMore;
+    private boolean callListLoading;
+    private int callListGeneration;
     private final ActivityResultLauncher<String> notificationPermission =
             registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> { });
+    private final ActivityResultLauncher<String> contactsPermission =
+            registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
+                if (granted) warmDeviceContacts();
+            });
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -94,7 +106,22 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         });
         ViewCompat.requestApplyInsets(homeView);
         loadChats();
+        requestContactsPermission();
         requestNotificationPermission();
+    }
+
+    private void requestContactsPermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
+                == PackageManager.PERMISSION_GRANTED) warmDeviceContacts();
+        else contactsPermission.launch(Manifest.permission.READ_CONTACTS);
+    }
+
+    private void warmDeviceContacts() {
+        DeviceContactResolver.warmUp(this, () -> {
+            if (homeView == null) return;
+            homeView.submitChats(toChats(latestChatEntities));
+            submitCachedCalls(latestCallEntities);
+        });
     }
 
     private void requestNotificationPermission() {
@@ -134,12 +161,17 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         repository.observeChats().observe(this, entities -> {
             latestChatEntities = entities == null ? new ArrayList<>() : entities;
             homeView.submitChats(toChats(entities));
-            if (latestServerCalls != null) submitServerCalls(latestServerCalls);
+            submitCachedCalls(latestCallEntities);
             repository.acknowledgePendingIncomingDeliveries();
         });
         String uid = LoginStateManager.getInstance().getUID(this);
         if (uid != null && !uid.trim().isEmpty()) {
             repository.ensureChatListLoaded(normalizeAccountId(uid));
+            callRepository = CallRepository.getInstance(this);
+            callRepository.observeLatestCalls(uid).observe(this, calls -> {
+                latestCallEntities = calls == null ? new ArrayList<>() : calls;
+                submitCachedCalls(latestCallEntities);
+            });
         }
     }
 
@@ -160,7 +192,7 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
     @Override protected void onResume() {
         super.onResume();
         if (repository == null) return;
-        loadServerCalls();
+        refreshServerCalls();
         repository.acknowledgePendingIncomingDeliveries();
         repository.setEventListener(new ChatRepository.EventListener() {
             @Override public void onTyping(String chatId, String userId, boolean typing) {
@@ -171,27 +203,50 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                 if (homeView != null) homeView.setTotalUnread(totalUnread);
             }
             @Override public void onCallsChanged() {
-                loadServerCalls();
+                refreshServerCalls();
             }
         });
+    }
+
+    private void refreshServerCalls() {
+        callListGeneration++;
+        callListLoading = false;
+        nextCallCursor = null;
+        callListHasMore = true;
+        loadServerCalls();
     }
 
     private void loadServerCalls() {
+        if (callListLoading || !callListHasMore) return;
         String uid = LoginStateManager.getInstance().getUID(this);
         if (uid == null || uid.trim().isEmpty()) return;
-        AppFunctionManager.getInstance().getCallList(uid, new AppFunctionManager.Callback() {
+        callListLoading = true;
+        final int requestGeneration = callListGeneration;
+        final String requestedCursor = nextCallCursor;
+        AppFunctionManager.getInstance().getCallList(uid, 20, requestedCursor,
+                new AppFunctionManager.Callback() {
             @Override public void onSuccess(Object object) {
+                if (requestGeneration != callListGeneration) return;
+                callListLoading = false;
                 if (!(object instanceof JsonObject)) return;
-                JsonArray values = ((JsonObject) object).getAsJsonArray("calls");
-                if (values == null) return;
-                latestServerCalls = values.deepCopy();
-                submitServerCalls(latestServerCalls);
+                JsonObject response = (JsonObject) object;
+                JsonArray values = response.getAsJsonArray("calls");
+                if (values == null) values = new JsonArray();
+                if (callRepository != null) callRepository.cachePage(uid, values);
+                nextCallCursor = jsonString(response, "nextCursor");
+                callListHasMore = response.has("hasMore")
+                        && response.get("hasMore").getAsBoolean()
+                        && !nextCallCursor.isEmpty();
             }
-            @Override public void onError(String error) { }
+            @Override public void onError(String error) {
+                if (requestGeneration == callListGeneration) callListLoading = false;
+            }
         });
     }
 
-    private void submitServerCalls(JsonArray values) {
+    @Override public void onLoadMoreCalls() { loadServerCalls(); }
+
+    private void submitCachedCalls(List<CallEntity> values) {
         List<CallLog> calls = new ArrayList<>();
         Map<String, ChatEntity> chatsById = new HashMap<>();
         for (ChatEntity chat : latestChatEntities) chatsById.put(chat.chatId, chat);
@@ -199,26 +254,24 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         DateFormat rowTime = new SimpleDateFormat("MMM d, h:mm a", Locale.getDefault());
         DateFormat fullTime = DateFormat.getDateTimeInstance(
                 DateFormat.LONG, DateFormat.SHORT, Locale.getDefault());
-        for (JsonElement element : values) {
-            if (!element.isJsonObject()) continue;
-            JsonObject call = element.getAsJsonObject();
-            String chatId = jsonString(call, "chatId");
-            String callerId = jsonString(call, "callerId");
-            String receiverId = jsonString(call, "receiverId");
+        if (values == null) values = new ArrayList<>();
+        for (CallEntity call : values) {
+            String chatId = call.chatId == null ? "" : call.chatId;
+            String callerId = call.callerId == null ? "" : call.callerId;
+            String receiverId = call.receiverId == null ? "" : call.receiverId;
             String otherId = ownId.equals(normalizeAccountId(callerId))
                     ? receiverId : callerId;
             ChatEntity chat = chatsById.get(chatId);
-            String contact = chat != null && chat.contactName != null
-                    && !chat.contactName.trim().isEmpty() ? chat.contactName : otherId;
-            long endedAt = jsonLong(call, "endedAt");
-            long duration = jsonLong(call, "durationSeconds");
+            String contact = DeviceContactResolver.cachedNameOrPhone(otherId);
+            long endedAt = call.endedAt;
+            long duration = call.durationSeconds;
             boolean outgoing = ownId.equals(normalizeAccountId(callerId));
-            boolean missed = jsonLong(call, "connectedAt") <= 0;
-            Date date = new Date(endedAt > 0 ? endedAt : jsonLong(call, "createdAt"));
-            calls.add(new CallLog(chatId, jsonString(call, "messageId"), otherId,
+            boolean missed = call.connectedAt == null || call.connectedAt <= 0;
+            Date date = new Date(endedAt > 0 ? endedAt : call.createdAt);
+            calls.add(new CallLog(chatId, call.messageId, otherId,
                     contact, rowTime.format(date), fullTime.format(date),
                     formatCallDuration(duration),
-                    "video".equals(jsonString(call, "mediaType")), outgoing, missed));
+                    "video".equals(call.mediaType), outgoing, missed));
         }
         if (homeView != null) homeView.submitCalls(calls);
     }
@@ -265,7 +318,7 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         intent.putExtra(VoiceCallActivity.EXTRA_CALL_ID, java.util.UUID.randomUUID().toString());
         intent.putExtra(VoiceCallActivity.EXTRA_CALLER_ID, phoneNumber);
         intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER,
-                phoneNumber == null || phoneNumber.isEmpty() ? "Unknown" : "+" + phoneNumber);
+                DeviceContactResolver.cachedNameOrPhone(phoneNumber));
         intent.putExtra(VoiceCallActivity.EXTRA_PROFILE_PATH, profilePath);
         startActivity(intent);
     }
@@ -353,8 +406,7 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         List<Chat> chats = new ArrayList<>();
         if (entities == null) return chats;
         for (ChatEntity entity : entities) {
-            String contact = entity.contactName == null || entity.contactName.isEmpty()
-                    ? entity.otherUserId : entity.contactName;
+            String contact = DeviceContactResolver.cachedNameOrPhone(entity.otherUserId);
             String localPath = entity.localProfilePhotoPath;
             if (localPath == null || localPath.isEmpty()) {
                 localPath = ChatProfilePhotoStore.getLocalPath(this, entity.otherUserId);

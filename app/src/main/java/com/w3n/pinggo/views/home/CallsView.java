@@ -42,6 +42,7 @@ public final class CallsView extends View {
     private final CallAdapter adapter = new CallAdapter();
     private final OnCallClickListener clickListener;
     private final OnCallStartListener callStartListener;
+    private final Runnable loadMoreListener;
     private final Bitmap dividerBitmap = colorBitmap(0xFFE5EAF0);
     private final Bitmap phoneIncomingBitmap = drawableBitmap(R.drawable.chat_phone_incoming);
     private final Bitmap phoneOutgoingBitmap = drawableBitmap(R.drawable.chat_phone_outgoing);
@@ -54,16 +55,28 @@ public final class CallsView extends View {
     private Text emptyText;
 
     public CallsView(Context context, OnCallClickListener clickListener,
-                     OnCallStartListener callStartListener) {
+                     OnCallStartListener callStartListener, Runnable loadMoreListener) {
         super(context);
         this.clickListener = clickListener;
         this.callStartListener = callStartListener;
+        this.loadMoreListener = loadMoreListener;
         setClickable(true);
     }
 
     public void submitCalls(List<CallLog> calls) {
         adapter.submit(calls);
         updateVisibility();
+        post(this::loadAllPagesForSearch);
+    }
+
+    public void filter(String query) {
+        adapter.filter(query);
+        updateVisibility();
+        post(this::loadAllPagesForSearch);
+    }
+
+    private void loadAllPagesForSearch() {
+        if (!adapter.query.isEmpty() && loadMoreListener != null) loadMoreListener.run();
     }
 
     @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
@@ -97,7 +110,15 @@ public final class CallsView extends View {
 
     @Override protected void onDraw(Canvas canvas) { super.onDraw(canvas); layers.draw(canvas); }
     @Override public boolean onTouchEvent(MotionEvent event) {
-        return layers.onTouchEvent(event) || super.onTouchEvent(event);
+        boolean handled = layers.onTouchEvent(event);
+        if (handled) post(this::loadNextPageIfNeeded);
+        return handled || super.onTouchEvent(event);
+    }
+
+    private void loadNextPageIfNeeded() {
+        if (list != null && adapter.getItemCount() > 0
+                && list.getLastVisiblePosition() >= adapter.getItemCount() - 3
+                && loadMoreListener != null) loadMoreListener.run();
     }
 
     public void release() {
@@ -112,10 +133,26 @@ public final class CallsView extends View {
     }
 
     private final class CallAdapter extends ComponentList.Adapter<CallLog> {
+        private final List<CallLog> all = new ArrayList<>();
         private final List<CallLog> calls = new ArrayList<>();
+        private String query = "";
         void submit(List<CallLog> values) {
+            all.clear();
+            if (values != null) all.addAll(values);
+            applyFilter();
+        }
+        void filter(String value) {
+            query = value == null ? "" : value.trim().toLowerCase(Locale.US);
+            applyFilter();
+        }
+        private void applyFilter() {
             calls.clear();
-            if (values != null) calls.addAll(values);
+            for (CallLog call : all) {
+                String name = call.getContactName() == null ? "" : call.getContactName();
+                String phone = call.getPhoneNumber() == null ? "" : call.getPhoneNumber();
+                if (query.isEmpty() || name.toLowerCase(Locale.US).contains(query)
+                        || phone.toLowerCase(Locale.US).contains(query)) calls.add(call);
+            }
             notifyDataSetChanged();
         }
         @Override public int getItemCount() { return calls.size(); }

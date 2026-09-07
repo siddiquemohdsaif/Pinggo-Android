@@ -106,7 +106,8 @@ public final class HomeView extends ZLayerViewGroup {
         });
         chatsView.setOnNewChatListener(listener::onNewChat);
         chatsView.setOnNewGroupListener(listener::onNewGroup);
-        callsView = new CallsView(context, listener::onOpenCall, listener::onStartCall);
+        callsView = new CallsView(context, listener::onOpenCall, listener::onStartCall,
+                listener::onLoadMoreCalls);
         meetsView = new MeetsView(context);
         bottomNavigationView = new BottomNavigationView(context, new BottomNavigationView.Listener() {
             @Override public void onChatsSelected() { showChats(); }
@@ -166,7 +167,8 @@ public final class HomeView extends ZLayerViewGroup {
         int secondaryHeight = Math.max(0, getMeasuredHeight() - navHeight - secondaryTop);
         int exactSecondaryHeight = MeasureSpec.makeMeasureSpec(
                 secondaryHeight, MeasureSpec.EXACTLY);
-        callsView.measure(exactWidth, exactSecondaryHeight);
+        callsView.measure(exactWidth, MeasureSpec.makeMeasureSpec(
+                Math.max(0, getMeasuredHeight() - navHeight - chatsTop), MeasureSpec.EXACTLY));
         meetsView.measure(exactWidth, exactSecondaryHeight);
         bottomNavigationView.measure(exactWidth, MeasureSpec.makeMeasureSpec(navHeight, MeasureSpec.EXACTLY));
     }
@@ -179,7 +181,7 @@ public final class HomeView extends ZLayerViewGroup {
         int secondaryTop = Math.round(topInset + px(187f));
         int navTop = height - navHeight;
         chatsView.layout(0, chatsTop, width, navTop);
-        callsView.layout(0, secondaryTop, width, navTop);
+        callsView.layout(0, chatsTop, width, navTop);
         meetsView.layout(0, secondaryTop, width, navTop);
         bottomNavigationView.layout(0, navTop, width, height);
     }
@@ -253,7 +255,13 @@ public final class HomeView extends ZLayerViewGroup {
                 .setStrokeWidthPx(0).setCornerRadiusPx(0)
                 .setPaddingPx(140f * scale, 20f * scale)
                 .setOnTextChangedListener((id, value) -> {
-                    chatsView.filter(value);
+                    if (showingChats) chatsView.filter(value);
+                    else if (!showingMeet) {
+                        callsView.filter(value);
+                        // Call rows resolve contact names from the paged chat cache, so search
+                        // must also complete chat pagination before it can be considered global.
+                        chatsView.filter(value);
+                    }
                 }).setOnEditorActionListener((id, actionId) -> {
                     if (actionId == EditorInfo.IME_ACTION_DONE) hideKeyboard();
                     return actionId == EditorInfo.IME_ACTION_DONE;
@@ -271,6 +279,7 @@ public final class HomeView extends ZLayerViewGroup {
     }
 
     private void showChats() {
+        boolean changedTab = !showingChats;
         showingChats = true;
         showingMeet = false;
         if (title != null) title.setText(getString(R.string.app_name));
@@ -279,6 +288,11 @@ public final class HomeView extends ZLayerViewGroup {
         if (logo != null) logo.setVisible(selectedChats.isEmpty());
         searchBackground.setVisible(true);
         search.setVisible(true);
+        search.setHint(getString(R.string.search_chats));
+        if (changedTab) {
+            search.setText("");
+            callsView.filter("");
+        }
         chatsView.setVisibility(VISIBLE);
         callsView.setVisibility(GONE);
         meetsView.setVisibility(GONE);
@@ -342,17 +356,21 @@ public final class HomeView extends ZLayerViewGroup {
     }
 
     private void showCalls() {
+        boolean changedTab = showingChats || showingMeet;
         showingChats = false;
         showingMeet = false;
         if (title == null) return;
-        search.clearFocus();
-        hideKeyboard();
         title.setText(getString(R.string.call));
         overflow.setVisible(false);
         if (overflowDots != null) overflowDots.setVisible(false);
-        logo.setVisible(false);
-        searchBackground.setVisible(false);
-        search.setVisible(false);
+        logo.setVisible(true);
+        searchBackground.setVisible(true);
+        search.setVisible(true);
+        search.setHint("Search calls");
+        if (changedTab) {
+            search.setText("");
+            chatsView.filter("");
+        }
         chatsView.setVisibility(GONE);
         callsView.setVisibility(VISIBLE);
         meetsView.setVisibility(GONE);
@@ -486,6 +504,7 @@ public final class HomeView extends ZLayerViewGroup {
         void onOpenChat(Chat chat);
         void onOpenCall(CallLog callLog);
         void onStartCall(CallLog callLog, boolean video);
+        void onLoadMoreCalls();
         void onNewChat();
         void onNewGroup();
         void onMakeCall();

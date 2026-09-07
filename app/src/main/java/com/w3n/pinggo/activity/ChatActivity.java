@@ -29,6 +29,7 @@ import android.os.Environment;
 import android.os.SystemClock;
 import android.provider.OpenableColumns;
 import android.provider.ContactsContract;
+import com.w3n.pinggo.contacts.DeviceContactResolver;
 import android.provider.MediaStore;
 import android.provider.Settings;
 import android.telephony.PhoneNumberUtils;
@@ -316,9 +317,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     super.onCreate(state);
     long createStartedNanos = SystemClock.elapsedRealtimeNanos();
     WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-    String name = getIntent().getStringExtra(EXTRA_CHAT_NAME);
-    if (name == null || name.trim().isEmpty()) name = "Chat";
-    chatName = name;
+    String name;
     chatId = getIntent().getStringExtra(EXTRA_CHAT_ID);
     contactBlocked = getSharedPreferences("chat_menu_state", MODE_PRIVATE)
         .getBoolean("blocked:" + String.valueOf(chatId), false);
@@ -327,6 +326,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     profiler.attach(getWindow());
     currentUser = normalize(LoginStateManager.getInstance().getUID(this));
     receiverId = receiver();
+    name = DeviceContactResolver.nameOrPhone(this, receiverId);
+    chatName = name;
     profilePhotoPath = getIntent().getStringExtra(EXTRA_LOCAL_PROFILE_PHOTO_PATH);
     chatView =
         new ChatView(
@@ -1510,7 +1511,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     intent.putExtra(VoiceCallActivity.EXTRA_CALL_ID, UUID.randomUUID().toString());
     intent.putExtra(VoiceCallActivity.EXTRA_CALLER_ID, receiverId);
     intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER,
-        receiverId.isEmpty() ? "Unknown" : "+" + receiverId);
+        DeviceContactResolver.cachedNameOrPhone(receiverId));
     intent.putExtra(VoiceCallActivity.EXTRA_PROFILE_PATH, profilePhotoPath);
     startActivity(intent);
   }

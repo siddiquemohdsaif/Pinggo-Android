@@ -346,7 +346,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     public boolean sendCallEvent(JsonObject event) {
         connect();
-        return socketClient.send(event);
+        boolean sent = socketClient.send(event);
+        Log.i("PingGoCallTrace", "call_event_send type="
+                + JsonParserUtil.getString(event, "type") + " callId="
+                + JsonParserUtil.getString(event, "callId") + " sent=" + sent);
+        return sent;
     }
 
     public LiveData<List<MessageEntity>> observeMessages(String chatId, int limit) {
@@ -564,6 +568,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         }
     }
 
+    public boolean isActiveChat(String chatId) {
+        return chatId != null && !chatId.trim().isEmpty()
+                && chatId.trim().equals(activeChatId);
+    }
+
     public void clearActiveChat(String chatId) {
         String closingChatId = chatId == null ? "" : chatId.trim();
         if (activeChatId.equals(closingChatId)) {
@@ -635,8 +644,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         currentUserId = normalizeAccountId(LoginStateManager.getInstance().getUID(appContext));
         String encryptedCredential = LoginStateManager.getInstance().getENC(appContext);
         if (currentUserId.isEmpty() || encryptedCredential == null || encryptedCredential.trim().isEmpty()) {
+            Log.w("PingGoCallTrace", "socket_connect_skipped missingCredentials userId="
+                    + currentUserId);
             return;
         }
+        Log.i("PingGoCallTrace", "socket_connect_requested userId=" + currentUserId);
         socketClient.connect(currentUserId, encryptedCredential);
     }
 
@@ -2143,6 +2155,12 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     @Override
     public void onEvent(JsonObject event) {
         String type = JsonParserUtil.getString(event, "type");
+        if (type.startsWith("call_") || "ice_candidate".equals(type)) {
+            Log.i("PingGoCallTrace", "socket_call_event_received type=" + type
+                    + " callId=" + JsonParserUtil.getString(event, "callId")
+                    + " incomingListener=" + (incomingCallListener != null)
+                    + " callListener=" + (callEventListener != null));
+        }
         int totalUnreadBeforeEvent = latestTotalUnread;
         int serverTotalUnread = -1;
         if (event.has("total_unread") && !event.get("total_unread").isJsonNull()) {

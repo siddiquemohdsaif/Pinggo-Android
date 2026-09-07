@@ -18,6 +18,7 @@ import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
+import com.w3n.pinggo.contacts.DeviceContactResolver;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -260,7 +261,8 @@ public final class NewChatView extends View {
         return;
       }
       holder.find("avatar", Image.class).setBitmap(photo(value));
-      holder.find("name", Text.class).setText(value.phoneNumber);
+      String displayName = DeviceContactResolver.cachedNameOrPhone(value.phoneNumber);
+      holder.find("name", Text.class).setText(displayName);
       holder
           .find("detail", Text.class)
           .setText(value.type == Item.FOUND ? "Tap to chat" : "Not on PingGo");
@@ -275,7 +277,7 @@ public final class NewChatView extends View {
   private Bitmap photo(Item item) {
     String path = ChatProfilePhotoStore.getLocalPath(getContext(), item.phoneNumber);
     Bitmap b = BitmapFactory.decodeFile(path);
-    return b == null ? avatar(item.phoneNumber) : b;
+    return b == null ? avatar(DeviceContactResolver.cachedNameOrPhone(item.phoneNumber)) : b;
   }
 
   private Bitmap avatar(String v) {

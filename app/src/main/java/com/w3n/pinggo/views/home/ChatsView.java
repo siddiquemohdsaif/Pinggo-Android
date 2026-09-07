@@ -41,6 +41,7 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.activity.NewChatActivity;
 import com.w3n.pinggo.data.local.ChatEntity;
+import com.w3n.pinggo.contacts.DeviceContactResolver;
 import com.w3n.pinggo.data.repository.ChatListState;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.modals.Chat;
@@ -115,6 +116,7 @@ public final class ChatsView extends View {
     private final Observer<ChatListState> listStateObserver = state -> post(() -> {
         chatListState = state == null ? ChatListState.initial() : state;
         updateVisibility();
+        loadAllPagesForSearch();
     });
     private ComponentList<Chat> list;
     private Text status;
@@ -198,6 +200,7 @@ public final class ChatsView extends View {
         showStatus(adapter.getItemCount() == 0 ? getResources().getString(
                 R.string.start_new_conversation) : "");
         post(this::loadNextPageIfNeeded);
+        post(this::loadAllPagesForSearch);
     }
 
     public void showLoading() { showStatus("Loading chats..."); }
@@ -206,6 +209,11 @@ public final class ChatsView extends View {
         showStatus(adapter.getItemCount() == 0
                 ? (adapter.hasChats() ? "No matching conversations"
                 : getResources().getString(R.string.start_new_conversation)) : "");
+        post(this::loadAllPagesForSearch);
+    }
+
+    private void loadAllPagesForSearch() {
+        if (!adapter.query.isEmpty()) repository.loadNextChatListPage();
     }
     public void setOnSelectionChangedListener(OnSelectionChangedListener listener) {
         selectionChangedListener = listener;
@@ -1131,8 +1139,7 @@ public final class ChatsView extends View {
         List<Chat> chats = new ArrayList<>();
         if (entities == null) return chats;
         for (ChatEntity entity : entities) {
-            String name = entity.contactName == null || entity.contactName.isEmpty()
-                    ? entity.otherUserId : entity.contactName;
+            String name = DeviceContactResolver.cachedNameOrPhone(entity.otherUserId);
             String path = entity.localProfilePhotoPath == null
                     || entity.localProfilePhotoPath.isEmpty()
                     ? ChatProfilePhotoStore.getLocalPath(getContext(), entity.otherUserId)

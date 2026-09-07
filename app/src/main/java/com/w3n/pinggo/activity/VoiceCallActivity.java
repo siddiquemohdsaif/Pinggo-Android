@@ -10,6 +10,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.util.Log;
 import android.widget.Toast;
 import com.google.gson.JsonObject;
 import androidx.activity.result.ActivityResultLauncher;
@@ -24,17 +25,20 @@ import com.w3n.pinggo.call.WebRTCCallClient;
 import com.w3n.pinggo.call.FloatingVoiceCallController;
 import com.w3n.pinggo.call.ActiveCallRegistry;
 import com.w3n.pinggo.data.repository.ChatRepository;
+import com.w3n.pinggo.notification.PingGoNotificationManager;
 import com.w3n.pinggo.views.call.VoiceActiveCallView;
 
 public class VoiceCallActivity extends AppCompatActivity
     implements VoiceActiveCallView.Listener, WebRTCCallClient.Listener,
     ChatRepository.CallEventListener {
+  private static final String CALL_TRACE = "PingGoCallTrace";
   public static final String EXTRA_PHONE_NUMBER = "com.w3n.pinggo.EXTRA_CALL_PHONE_NUMBER";
   public static final String EXTRA_PROFILE_PATH = "com.w3n.pinggo.EXTRA_CALL_PROFILE_PATH";
   public static final String EXTRA_CALL_ID = "com.w3n.pinggo.EXTRA_CALL_ID";
   public static final String EXTRA_CALLER_ID = "com.w3n.pinggo.EXTRA_CALLER_ID";
   public static final String EXTRA_SDP_OFFER = "com.w3n.pinggo.EXTRA_SDP_OFFER";
   public static final String EXTRA_CALL_CHAT_ID = "com.w3n.pinggo.EXTRA_CALL_CHAT_ID";
+  public static final String EXTRA_AUTO_ACCEPT = "com.w3n.pinggo.EXTRA_AUTO_ACCEPT";
   private VoiceActiveCallView callView;
   private AudioManager audioManager;
   private WebRTCCallClient callClient;
@@ -73,12 +77,18 @@ public class VoiceCallActivity extends AppCompatActivity
   };
   private final ActivityResultLauncher<String> microphonePermission = registerForActivityResult(
       new ActivityResultContracts.RequestPermission(), granted -> {
+        Log.i(CALL_TRACE, "voice_permission_result callId=" + callId() + " granted=" + granted);
         if (granted) startCall();
         else { Toast.makeText(this, "Microphone permission is required.", Toast.LENGTH_LONG).show(); finish(); }
       });
 
   @Override protected void onCreate(Bundle state) {
     super.onCreate(state);
+    Log.i(CALL_TRACE, "voice_activity_created callId=" + callId()
+        + " hasOffer=" + isIncoming() + " autoAccept="
+        + getIntent().getBooleanExtra(EXTRA_AUTO_ACCEPT, false));
+    PingGoNotificationManager.clearCallNotification(this,
+        getIntent().getStringExtra(EXTRA_CALL_ID));
     WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
     ActiveCallRegistry.getInstance().register(this,
@@ -102,6 +112,7 @@ public class VoiceCallActivity extends AppCompatActivity
       ChatRepository.getInstance(this).setCallEventListener(this);
       notifyCallerRinging();
       startIncomingRingtone();
+      if (getIntent().getBooleanExtra(EXTRA_AUTO_ACCEPT, false)) onAccept();
     } else {
       startOutgoingTone();
       requestMicrophoneAndStart();
@@ -123,8 +134,10 @@ public class VoiceCallActivity extends AppCompatActivity
   }
 
   private void requestMicrophoneAndStart() {
-    if (androidx.core.content.ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-        == PackageManager.PERMISSION_GRANTED) startCall();
+    boolean granted = androidx.core.content.ContextCompat.checkSelfPermission(this,
+        Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
+    Log.i(CALL_TRACE, "voice_permission_check callId=" + callId() + " granted=" + granted);
+    if (granted) startCall();
     else microphonePermission.launch(Manifest.permission.RECORD_AUDIO);
   }
 
@@ -132,6 +145,9 @@ public class VoiceCallActivity extends AppCompatActivity
     callClient = new WebRTCCallClient(this, ChatRepository.getInstance(this), this);
     String local = LoginStateManager.getInstance().getUID(this);
     String incomingOffer = getIntent().getStringExtra(EXTRA_SDP_OFFER);
+    Log.i(CALL_TRACE, "voice_webrtc_start callId=" + callId() + " incoming="
+        + (incomingOffer != null && !incomingOffer.isEmpty()) + " offerLength="
+        + (incomingOffer == null ? 0 : incomingOffer.length()));
     if (incomingOffer != null && !incomingOffer.isEmpty()) {
       callClient.startIncoming(getIntent().getStringExtra(EXTRA_CALL_ID),
           getIntent().getStringExtra(EXTRA_CALL_CHAT_ID), local,
@@ -146,12 +162,18 @@ public class VoiceCallActivity extends AppCompatActivity
     FloatingVoiceCallController.getInstance().minimizeAndReturn(this);
   }
   @Override public void onAccept() {
+    Log.i(CALL_TRACE, "voice_answer_requested callId=" + callId() + " incoming="
+        + isIncoming() + " alreadyAccepted=" + incomingAccepted);
     if (!isIncoming() || incomingAccepted) return;
     incomingAccepted = true;
     stopIncomingRingtone();
     callView.hideIncomingPrompt();
     callView.setCallStatus("Connecting…");
     requestMicrophoneAndStart();
+  }
+  private String callId() {
+    String value = getIntent().getStringExtra(EXTRA_CALL_ID);
+    return value == null ? "" : value;
   }
   @Override public void onReject() { rejectIncoming(); }
   private void rejectIncoming() {
@@ -187,6 +209,7 @@ public class VoiceCallActivity extends AppCompatActivity
     callView.setAudioState(speakerOn, muted);
   }
   @Override public void onState(String state) {
+    Log.i(CALL_TRACE, "voice_state callId=" + callId() + " state=" + state);
     FloatingVoiceCallController.getInstance().updateStatus(state);
     if ("Connected".equals(state)) {
       ActiveCallRegistry.getInstance().setConnected(this, true);
@@ -271,12 +294,14 @@ public class VoiceCallActivity extends AppCompatActivity
     stopOutgoingTone();
   }
   @Override public void onEnded(String reason) {
+    Log.w(CALL_TRACE, "voice_ended callId=" + callId() + " reason=" + reason);
     FloatingVoiceCallController.getInstance().clear();
     stopCallTones();
     stopCallTimer();
     Toast.makeText(this, "Call " + reason.replace('_', ' ') + ".", Toast.LENGTH_SHORT).show(); finish();
   }
   @Override public void onError(String message) {
+    Log.e(CALL_TRACE, "voice_error callId=" + callId() + " message=" + message);
     FloatingVoiceCallController.getInstance().clear();
     stopCallTones();
     stopCallTimer();

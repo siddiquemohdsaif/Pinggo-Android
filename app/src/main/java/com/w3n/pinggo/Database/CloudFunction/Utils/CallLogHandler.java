@@ -17,20 +17,34 @@ public final class CallLogHandler {
 
   public static void getCallList(AppRestAPI api, String phoneNumber,
                                  AppFunctionManager.Callback callback) {
-    getCalls(api, phoneNumber, null, callback);
+    getCalls(api, phoneNumber, null, 20, null, callback);
+  }
+
+  public static void getCallList(AppRestAPI api, String phoneNumber, int pageSize,
+                                 String cursor, AppFunctionManager.Callback callback) {
+    getCalls(api, phoneNumber, null, pageSize, cursor, callback);
   }
 
   public static void getCallLogs(AppRestAPI api, String phoneNumber, String chatId,
                                  AppFunctionManager.Callback callback) {
-    getCalls(api, phoneNumber, chatId, callback);
+    getCalls(api, phoneNumber, chatId, 20, null, callback);
+  }
+
+  public static void getCallLogs(AppRestAPI api, String phoneNumber, String chatId,
+                                 int pageSize, String cursor,
+                                 AppFunctionManager.Callback callback) {
+    getCalls(api, phoneNumber, chatId, pageSize, cursor, callback);
   }
 
   private static void getCalls(AppRestAPI api, String phoneNumber, String chatId,
+                               int pageSize, String cursor,
                                AppFunctionManager.Callback callback) {
     try {
       JSONObject body = new JSONObject();
       body.put("phoneNumber", normalize(phoneNumber));
       if (chatId != null) body.put("chatId", chatId);
+      body.put("pageSize", Math.max(1, Math.min(pageSize, 100)));
+      if (cursor != null && !cursor.trim().isEmpty()) body.put("cursor", cursor);
       Call<JsonObject> request = chatId == null
           ? api.getCallList(RequestBody.create(body.toString(), JSON))
           : api.getCallLogs(RequestBody.create(body.toString(), JSON));

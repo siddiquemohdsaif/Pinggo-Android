@@ -95,6 +95,12 @@ public final class CallDetailView extends View {
     updateVisibility();
   }
 
+  public void appendCalls(List<CallLog> calls) {
+    adapter.append(calls);
+    statusText = adapter.getItemCount() == 0 ? "No calls found." : "";
+    updateVisibility();
+  }
+
   @Override
   protected void onSizeChanged(int w, int h, int oldw, int oldh) {
     super.onSizeChanged(w, h, oldw, oldh);
@@ -130,7 +136,7 @@ public final class CallDetailView extends View {
         new RectF(w / 2f - avatarSize / 2f, avatarTop,
             w / 2f + avatarSize / 2f, avatarTop + avatarSize))
         .setScaleType(Image.ScaleType.CENTER_CROP));
-    addText("phone", phoneNumber.isEmpty() ? name : "+" + phoneNumber,
+    addText("phone", name,
         new RectF(px(55f), avatarTop + px(226f), w - px(55f), avatarTop + px(303f)),
         sp(18), 0xFF000E1A, FontVariation.SEMI_BOLD, Text.Alignment.CENTER);
     float actionTop = avatarTop + px(330f);
@@ -178,6 +184,11 @@ public final class CallDetailView extends View {
     void submit(List<CallLog> values) {
       calls.clear();
       if (values != null) calls.addAll(values);
+      notifyDataSetChanged();
+    }
+    void append(List<CallLog> values) {
+      if (values == null || values.isEmpty()) return;
+      calls.addAll(values);
       notifyDataSetChanged();
     }
     @Override public int getItemCount() { return calls.size(); }
@@ -259,7 +270,16 @@ public final class CallDetailView extends View {
 
   @Override
   public boolean onTouchEvent(MotionEvent event) {
-    return layers.onTouchEvent(event) || super.onTouchEvent(event);
+    boolean handled = layers.onTouchEvent(event);
+    if (handled) post(this::loadNextPageIfNeeded);
+    return handled || super.onTouchEvent(event);
+  }
+
+  private void loadNextPageIfNeeded() {
+    if (list != null && adapter.getItemCount() > 0
+        && list.getLastVisiblePosition() >= adapter.getItemCount() - 3) {
+      listener.onLoadMoreCalls();
+    }
   }
 
   public void release() {
@@ -337,5 +357,7 @@ public final class CallDetailView extends View {
     void onVideoCall();
 
     void onMessage();
+
+    void onLoadMoreCalls();
   }
 }

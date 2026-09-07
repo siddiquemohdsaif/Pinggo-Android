@@ -12,10 +12,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase;
         entities = {
                 MessageEntity.class,
                 ChatEntity.class,
+                CallEntity.class,
                 PresenceEntity.class,
                 TransferEntity.class
         },
-        version = 20,
+        version = 21,
         exportSchema = false
 )
 public abstract class PingGoDatabase extends RoomDatabase {
@@ -24,6 +25,7 @@ public abstract class PingGoDatabase extends RoomDatabase {
     public abstract MessageDao messageDao();
 
     public abstract ChatDao chatDao();
+    public abstract CallDao callDao();
 
     public abstract PresenceDao presenceDao();
     public abstract TransferDao transferDao();
@@ -115,6 +117,13 @@ public abstract class PingGoDatabase extends RoomDatabase {
             db.execSQL("ALTER TABLE `transfers` ADD COLUMN `messageId` TEXT");
         }
     };
+    private static final Migration MIGRATION_20_21 = new Migration(20, 21) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS `calls` (`ownerId` TEXT NOT NULL, `callId` TEXT NOT NULL, `messageId` TEXT, `chatId` TEXT, `callerId` TEXT, `receiverId` TEXT, `mediaType` TEXT, `status` TEXT, `terminationReason` TEXT, `createdAt` INTEGER NOT NULL, `ringingAt` INTEGER, `connectedAt` INTEGER, `endedAt` INTEGER NOT NULL, `durationSeconds` INTEGER NOT NULL, PRIMARY KEY(`ownerId`, `callId`))");
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_calls_ownerId_endedAt` ON `calls` (`ownerId`, `endedAt`)");
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_calls_ownerId_chatId_endedAt` ON `calls` (`ownerId`, `chatId`, `endedAt`)");
+        }
+    };
 
     public static PingGoDatabase getInstance(Context context) {
         if (instance != null) {
@@ -132,7 +141,7 @@ public abstract class PingGoDatabase extends RoomDatabase {
                                 MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
                                 MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
                                 MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18,
-                                MIGRATION_19_20)
+                                MIGRATION_19_20, MIGRATION_20_21)
                         .fallbackToDestructiveMigration()
                         .build();
             }

@@ -8,6 +8,7 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.ContactsContract;
+import com.w3n.pinggo.contacts.DeviceContactResolver;
 import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
@@ -76,7 +77,7 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   private void loadContactsWithPermission() {
     if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
         == PackageManager.PERMISSION_GRANTED) {
-      discoverContacts();
+      DeviceContactResolver.warmUp(this, this::discoverContacts);
       return;
     }
     ActivityCompat.requestPermissions(
@@ -89,8 +90,9 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     super.onRequestPermissionsResult(code, permissions, results);
     if (code == CONTACTS_PERMISSION_REQUEST
         && results.length > 0
-        && results[0] == PackageManager.PERMISSION_GRANTED) discoverContacts();
-    else newChatView.showStatus("Contacts permission is required to discover chats.");
+        && results[0] == PackageManager.PERMISSION_GRANTED) {
+      DeviceContactResolver.warmUp(this, this::discoverContacts);
+    } else newChatView.showStatus("Contacts permission is required to discover chats.");
   }
 
   private void discoverContacts() {
@@ -272,7 +274,8 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
           forwardSourceChatId, forwardMessageIds, item.chatId, item.phoneNumber);
     }
     Intent intent = new Intent(this, ChatActivity.class);
-    intent.putExtra(ChatActivity.EXTRA_CHAT_NAME, item.phoneNumber);
+    intent.putExtra(ChatActivity.EXTRA_CHAT_NAME,
+        DeviceContactResolver.nameOrPhone(this, item.phoneNumber));
     intent.putExtra(ChatActivity.EXTRA_CHAT_ID, item.chatId);
     intent.putExtra(ChatActivity.EXTRA_PROFILE_PHOTO_URL, item.profilePhotoUrl);
     intent.putExtra(
