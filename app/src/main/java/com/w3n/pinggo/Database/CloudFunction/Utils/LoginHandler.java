@@ -9,6 +9,7 @@ import com.w3n.pinggo.AppContextProvider;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.RestApi.AppRestAPI;
 import com.w3n.pinggo.modals.UserData;
+import com.w3n.pinggo.notification.FcmTokenManager;
 import okhttp3.MediaType;
 import okhttp3.RequestBody;
 import okhttp3.ResponseBody;
@@ -214,6 +215,7 @@ public class LoginHandler {
     UserData parsedUserData = UserData.fromJson(userData.toString());
     LoginStateManager.getInstance().setLogin(context, uid, encryptedCredential, parsedUserData);
     AppFunctionManager.getInstance().applyAuth(context);
+    FcmTokenManager.refreshAndUpload(context);
     Log.d(
         TAG,
         "Login/signup success stored. Starting profile photo background download if URL exists.");

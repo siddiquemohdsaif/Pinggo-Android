@@ -9,6 +9,8 @@ import androidx.room.PrimaryKey;
 public class TransferEntity {
     @PrimaryKey @NonNull public String transferId;
     public String clientMessageId;
+    /** Timestamp ID of the chat message that owns this attachment. */
+    public String messageId;
     public String attachmentId;
     public String direction;
     public String chatId;

@@ -10,7 +10,6 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.widget.FrameLayout;
 import android.widget.Toast;
-import androidx.activity.EdgeToEdge;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
@@ -52,7 +51,7 @@ public class SignUpActivity extends AppCompatActivity {
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
-    EdgeToEdge.enable(this);
+    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     configureSystemBars();
     phoneNumber = getIntent().getStringExtra(EXTRA_PHONE_NUMBER);
     email = getIntent().getStringExtra(EXTRA_EMAIL);

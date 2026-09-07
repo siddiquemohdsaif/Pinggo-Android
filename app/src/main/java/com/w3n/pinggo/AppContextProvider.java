@@ -22,6 +22,7 @@ import com.w3n.pinggo.call.FloatingVideoCallController;
 import com.w3n.pinggo.call.WebRTCCallClient;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.modals.AppConfiguration;
+import com.w3n.pinggo.notification.PingGoNotificationManager;
 import com.w3n.pinggo.views.common.NativeMessageView;
 
 import org.json.JSONObject;
@@ -40,6 +41,7 @@ public class AppContextProvider extends Application implements ChatRepository.In
 
         // Initialize the app context when the application starts
         appContext = getApplicationContext();
+        PingGoNotificationManager.createChannels(this);
         FloatingVoiceCallController.getInstance().initialize(this);
         FloatingVideoCallController.getInstance().initialize(this);
 

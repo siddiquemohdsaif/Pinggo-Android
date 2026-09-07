@@ -17,10 +17,24 @@ public final class CallLogHandler {
 
   public static void getCallList(AppRestAPI api, String phoneNumber,
                                  AppFunctionManager.Callback callback) {
+    getCalls(api, phoneNumber, null, callback);
+  }
+
+  public static void getCallLogs(AppRestAPI api, String phoneNumber, String chatId,
+                                 AppFunctionManager.Callback callback) {
+    getCalls(api, phoneNumber, chatId, callback);
+  }
+
+  private static void getCalls(AppRestAPI api, String phoneNumber, String chatId,
+                               AppFunctionManager.Callback callback) {
     try {
       JSONObject body = new JSONObject();
       body.put("phoneNumber", normalize(phoneNumber));
-      api.getCallList(RequestBody.create(body.toString(), JSON)).enqueue(new Callback<JsonObject>() {
+      if (chatId != null) body.put("chatId", chatId);
+      Call<JsonObject> request = chatId == null
+          ? api.getCallList(RequestBody.create(body.toString(), JSON))
+          : api.getCallLogs(RequestBody.create(body.toString(), JSON));
+      request.enqueue(new Callback<JsonObject>() {
         @Override public void onResponse(Call<JsonObject> call, Response<JsonObject> response) {
           if (response.isSuccessful() && response.body() != null) callback.onSuccess(response.body());
           else callback.onError("Unable to load call history.");

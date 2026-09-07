@@ -1,6 +1,7 @@
 package com.w3n.pinggo.call;
 
 import android.content.Context;
+import android.os.SystemClock;
 import android.util.Log;
 import android.util.Base64;
 import com.google.gson.JsonObject;
@@ -29,6 +30,7 @@ import org.webrtc.audio.JavaAudioDeviceModule;
 /** Owns one WebRTC audio session and exchanges SDP/ICE through ChatRepository. */
 public final class WebRTCCallClient implements ChatRepository.CallEventListener {
   private static final String TAG = "PingGoRtcSignal";
+  private static final String CONNECTION_TAG = "PingGoCallConnection";
   public interface Listener {
     void onState(String state);
     void onRemoteMuteChanged(boolean muted);
@@ -69,7 +71,7 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
     this.localUserId = normalize(localUserId);
     this.remoteUserId = normalize(remoteUserId);
     this.mediaType = "video".equals(mediaType) ? "video" : "audio";
-    Log.d(TAG, "startOutgoing callId=" + this.callId + " mediaType=" + this.mediaType);
+    logConnection("outgoing_start", "mediaType=" + this.mediaType);
     repository.setCallEventListener(this);
     rtcThread.execute(() -> {
       if (!initialize()) return;
@@ -97,7 +99,7 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
     this.mediaType = "video".equals(mediaType) ? "video" : "audio";
     offer = normalizeSdp(offer);
     final String normalizedOffer = offer;
-    Log.d(TAG, "startIncoming callId=" + this.callId + " mediaType=" + this.mediaType
+    logConnection("incoming_start", "mediaType=" + this.mediaType
         + " offerLength=" + normalizedOffer.length() + " offerHash=" + sdpHash(normalizedOffer));
     repository.setCallEventListener(this);
     rtcThread.execute(() -> {
@@ -154,15 +156,22 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
       send("ice_candidate", "candidate", value);
     }
     @Override public void onConnectionChange(PeerConnection.PeerConnectionState state) {
+      logConnection("peer_connection", "state=" + state.name());
       if (state == PeerConnection.PeerConnectionState.CONNECTED) notifyState("Connected");
       else if (state == PeerConnection.PeerConnectionState.DISCONNECTED) notifyState("Reconnecting…");
       else if (state == PeerConnection.PeerConnectionState.FAILED) fail("Voice connection failed.");
       else if (state == PeerConnection.PeerConnectionState.CLOSED) notifyState("Ended");
     }
-    @Override public void onSignalingChange(PeerConnection.SignalingState state) {}
-    @Override public void onIceConnectionChange(PeerConnection.IceConnectionState state) {}
+    @Override public void onSignalingChange(PeerConnection.SignalingState state) {
+      logConnection("signaling", "state=" + state.name());
+    }
+    @Override public void onIceConnectionChange(PeerConnection.IceConnectionState state) {
+      logConnection("ice_connection", "state=" + state.name());
+    }
     @Override public void onIceConnectionReceivingChange(boolean receiving) {}
-    @Override public void onIceGatheringChange(PeerConnection.IceGatheringState state) {}
+    @Override public void onIceGatheringChange(PeerConnection.IceGatheringState state) {
+      logConnection("ice_gathering", "state=" + state.name());
+    }
     @Override public void onIceCandidatesRemoved(IceCandidate[] candidates) {}
     @Override public void onAddStream(MediaStream stream) {}
     @Override public void onRemoveStream(MediaStream stream) {}
@@ -302,6 +311,7 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
   }
   private void notifyState(String state) { context.getMainExecutor().execute(() -> listener.onState(state)); }
   private void fail(String error) {
+    logConnection("failure", "message=" + error);
     Log.e(TAG, "failure callId=" + callId + " message=" + error);
     context.getMainExecutor().execute(() -> listener.onError(error)); close(false);
   }
@@ -318,6 +328,12 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
       if (audioDeviceModule != null) { audioDeviceModule.release(); }
       rtcThread.shutdown();
     });
+  }
+  private void logConnection(String phase, String detail) {
+    Log.i(CONNECTION_TAG, "phase=" + phase + " callId=" + normalizeText(callId)
+        + " chatId=" + normalizeText(chatId) + " local=" + normalize(localUserId)
+        + " remote=" + normalize(remoteUserId) + " " + detail
+        + " elapsedMs=" + SystemClock.elapsedRealtime());
   }
   private static String normalize(String value) {
     if (value == null) return ""; String result = value.trim();

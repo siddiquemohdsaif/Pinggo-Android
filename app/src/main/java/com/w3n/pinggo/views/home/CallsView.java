@@ -6,8 +6,11 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.graphics.drawable.Drawable;
 import android.view.MotionEvent;
 import android.view.View;
+
+import androidx.core.content.ContextCompat;
 
 import com.ogfa.nativeviews.font.NativeFonts;
 import com.ogfa.nativeviews.image.Image;
@@ -16,11 +19,14 @@ import com.ogfa.nativeviews.text.FontVariation;
 import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
+import com.w3n.pinggo.R;
 import com.w3n.pinggo.modals.CallLog;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /** Scrollable call list implemented with native-views-release.aar components. */
 public final class CallsView extends View {
@@ -35,13 +41,23 @@ public final class CallsView extends View {
     private final ZLayer stateLayer = layers.addLayer("call_state");
     private final CallAdapter adapter = new CallAdapter();
     private final OnCallClickListener clickListener;
+    private final OnCallStartListener callStartListener;
     private final Bitmap dividerBitmap = colorBitmap(0xFFE5EAF0);
+    private final Bitmap phoneIncomingBitmap = drawableBitmap(R.drawable.chat_phone_incoming);
+    private final Bitmap phoneOutgoingBitmap = drawableBitmap(R.drawable.chat_phone_outgoing);
+    private final Bitmap phoneMissedBitmap = drawableBitmap(R.drawable.chat_phone_missed);
+    private final Bitmap videoIncomingBitmap = drawableBitmap(R.drawable.chat_video_incoming);
+    private final Bitmap videoOutgoingBitmap = drawableBitmap(R.drawable.chat_video_outgoing);
+    private final Bitmap videoMissedBitmap = drawableBitmap(R.drawable.chat_video_missed);
+    private final Map<String, Bitmap> avatarCache = new HashMap<>();
     private ComponentList<CallLog> list;
     private Text emptyText;
 
-    public CallsView(Context context, OnCallClickListener clickListener) {
+    public CallsView(Context context, OnCallClickListener clickListener,
+                     OnCallStartListener callStartListener) {
         super(context);
         this.clickListener = clickListener;
+        this.callStartListener = callStartListener;
         setClickable(true);
     }
 
@@ -57,8 +73,10 @@ public final class CallsView extends View {
         stateLayer.clear();
         list = listLayer.add(new ComponentList.Builder<CallLog>(getContext(), "call_component_list",
                 new RectF(0, 0, width, height)).setOrientation(ComponentList.Orientation.VERTICAL)
-                .setItemSize(px(209f)).setPaddingPx(px(33f), px(11f), px(33f), px(264f))
-                .setAdapter(adapter).setClipToBounds(true).setOverscrollEnabled(false)
+                .setItemSize(185f * figmaConfig.getScale(width))
+                .setPaddingPx(0, 0, 0, 155f * figmaConfig.getScale(width))
+                .setAdapter(adapter).setClipToBounds(true).setScrollEnabled(true)
+                .setOverscrollEnabled(false)
                 .setOnItemClickListener((componentList, call, position) ->
                         clickListener.onCallClick(call)));
         emptyText = stateLayer.add(new Text.Builder(getContext(), "empty_calls", "No calls found.",
@@ -85,6 +103,12 @@ public final class CallsView extends View {
     public void release() {
         layers.release();
         if (!dividerBitmap.isRecycled()) dividerBitmap.recycle();
+        recycle(phoneIncomingBitmap, phoneOutgoingBitmap, phoneMissedBitmap,
+                videoIncomingBitmap, videoOutgoingBitmap, videoMissedBitmap);
+        for (Bitmap bitmap : avatarCache.values()) {
+            if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
+        }
+        avatarCache.clear();
     }
 
     private final class CallAdapter extends ComponentList.Adapter<CallLog> {
@@ -105,27 +129,46 @@ public final class CallsView extends View {
             ComponentList.ItemScope scope = item.getScope();
             float width = scope.width();
             float height = scope.height();
+            float scale = figmaConfig.getScale(getWidth());
             ZLayer row = item.addLayer("row");
-            row.add(new Image.Builder(getContext(), scope.id("avatar"), avatar("?"),
-                    new RectF(px(22f), px(27.5f), px(176f), px(181.5f)))
+            row.add(new ChatRowRippleComponent(scope.id("row_ripple"),
+                    new RectF(0f, 0f, width, height)));
+            row.add(new Image.Builder(getContext(), scope.id("avatar"), cachedAvatar("?"),
+                    new RectF(50f * scale, 27f * scale, 182f * scale, 159f * scale))
                     .setScaleType(Image.ScaleType.CENTER_CROP));
-            row.add(rowText(scope.id("name"), new RectF(px(220f), px(19.25f), width - px(159.5f), px(110f)),
-                    sp(17), PRIMARY, FontVariation.SEMI_BOLD));
-            row.add(rowText(scope.id("time"), new RectF(px(220f), px(104.5f), width - px(159.5f), px(187f)),
-                    sp(14), SECONDARY, FontVariation.REGULAR));
-            row.add(new Text.Builder(getContext(), scope.id("type"), "",
-                    new RectF(width - px(154f), 0, width - px(22f), height)).useDefaultFont()
-                    .setTextSizePx(sp(22)).setTextColor(PRIMARY).setAlignment(Text.Alignment.CENTER)
-                    .setVerticalAlignment(Text.VerticalAlignment.CENTER));
+            row.add(rowText(scope.id("name"), new RectF(220f * scale, 38f * scale,
+                    width - 210f * scale, 92f * scale), 42f * scale, PRIMARY,
+                    FontVariation.MEDIUM));
+            row.add(rowText(scope.id("details"), new RectF(220f * scale, 103f * scale,
+                    width - 210f * scale, 157f * scale), 38f * scale, SECONDARY,
+                    FontVariation.REGULAR));
+            row.add(new Image.Builder(getContext(), scope.id("type"), phoneOutgoingBitmap,
+                    new RectF(width - 132f * scale, 57f * scale,
+                            width - 52f * scale, 137f * scale))
+                    .setScaleType(Image.ScaleType.FIT_CENTER));
+            row.add(new ChatRowRippleComponent(scope.id("call_ripple"),
+                    new RectF(width - 176f * scale, 20f * scale, width, 165f * scale)));
             row.add(new Image.Builder(getContext(), scope.id("divider"), dividerBitmap,
-                    new RectF(px(220f), height - px(2.75f), width, height))
+                    new RectF(220f * scale, height - Math.max(1f, scale), width, height))
                     .setScaleType(Image.ScaleType.FIT_XY));
         }
         @Override public void onBindItem(ComponentList.Item item, CallLog call, int position) {
-            item.find("avatar", Image.class).setBitmap(avatar(call.getContactName()));
+            item.find("row_ripple", ChatRowRippleComponent.class).bind(
+                    new RectF(0f, 0f, item.getScope().width(), item.getScope().height()),
+                    () -> clickListener.onCallClick(call), null);
+            item.find("avatar", Image.class).setBitmap(cachedAvatar(call.getContactName()));
             item.find("name", Text.class).setText(call.getContactName());
-            item.find("time", Text.class).setText(call.getCalledTime());
-            item.find("type", Text.class).setText(call.isVideoCall() ? "▣" : "☎");
+            String duration = call.getDuration() == null ? "" : call.getDuration().trim();
+            String details = call.getCalledTime() == null ? "" : call.getCalledTime().trim();
+            if (!duration.isEmpty()) details += (details.isEmpty() ? "" : " · ") + duration;
+            item.find("details", Text.class).setText(details);
+            item.find("type", Image.class)
+                    .setBitmap(callIcon(call));
+            float scale = figmaConfig.getScale(getWidth());
+            item.find("call_ripple", ChatRowRippleComponent.class).bind(
+                    new RectF(item.getScope().width() - 176f * scale, 20f * scale,
+                            item.getScope().width(), 165f * scale),
+                    () -> callStartListener.onCallStart(call, call.isVideoCall()), null);
             item.find("divider", Image.class).setVisible(position < calls.size() - 1);
         }
     }
@@ -138,7 +181,7 @@ public final class CallsView extends View {
     }
 
     private Bitmap avatar(String value) {
-        int size = Math.max(1, Math.round(px(154f)));
+        int size = Math.max(1, Math.round(px(132f)));
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -155,6 +198,27 @@ public final class CallsView extends View {
         return bitmap;
     }
 
+    private Bitmap cachedAvatar(String value) {
+        String key = value == null ? "" : value.trim().toLowerCase(Locale.US);
+        Bitmap cached = avatarCache.get(key);
+        if (cached != null && !cached.isRecycled()) return cached;
+        Bitmap created = avatar(value);
+        avatarCache.put(key, created);
+        return created;
+    }
+
+    private Bitmap callIcon(CallLog call) {
+        int direction = call.getIconDirection();
+        if (call.isVideoCall()) {
+            return direction == CallLog.ICON_MISSED ? videoMissedBitmap
+                    : direction == CallLog.ICON_OUTGOING
+                    ? videoOutgoingBitmap : videoIncomingBitmap;
+        }
+        return direction == CallLog.ICON_MISSED ? phoneMissedBitmap
+                : direction == CallLog.ICON_OUTGOING
+                ? phoneOutgoingBitmap : phoneIncomingBitmap;
+    }
+
     private float px(float value) {
     return figmaConfig.toRuntime(value, Math.max(1, getResources().getDisplayMetrics().widthPixels));
   }
@@ -165,5 +229,26 @@ public final class CallsView extends View {
         return bitmap;
     }
 
+    private Bitmap drawableBitmap(int resource) {
+        Drawable drawable = ContextCompat.getDrawable(getContext(), resource);
+        if (drawable == null) return colorBitmap(Color.TRANSPARENT);
+        int width = Math.max(1, drawable.getIntrinsicWidth());
+        int height = Math.max(1, drawable.getIntrinsicHeight());
+        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+        drawable.setBounds(0, 0, width, height);
+        drawable.draw(canvas);
+        return bitmap;
+    }
+
+    private static void recycle(Bitmap... bitmaps) {
+        for (Bitmap bitmap : bitmaps) {
+            if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
+        }
+    }
+
     public interface OnCallClickListener { void onCallClick(CallLog callLog); }
+    public interface OnCallStartListener {
+        void onCallStart(CallLog callLog, boolean video);
+    }
 }

@@ -3,6 +3,7 @@ package com.w3n.pinggo.data.local;
 import androidx.annotation.NonNull;
 import androidx.room.Entity;
 import androidx.room.Index;
+import androidx.room.Ignore;
 import androidx.room.PrimaryKey;
 
 @Entity(
@@ -27,7 +28,8 @@ public class MessageEntity {
     public Long deliveredTime;
     public Long readTime;
     public String status;
-    public String messageType;
+    @Ignore public String messageType;
+    private int messageTypeCode;
     public String attachmentId;
     public String attachmentKind;
     public String attachmentName;
@@ -51,6 +53,12 @@ public class MessageEntity {
     public String deletedText;
     public boolean invisible;
 
+    public MessageEntity() {
+        messageId = "";
+        setMessageTypeCode(MessageTypeCodec.TEXT);
+    }
+
+    @Ignore
     public MessageEntity(
             @NonNull String messageId,
             String clientMessageId,
@@ -86,7 +94,7 @@ public class MessageEntity {
         this.deliveredTime = deliveredTime;
         this.readTime = readTime;
         this.status = status;
-        this.messageType = messageType;
+        setMessageType(messageType);
         this.attachmentId = attachmentId;
         this.attachmentKind = attachmentKind;
         this.attachmentName = attachmentName;
@@ -97,5 +105,17 @@ public class MessageEntity {
         this.latitude = latitude;
         this.longitude = longitude;
         this.locationAccuracy = locationAccuracy;
+    }
+
+    public int getMessageTypeCode() { return messageTypeCode; }
+
+    public void setMessageTypeCode(int value) {
+        messageTypeCode = value;
+        messageType = MessageTypeCodec.decode(value);
+    }
+
+    public void setMessageType(String value) {
+        messageTypeCode = MessageTypeCodec.encode(value);
+        messageType = MessageTypeCodec.decode(messageTypeCode);
     }
 }

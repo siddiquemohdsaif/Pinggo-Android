@@ -1,6 +1,8 @@
 package com.w3n.pinggo.activity;
 
+import android.Manifest;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
@@ -12,8 +14,9 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
-import androidx.activity.EdgeToEdge;
 import androidx.activity.OnBackPressedCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
@@ -27,7 +30,6 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.data.local.ChatEntity;
-import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.modals.CallLog;
 import com.w3n.pinggo.modals.Chat;
@@ -52,8 +54,9 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
     private HomeMenuDialogView homeMenuDialog;
     private ChatRepository repository;
     private List<ChatEntity> latestChatEntities = new ArrayList<>();
-    private List<MessageEntity> latestCallMessages = new ArrayList<>();
     private JsonArray latestServerCalls;
+    private final ActivityResultLauncher<String> notificationPermission =
+            registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> { });
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -91,10 +94,23 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         });
         ViewCompat.requestApplyInsets(homeView);
         loadChats();
+        requestNotificationPermission();
+    }
+
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS);
+        }
     }
 
     private void configureSystemBars() {
         Window window = getWindow();
+        // Keep the activity full-sized when the IME opens. Screens that need to
+        // react to the keyboard do so through WindowInsetsCompat.
+        WindowCompat.setDecorFitsSystemWindows(window, false);
+
         int systemBarColor = ContextCompat.getColor(
                 this, R.color.login_system_bar_background);
         window.setStatusBarColor(systemBarColor);
@@ -119,12 +135,7 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
             latestChatEntities = entities == null ? new ArrayList<>() : entities;
             homeView.submitChats(toChats(entities));
             if (latestServerCalls != null) submitServerCalls(latestServerCalls);
-            else submitCalls();
             repository.acknowledgePendingIncomingDeliveries();
-        });
-        repository.observeCallMessages().observe(this, messages -> {
-            latestCallMessages = messages == null ? new ArrayList<>() : messages;
-            if (latestServerCalls == null) submitCalls();
         });
         String uid = LoginStateManager.getInstance().getUID(this);
         if (uid != null && !uid.trim().isEmpty()) {
@@ -159,6 +170,9 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
             @Override public void onTotalUnread(int totalUnread) {
                 if (homeView != null) homeView.setTotalUnread(totalUnread);
             }
+            @Override public void onCallsChanged() {
+                loadServerCalls();
+            }
         });
     }
 
@@ -173,7 +187,7 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                 latestServerCalls = values.deepCopy();
                 submitServerCalls(latestServerCalls);
             }
-            @Override public void onError(String error) { /* Keep locally cached call rows. */ }
+            @Override public void onError(String error) { }
         });
     }
 
@@ -198,10 +212,13 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                     && !chat.contactName.trim().isEmpty() ? chat.contactName : otherId;
             long endedAt = jsonLong(call, "endedAt");
             long duration = jsonLong(call, "durationSeconds");
+            boolean outgoing = ownId.equals(normalizeAccountId(callerId));
+            boolean missed = jsonLong(call, "connectedAt") <= 0;
             Date date = new Date(endedAt > 0 ? endedAt : jsonLong(call, "createdAt"));
-            calls.add(new CallLog(contact, rowTime.format(date), fullTime.format(date),
+            calls.add(new CallLog(chatId, jsonString(call, "messageId"), otherId,
+                    contact, rowTime.format(date), fullTime.format(date),
                     formatCallDuration(duration),
-                    "video".equals(jsonString(call, "mediaType"))));
+                    "video".equals(jsonString(call, "mediaType")), outgoing, missed));
         }
         if (homeView != null) homeView.submitCalls(calls);
     }
@@ -227,12 +244,29 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
 
     @Override public void onOpenCall(CallLog callLog) {
         Intent intent = new Intent(this, CallDetailActivity.class);
+        intent.putExtra(CallDetailActivity.EXTRA_CHAT_ID, callLog.getChatId());
+        intent.putExtra(CallDetailActivity.EXTRA_PHONE_NUMBER, callLog.getPhoneNumber());
         intent.putExtra(CallDetailActivity.EXTRA_CONTACT_NAME, callLog.getContactName());
         intent.putExtra(CallDetailActivity.EXTRA_CALLED_TIME, callLog.getCalledTime());
         intent.putExtra(CallDetailActivity.EXTRA_FULL_CALLED_DATE_TIME,
                 callLog.getFullCalledDateTime());
         intent.putExtra(CallDetailActivity.EXTRA_DURATION, callLog.getDuration());
         intent.putExtra(CallDetailActivity.EXTRA_IS_VIDEO_CALL, callLog.isVideoCall());
+        startActivity(intent);
+    }
+
+    @Override public void onStartCall(CallLog callLog, boolean video) {
+        openCall(callLog.getChatId(), callLog.getPhoneNumber(), "", video);
+    }
+
+    private void openCall(String chatId, String phoneNumber, String profilePath, boolean video) {
+        Intent intent = new Intent(this, video ? VideoCallActivity.class : VoiceCallActivity.class);
+        intent.putExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID, chatId);
+        intent.putExtra(VoiceCallActivity.EXTRA_CALL_ID, java.util.UUID.randomUUID().toString());
+        intent.putExtra(VoiceCallActivity.EXTRA_CALLER_ID, phoneNumber);
+        intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER,
+                phoneNumber == null || phoneNumber.isEmpty() ? "Unknown" : "+" + phoneNumber);
+        intent.putExtra(VoiceCallActivity.EXTRA_PROFILE_PATH, profilePath);
         startActivity(intent);
     }
 
@@ -337,37 +371,6 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                     entity.isOnline, entity.lastSeen));
         }
         return chats;
-    }
-
-    private void submitCalls() {
-        if (homeView == null) return;
-        Map<String, ChatEntity> chatsById = new HashMap<>();
-        for (ChatEntity chat : latestChatEntities) chatsById.put(chat.chatId, chat);
-        String ownId = normalizeAccountId(LoginStateManager.getInstance().getUID(this));
-        DateFormat rowTime = new SimpleDateFormat("MMM d, h:mm a", Locale.getDefault());
-        DateFormat fullTime = DateFormat.getDateTimeInstance(
-                DateFormat.LONG, DateFormat.SHORT, Locale.getDefault());
-        List<CallLog> calls = new ArrayList<>();
-        for (MessageEntity message : latestCallMessages) {
-            ChatEntity chat = chatsById.get(message.chatId);
-            String otherId = ownId.equals(normalizeAccountId(message.senderId))
-                    ? message.receiverId : message.senderId;
-            String contactName = chat != null && chat.contactName != null
-                    && !chat.contactName.trim().isEmpty() ? chat.contactName : otherId;
-            Date date = new Date(message.sentTime);
-            calls.add(new CallLog(contactName, rowTime.format(date), fullTime.format(date),
-                    callDuration(message.text), "video_call".equals(message.messageType)));
-        }
-        homeView.submitCalls(calls);
-    }
-
-    private static String callDuration(String text) {
-        if (text == null) return "0 sec";
-        int close = text.indexOf(']');
-        String value = close >= 0 ? text.substring(close + 1).trim() : text.trim();
-        if (value.isEmpty() || value.toLowerCase(Locale.US).contains("missed")
-                || value.toLowerCase(Locale.US).contains("connect")) return "0 sec";
-        return value;
     }
 
     private String homeMessagePreview(ChatEntity entity) {

@@ -5,10 +5,10 @@ import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.widget.Toast;
 
-import androidx.activity.EdgeToEdge;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import com.w3n.pinggo.AppContextProvider;
@@ -22,6 +22,7 @@ import com.w3n.pinggo.R;
 import com.w3n.pinggo.Util.BackgroundRunnerThread;
 import com.w3n.pinggo.Util.MainRunnerThread;
 import com.w3n.pinggo.data.repository.ChatRepository;
+import com.w3n.pinggo.notification.FcmTokenManager;
 import com.w3n.pinggo.views.SplashAnimationView;
 
 import org.json.JSONObject;
@@ -37,7 +38,7 @@ public class SplashScreenActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        EdgeToEdge.enable(this);
+    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         setContentView(R.layout.activity_splash_screen);
         splashAnimationView = findViewById(R.id.splashAnimationView);
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
@@ -120,6 +121,7 @@ public class SplashScreenActivity extends AppCompatActivity {
 
         listRoutesStarted = true;
         AppFunctionManager.getInstance().applyAuth(getApplicationContext());
+        FcmTokenManager.refreshAndUpload(getApplicationContext());
         ChatRepository repository = ChatRepository.getInstance(getApplicationContext());
         repository.connect();
         repository.preloadChatCache();

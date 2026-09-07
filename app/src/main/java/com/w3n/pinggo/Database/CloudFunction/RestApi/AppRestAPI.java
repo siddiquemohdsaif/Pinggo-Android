@@ -61,6 +61,9 @@ public interface AppRestAPI {
   @POST("calls/list")
   Call<JsonObject> getCallList(@Body RequestBody body);
 
+  @POST("calls/logs")
+  Call<JsonObject> getCallLogs(@Body RequestBody body);
+
   @POST("chats/getChat")
   Call<JsonObject> getChat(@Body RequestBody body);
 

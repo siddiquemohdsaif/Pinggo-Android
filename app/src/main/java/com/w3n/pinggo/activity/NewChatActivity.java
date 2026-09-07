@@ -9,13 +9,13 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.provider.ContactsContract;
 import android.widget.Toast;
-import androidx.activity.EdgeToEdge;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -55,7 +55,7 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
-    EdgeToEdge.enable(this);
+    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     newChatView = new NewChatView(this, this);
     forwardSourceChatId = getIntent().getStringExtra(EXTRA_FORWARD_SOURCE_CHAT_ID);
     forwardMessageIds = getIntent().getStringArrayListExtra(EXTRA_FORWARD_MESSAGE_IDS);

@@ -106,7 +106,7 @@ public final class HomeView extends ZLayerViewGroup {
         });
         chatsView.setOnNewChatListener(listener::onNewChat);
         chatsView.setOnNewGroupListener(listener::onNewGroup);
-        callsView = new CallsView(context, listener::onOpenCall);
+        callsView = new CallsView(context, listener::onOpenCall, listener::onStartCall);
         meetsView = new MeetsView(context);
         bottomNavigationView = new BottomNavigationView(context, new BottomNavigationView.Listener() {
             @Override public void onChatsSelected() { showChats(); }
@@ -485,6 +485,7 @@ public final class HomeView extends ZLayerViewGroup {
     public interface Listener {
         void onOpenChat(Chat chat);
         void onOpenCall(CallLog callLog);
+        void onStartCall(CallLog callLog, boolean video);
         void onNewChat();
         void onNewGroup();
         void onMakeCall();

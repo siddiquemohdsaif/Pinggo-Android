@@ -124,6 +124,10 @@ public class AppFunctionManager {
     CallLogHandler.getCallList(appApi, phoneNumber, callback);
   }
 
+  public void getCallLogs(String phoneNumber, String chatId, Callback callback) {
+    CallLogHandler.getCallLogs(appApi, phoneNumber, chatId, callback);
+  }
+
   public void getChatList(String phoneNumber, int pageSize, String cursor, Callback callback) {
     ChatHandler.getChatList(appApi, phoneNumber, pageSize, cursor, callback);
   }

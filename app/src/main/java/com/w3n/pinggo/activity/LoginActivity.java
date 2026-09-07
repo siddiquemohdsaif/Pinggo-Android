@@ -33,6 +33,10 @@ public class LoginActivity extends AppCompatActivity {
 
     private void configureSystemBars() {
         Window window = getWindow();
+        // Keep the activity at its full size when the IME opens. Login content
+        // handles IME insets explicitly and moves only the focused card.
+        WindowCompat.setDecorFitsSystemWindows(window, false);
+
         int systemBarColor = ContextCompat.getColor(
                 this, R.color.login_system_bar_background);
         window.setStatusBarColor(systemBarColor);

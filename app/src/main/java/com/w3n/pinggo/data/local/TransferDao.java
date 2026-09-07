@@ -23,6 +23,6 @@ public interface TransferDao {
     void completed(String id, String attachmentId, String url, String localUri, long time);
     @Query("UPDATE transfers SET status=:status, error=:error, updatedTime=:time WHERE transferId=:id")
     void failed(String id, String status, String error, long time);
-    @Query("UPDATE transfers SET status='message_sent', updatedTime=:time WHERE clientMessageId=:clientMessageId AND direction='upload'")
-    void messageSent(String clientMessageId, long time);
+    @Query("UPDATE transfers SET messageId=:messageId, status='message_sent', updatedTime=:time WHERE clientMessageId=:clientMessageId AND direction='upload'")
+    void messageSent(String clientMessageId, String messageId, long time);
 }

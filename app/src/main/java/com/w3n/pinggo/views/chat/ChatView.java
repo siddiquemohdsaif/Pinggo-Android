@@ -318,13 +318,10 @@ public final class ChatView extends View {
         String newLastId = adapter.messageIdAt(adapter.getItemCount() - 1);
         boolean appended = oldLastId != null && !oldLastId.equals(newLastId);
         int anchorPosition = adapter.indexOfMessage(anchorId);
-        if (oldCount == 0 || (wasNearBottom && appended && !prepended)) {
-          int newestPosition = adapter.getItemCount() - 1;
-          // The data refresh already binds the visible range. Do not recycle and bind it again
-          // when the entire incremental window already fits on screen.
-          if (list.getLastVisiblePosition() < newestPosition) {
-            list.scrollToPosition(newestPosition);
-          }
+        if (forceBottomOnNextMessageSubmission
+            || oldCount == 0 || (wasNearBottom && appended && !prepended)) {
+          scrollListFullyToBottom();
+          forceBottomOnNextMessageSubmission = false;
         } else if (anchorPosition >= 0) {
           float desiredOffset = adapter.contentStartAt(anchorPosition, availableWidth)
               + anchorPixelOffset;
@@ -386,9 +383,21 @@ public final class ChatView extends View {
   public void scrollToBottom() {
     forceBottomOnNextMessageSubmission = true;
     if (list == null || adapter.getItemCount() == 0) return;
+    scrollListFullyToBottom();
+    invalidate();
+  }
+
+  /** Aligns the end of the newest row above the composer, including tall media rows. */
+  private void scrollListFullyToBottom() {
+    if (list == null || adapter.getItemCount() == 0) return;
     list.stopScroll();
     list.scrollToPosition(adapter.getItemCount() - 1);
-    invalidate();
+    // ComponentList#scrollToPosition guarantees visibility, but it does not guarantee that
+    // the row's bottom edge is visible. A following bounded scroll is clamped to the content
+    // maximum and therefore works for text, files, images, video, audio, and location rows.
+    float remainingContent = adapter.contentStartAt(
+        adapter.getItemCount(), getMessageLayoutWidth());
+    list.scrollBy(0f, remainingContent + list.getBounds().height());
   }
 
   public void revealMessage(String messageId) {
@@ -445,7 +454,7 @@ public final class ChatView extends View {
 
     adapter.refreshMeasuredRows();
     if (keepBottom) {
-      list.scrollToPosition(adapter.getItemCount() - 1);
+      scrollListFullyToBottom();
     } else {
       int anchorPosition = adapter.indexOfMessage(anchorId);
       if (anchorPosition >= 0) {
@@ -1135,7 +1144,7 @@ public final class ChatView extends View {
     if (!empty) {
       int anchorPosition = adapter.indexOfMessage(previousAnchorId);
       if (forceBottomOnNextMessageSubmission || wasNearBottom || anchorPosition < 0) {
-        list.scrollToPosition(adapter.getItemCount() - 1);
+        scrollListFullyToBottom();
         forceBottomOnNextMessageSubmission = false;
       }
       else list.scrollToPosition(anchorPosition);
@@ -1160,7 +1169,7 @@ public final class ChatView extends View {
       // Resizing the viewport does not change ComponentList's scroll offset. Keep a
       // conversation that was at the bottom pinned to its newest message when the IME
       // reduces the available height; otherwise the final rows remain below the keyboard.
-      if (wasNearBottom && itemCount > 0) list.scrollToPosition(itemCount - 1);
+      if (wasNearBottom && itemCount > 0) scrollListFullyToBottom();
     }
     invalidate();
   }

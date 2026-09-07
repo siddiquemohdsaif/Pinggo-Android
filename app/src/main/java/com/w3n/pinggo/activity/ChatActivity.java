@@ -37,7 +37,6 @@ import android.util.Log;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.Toast;
-import androidx.activity.EdgeToEdge;
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -46,6 +45,7 @@ import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.lifecycle.LiveData;
@@ -55,6 +55,7 @@ import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.local.PresenceEntity;
 import com.w3n.pinggo.data.cache.MediaPreviewCache;
 import com.w3n.pinggo.data.repository.ChatRepository;
+import com.w3n.pinggo.notification.PingGoNotificationManager;
 import com.w3n.pinggo.views.chat.ChatView;
 import com.w3n.pinggo.views.chat.ChatViewListener;
 import com.w3n.pinggo.views.chat.ChatPerformanceProfiler;
@@ -314,7 +315,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   protected void onCreate(Bundle state) {
     super.onCreate(state);
     long createStartedNanos = SystemClock.elapsedRealtimeNanos();
-    EdgeToEdge.enable(this);
+    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     String name = getIntent().getStringExtra(EXTRA_CHAT_NAME);
     if (name == null || name.trim().isEmpty()) name = "Chat";
     chatName = name;
@@ -616,7 +617,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   @Override
   protected void onStart() {
     super.onStart();
-    if (repository != null && chatId != null) repository.setActiveChat(chatId);
+    if (repository != null && chatId != null) {
+      repository.setActiveChat(chatId);
+      PingGoNotificationManager.clearChatNotification(this, chatId);
+    }
   }
 
   @Override

@@ -8,12 +8,12 @@ import android.os.Bundle;
 import android.text.InputType;
 import android.view.ViewGroup;
 import android.widget.Toast;
-import androidx.activity.EdgeToEdge;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
@@ -40,7 +40,7 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
-    EdgeToEdge.enable(this);
+    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     settingsView = new SettingsView(this, this);
     setContentView(settingsView);
     ViewCompat.setOnApplyWindowInsetsListener(

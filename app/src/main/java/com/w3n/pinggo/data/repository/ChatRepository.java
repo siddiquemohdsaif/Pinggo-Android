@@ -56,6 +56,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ConcurrentHashMap;
 import java.nio.charset.StandardCharsets;
 import java.io.IOException;
 import java.io.InputStream;
@@ -83,6 +84,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
         default void onTotalUnread(int totalUnread) { }
         default void onBlockStatus(String chatId, boolean blocked) { }
+        default void onCallsChanged() { }
     }
 
     public interface CallEventListener {
@@ -112,6 +114,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     public interface ReplyTargetsCallback {
         void onLoaded(List<MessageEntity> messages);
+    }
+
+    public interface SeenCallback {
+        void onSuccess();
+        void onError(String message);
     }
 
     /** Pagination state cached in memory and persisted across application processes. */
@@ -162,6 +169,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             Collections.synchronizedSet(new HashSet<>());
     private final Set<String> pendingDeliveredAcks =
             Collections.synchronizedSet(new HashSet<>());
+    private final Map<String, SeenCallback> pendingSeenCallbacks = new ConcurrentHashMap<>();
     private final Map<String, MessageSessionState> messageSessionStates = new HashMap<>();
     private final SharedPreferences messagePaginationPreferences;
     private final Map<String, Map<String, MessageEntity>> temporaryReplyTargets =
@@ -348,11 +356,6 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         int requested = Math.max(1, limit);
         return messageDao.observeLatestMessages(
                 chatId, requested == Integer.MAX_VALUE ? requested : requested + 1);
-    }
-
-    /** Call history is stored by the server as voice_call/video_call chat messages. */
-    public LiveData<List<MessageEntity>> observeCallMessages() {
-        return messageDao.observeCallMessages();
     }
 
     /** Loads quoted messages outside the visible Room page without adding them to the timeline. */
@@ -542,6 +545,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     public void setActiveChat(String chatId) {
         activeChatId = chatId == null ? "" : chatId.trim();
+        sendActiveChatState();
         if (!activeChatId.isEmpty()) {
             String openedChatId = activeChatId;
             ioExecutor.execute(() -> {
@@ -562,7 +566,17 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     public void clearActiveChat(String chatId) {
         String closingChatId = chatId == null ? "" : chatId.trim();
-        if (activeChatId.equals(closingChatId)) activeChatId = "";
+        if (activeChatId.equals(closingChatId)) {
+            activeChatId = "";
+            sendActiveChatState();
+        }
+    }
+
+    private void sendActiveChatState() {
+        JsonObject event = new JsonObject();
+        event.addProperty("type", "active_chat");
+        event.addProperty("chatId", activeChatId);
+        socketClient.send(event);
     }
 
     public LiveData<List<TransferEntity>> observeTransfers(String chatId) {
@@ -584,6 +598,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             }
             if (transfer == null) transfer = new TransferEntity(UUID.randomUUID().toString());
             transfer.attachmentId = message.attachmentId;
+            transfer.messageId = message.messageId;
             transfer.clientMessageId = message.clientMessageId;
             transfer.direction = "download";
             transfer.chatId = message.chatId;
@@ -996,7 +1011,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         event.addProperty("senderId", senderId);
         event.addProperty("receiverId", receiverId);
         event.addProperty("text", text);
-        event.addProperty("messageType", messageType);
+        event.addProperty("messageType",
+                com.w3n.pinggo.data.local.MessageTypeCodec.encode(messageType));
         if (attachment != null) event.addProperty("attachmentId", JsonParserUtil.getString(attachment, "id"));
         if (attachment != null && attachment.has("width")) {
             event.addProperty("attachmentWidth", JsonParserUtil.getLong(attachment, "width"));
@@ -1242,7 +1258,12 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     public void markSeen(String chatId, List<String> messageIds) {
+        markSeen(chatId, messageIds, null);
+    }
+
+    public void markSeen(String chatId, List<String> messageIds, SeenCallback callback) {
         if (messageIds == null || messageIds.isEmpty()) {
+            if (callback != null) callback.onError("Message id missing.");
             return;
         }
 
@@ -1254,7 +1275,28 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         event.addProperty("type", "message_seen");
         event.addProperty("chatId", chatId);
         event.add("messageIds", ids);
-        socketClient.send(event);
+        if (callback != null) pendingSeenCallbacks.put(chatId, callback);
+        if (!socketClient.send(event) && callback != null) {
+            pendingSeenCallbacks.remove(chatId, callback);
+            callback.onError("Unable to mark messages read while disconnected.");
+        }
+    }
+
+    /** Marks every unread incoming message in a chat, including rows absent from notifications. */
+    public void markAllSeen(String chatId, SeenCallback callback) {
+        if (chatId == null || chatId.trim().isEmpty()) {
+            if (callback != null) callback.onError("Chat id missing.");
+            return;
+        }
+        JsonObject event = new JsonObject();
+        event.addProperty("type", "message_seen");
+        event.addProperty("chatId", chatId);
+        event.addProperty("markAll", true);
+        if (callback != null) pendingSeenCallbacks.put(chatId, callback);
+        if (!socketClient.send(event) && callback != null) {
+            pendingSeenCallbacks.remove(chatId, callback);
+            callback.onError("Unable to mark messages read while disconnected.");
+        }
     }
 
     public void markDelivered(String chatId, List<String> messageIds) {
@@ -2040,6 +2082,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     @Override
     public void onConnected() {
+        sendActiveChatState();
         resendCompletedUploadsAwaitingAck();
         retryPersistedPendingMessages();
         String phoneNumber = LoginStateManager.getInstance().getUID(appContext);
@@ -2123,6 +2166,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             handleMessageFailed(event);
         } else if ("new_message".equals(type)) {
             handleNewMessage(event, totalUnreadBeforeEvent, serverTotalUnread);
+        } else if ("calls_list_updated".equals(type)) {
+            notifyCallsChanged();
         } else if ("chat_settings_updated".equals(type)) {
             handleChatSettingsUpdated(event);
         } else if ("chat_cleared".equals(type)) {
@@ -2133,6 +2178,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             handleMessageSeen(event);
         } else if ("message_seen_ack".equals(type)) {
             handleMessageSeen(event);
+        } else if ("message_seen_failed".equals(type)) {
+            handleMessageSeenFailed(event);
         } else if ("message_delivered".equals(type)) {
             handleMessageDelivered(event);
         } else if ("message_delivered_ack".equals(type)) {
@@ -2180,6 +2227,13 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         } else if ("online_status".equals(type)) {
             handleOnlineStatus(event);
         }
+    }
+
+    private void notifyCallsChanged() {
+        EventListener listener = eventListener;
+        if (listener != null) mainHandler.post(() -> {
+            if (eventListener == listener) listener.onCallsChanged();
+        });
     }
 
     private void handleChatSettingsUpdated(JsonObject event) {
@@ -2240,7 +2294,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     messageId, sentTime, MessageStatus.SENT, System.currentTimeMillis());
             MessageEntity acknowledged = messageDao.findByClientMessageId(clientMessageId);
             if (acknowledged != null) updateChatSummary(acknowledged);
-            transferDao.messageSent(clientMessageId, System.currentTimeMillis());
+            transferDao.messageSent(clientMessageId, messageId, System.currentTimeMillis());
         });
     }
 
@@ -2385,6 +2439,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         }
         long readTime = JsonParserUtil.getLong(event, "readTime");
         String eventChatId = JsonParserUtil.getString(event, "chatId");
+        SeenCallback callback = "message_seen_ack".equals(
+                JsonParserUtil.getString(event, "type"))
+                ? pendingSeenCallbacks.remove(eventChatId) : null;
+        if (callback != null) mainHandler.post(callback::onSuccess);
         ioExecutor.execute(() -> {
             messageDao.markSeen(messageIds, MessageStatus.SEEN, readTime);
             for (String messageId : messageIds) {
@@ -2396,6 +2454,17 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                         sentTime, deliveredTime, readTime, MessageStatus.SEEN);
             }
         });
+    }
+
+    private void handleMessageSeenFailed(JsonObject event) {
+        String chatId = JsonParserUtil.getString(event, "chatId");
+        String message = JsonParserUtil.getString(event, "message");
+        SeenCallback callback = pendingSeenCallbacks.remove(chatId);
+        if (callback != null) {
+            mainHandler.post(() -> callback.onError(message.isEmpty()
+                    ? "Unable to mark messages read." : message));
+        }
+        notifySocketError(message);
     }
 
     private void handleMessageEdited(JsonObject event) {
@@ -2564,19 +2633,9 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         boolean invisible = "gone".equals(JsonParserUtil.getString(message, "visible"))
                 || isInvisibleToCurrentUser(message);
         String id = JsonParserUtil.getString(message, "id");
-        if (id.isEmpty()) {
-            id = JsonParserUtil.getString(message, "messageId");
-        }
         String status = JsonParserUtil.getString(message, "status");
-        if (status.isEmpty()) {
-            status = MessageStatus.SENT;
-        }
-        JsonObject attachment = message.has("attachment") && message.get("attachment").isJsonObject()
-                ? message.getAsJsonObject("attachment") : null;
-        JsonObject location = message.has("location") && message.get("location").isJsonObject()
-                ? message.getAsJsonObject("location") : null;
-        String messageType = JsonParserUtil.getString(message, "messageType");
-        if (messageType.isEmpty()) messageType = "text";
+        String messageType = com.w3n.pinggo.data.local.MessageTypeCodec.decode(
+                message.get("messageType").getAsInt());
         MessageEntity entity = new MessageEntity(
                 id,
                 JsonParserUtil.getString(message, "clientMessageId"),
@@ -2590,24 +2649,24 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 getNullableLong(message, "readTime"),
                 status,
                 messageType,
-                attachment == null ? null : JsonParserUtil.getString(attachment, "id"),
-                attachment == null ? null : JsonParserUtil.getString(attachment, "kind"),
-                attachment == null ? null : JsonParserUtil.getString(attachment, "name"),
-                attachment == null ? null : JsonParserUtil.getString(attachment, "mimeType"),
-                attachment == null ? null : JsonParserUtil.getString(attachment, "url"),
+                message.has("attachment") && message.get("attachment").isJsonObject() ? JsonParserUtil.getString(message.getAsJsonObject("attachment"), "id") : null,
+                message.has("attachment") && message.get("attachment").isJsonObject() ? JsonParserUtil.getString(message.getAsJsonObject("attachment"), "kind") : null,
+                message.has("attachment") && message.get("attachment").isJsonObject() ? JsonParserUtil.getString(message.getAsJsonObject("attachment"), "name") : null,
+                message.has("attachment") && message.get("attachment").isJsonObject() ? JsonParserUtil.getString(message.getAsJsonObject("attachment"), "mimeType") : null,
+                message.has("attachment") && message.get("attachment").isJsonObject() ? JsonParserUtil.getString(message.getAsJsonObject("attachment"), "url") : null,
                 null,
-                attachment == null ? null : JsonParserUtil.getLong(attachment, "size"),
-                location == null ? null : location.get("latitude").getAsDouble(),
-                location == null ? null : location.get("longitude").getAsDouble(),
-                location == null || !location.has("accuracy") || location.get("accuracy").isJsonNull()
-                        ? null : location.get("accuracy").getAsFloat()
+                message.has("attachment") && message.get("attachment").isJsonObject() ? getNullableLong(message.getAsJsonObject("attachment"), "size") : null,
+                message.has("location") && message.get("location").isJsonObject() ? message.getAsJsonObject("location").get("latitude").getAsDouble() : null,
+                message.has("location") && message.get("location").isJsonObject() ? message.getAsJsonObject("location").get("longitude").getAsDouble() : null,
+                message.has("location") && message.get("location").isJsonObject() && message.getAsJsonObject("location").has("accuracy")
+                        ? message.getAsJsonObject("location").get("accuracy").getAsFloat() : null
         );
-        entity.attachmentSha256 = attachment == null ? null
-                : JsonParserUtil.getString(attachment, "sha256");
+        JsonObject attachment = message.has("attachment") && message.get("attachment").isJsonObject()
+                ? message.getAsJsonObject("attachment") : null;
+        entity.attachmentSha256 = attachment == null ? null : JsonParserUtil.getString(attachment, "sha256");
         entity.attachmentWidth = nullablePositiveInt(attachment, "width");
         entity.attachmentHeight = nullablePositiveInt(attachment, "height");
-        entity.attachmentOrientation = attachment == null ? null
-                : JsonParserUtil.getString(attachment, "orientation");
+        entity.attachmentOrientation = attachment == null ? null : JsonParserUtil.getString(attachment, "orientation");
         entity.attachmentDurationMs = getNullablePositiveLong(attachment, "durationMs");
         JsonElement pinnedElement = message.get("pinned");
         List<String> pinnedUsers = pinnedUsers(pinnedElement);
@@ -2616,10 +2675,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 && !pinnedElement.isJsonArray() && pinnedElement.getAsBoolean());
         entity.pinnedAt = getNullableLong(message, "pinned_at");
         entity.pinnedBy = encodePinnedUsers(pinnedUsers);
-        entity.forwardedFrom = JsonParserUtil.getString(message, "forwarded_from");
-        if (entity.forwardedFrom.isEmpty()) {
-            entity.forwardedFrom = JsonParserUtil.getString(message, "forwardedFrom");
-        }
+        entity.forwardedFrom = JsonParserUtil.getString(message, "forwardedFrom");
         entity.deletedText = message.has("deletedText") && !message.get("deletedText").isJsonNull()
                 ? JsonParserUtil.getString(message, "deletedText") : null;
         entity.invisible = invisible;
@@ -2637,8 +2693,18 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         return value > 0L ? value : null;
     }
 
+    private static String strictMessageType(JsonObject message) {
+        if (message == null || !message.has("messageType")
+                || message.get("messageType").isJsonNull()
+                || !message.get("messageType").getAsJsonPrimitive().isNumber()) {
+            throw new IllegalArgumentException("messageTypeCode is required");
+        }
+        return com.w3n.pinggo.data.local.MessageTypeCodec.decode(
+                message.get("messageType").getAsInt());
+    }
+
     private boolean isInvisibleToCurrentUser(JsonObject message) {
-        String messageType = JsonParserUtil.getString(message, "messageType");
+        String messageType = strictMessageType(message);
         if ("chat_block".equalsIgnoreCase(messageType)
                 || "chat_unblock".equalsIgnoreCase(messageType)) return false;
         JsonArray invisible = message.has("invisible") && message.get("invisible").isJsonArray()
@@ -2740,17 +2806,13 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             JsonObject lastMessageObject = lastMessageElement.getAsJsonObject();
             lastMessage = getMessagePreview(lastMessageObject);
             lastMessageId = JsonParserUtil.getString(lastMessageObject, "id");
-            if (lastMessageId.isEmpty()) {
-                lastMessageId = JsonParserUtil.getString(lastMessageObject, "messageId");
-            }
             lastMessageTime = JsonParserUtil.getLong(lastMessageObject, "sentTime");
             lastMessageSenderId = normalizeAccountId(
                     JsonParserUtil.getString(lastMessageObject, "senderId"));
             lastMessageDeliveredTime = getNullableLong(lastMessageObject, "deliveredTime");
             lastMessageReadTime = getNullableLong(lastMessageObject, "readTime");
             lastMessageStatus = JsonParserUtil.getString(lastMessageObject, "status");
-            lastMessageType = JsonParserUtil.getString(lastMessageObject, "messageType");
-            if (lastMessageType.isEmpty()) lastMessageType = "text";
+            lastMessageType = strictMessageType(lastMessageObject);
             if (lastMessageObject.has("attachment")
                     && lastMessageObject.get("attachment").isJsonObject()) {
                 lastMessageAttachmentName = JsonParserUtil.getString(
@@ -2795,13 +2857,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     private String getMessagePreview(JsonObject message) {
-        String messageType = JsonParserUtil.getString(message, "messageType");
+        String messageType = strictMessageType(message);
         boolean cleared = JsonParserUtil.getBoolean(message, "cleared");
         String messageId = JsonParserUtil.getString(message, "id");
-        if (messageId.isEmpty()) {
-            messageId = JsonParserUtil.getString(message, "messageId");
-        }
-        if ("audio".equals(messageType) || "voice".equals(messageType)) return "Voice message";
+        if ("audio".equals(messageType)) return "Voice message";
         String text = JsonParserUtil.getString(message, "text").trim();
         // Cleared chat-list placeholders intentionally retain sentTime for stable sorting.
         // Older placeholders predate the explicit marker and are identified by an empty id/text.
@@ -2816,7 +2875,6 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             case "video":
                 return "Video";
             case "audio":
-            case "voice":
                 return "Voice message";
             case "voice_call":
                 return "Voice call";

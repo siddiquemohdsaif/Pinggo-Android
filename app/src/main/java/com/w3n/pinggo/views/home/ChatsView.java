@@ -900,13 +900,12 @@ public final class ChatsView extends View {
             }
             if (call) {
                 boolean missed = preview.toLowerCase(Locale.US).contains("missed");
-                boolean didntConnect = preview.toLowerCase(Locale.US).contains("didn't connect");
                 String iconId = voiceCall ? "voice_call_icon" : "video_call_icon";
                 String textId = voiceCall ? "voice_call_text" : "video_call_text";
                 Bitmap icon = voiceCall
-                        ? (missed ? phoneMissedBitmap : didntConnect ? phoneIncomingBitmap
+                        ? (missed ? phoneMissedBitmap
                         : received ? phoneIncomingBitmap : phoneOutgoingBitmap)
-                        : (missed ? videoMissedBitmap : didntConnect ? videoIncomingBitmap
+                        : (missed ? videoMissedBitmap
                         : received ? videoIncomingBitmap : videoOutgoingBitmap);
                 item.find(iconId, Image.class).setBitmap(icon).setVisible(true);
                 item.find(textId, Text.class)

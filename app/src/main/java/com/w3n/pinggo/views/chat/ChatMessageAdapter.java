@@ -1553,14 +1553,13 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     boolean video = "video_call".equals(message.messageType);
     String label = message.text == null ? "" : message.text.toLowerCase(Locale.US);
     boolean missed = label.contains("missed");
-    boolean didntConnect = label.contains("didn't connect") || label.contains("did not connect");
     if (video) {
       if (missed) return callVideoMissedIcon;
-      if (didntConnect || !own) return callVideoIncomingIcon;
+      if (!own) return callVideoIncomingIcon;
       return callVideoOutgoingIcon;
     }
     if (missed) return callPhoneMissedIcon;
-    if (didntConnect || !own) return callPhoneIncomingIcon;
+    if (!own) return callPhoneIncomingIcon;
     return callPhoneOutgoingIcon;
   }
 
