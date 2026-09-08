@@ -16,7 +16,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase;
                 PresenceEntity.class,
                 TransferEntity.class
         },
-        version = 21,
+        version = 24,
         exportSchema = false
 )
 public abstract class PingGoDatabase extends RoomDatabase {
@@ -124,6 +124,27 @@ public abstract class PingGoDatabase extends RoomDatabase {
             db.execSQL("CREATE INDEX IF NOT EXISTS `index_calls_ownerId_chatId_endedAt` ON `calls` (`ownerId`, `chatId`, `endedAt`)");
         }
     };
+    private static final Migration MIGRATION_21_22 = new Migration(21, 22) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE `chats` ADD COLUMN `isGroup` INTEGER NOT NULL DEFAULT 0");
+            db.execSQL("ALTER TABLE `chats` ADD COLUMN `groupDescription` TEXT");
+            db.execSQL("ALTER TABLE `chats` ADD COLUMN `groupMemberCount` INTEGER NOT NULL DEFAULT 0");
+            db.execSQL("ALTER TABLE `chats` ADD COLUMN `ownGroupRole` TEXT");
+            db.execSQL("ALTER TABLE `chats` ADD COLUMN `membershipVersion` INTEGER NOT NULL DEFAULT 0");
+        }
+    };
+    private static final Migration MIGRATION_22_23 = new Migration(22, 23) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `groupEventType` TEXT");
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `groupEventActorId` TEXT");
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `groupEventTargetIds` TEXT");
+        }
+    };
+    private static final Migration MIGRATION_23_24 = new Migration(23, 24) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `groupReceiptsJson` TEXT");
+        }
+    };
 
     public static PingGoDatabase getInstance(Context context) {
         if (instance != null) {
@@ -141,7 +162,8 @@ public abstract class PingGoDatabase extends RoomDatabase {
                                 MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
                                 MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
                                 MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18,
-                                MIGRATION_19_20, MIGRATION_20_21)
+                                MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22,
+                                MIGRATION_22_23, MIGRATION_23_24)
                         .fallbackToDestructiveMigration()
                         .build();
             }

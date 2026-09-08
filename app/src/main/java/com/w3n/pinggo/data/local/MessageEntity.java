@@ -52,6 +52,13 @@ public class MessageEntity {
     public String forwardedFrom;
     public String deletedText;
     public boolean invisible;
+    /** Structured group lifecycle event rendered as a centered timeline pill. */
+    public String groupEventType;
+    public String groupEventActorId;
+    /** Unit-separator-delimited normalized account ids from systemEvent.targetIds. */
+    public String groupEventTargetIds;
+    /** JSON object keyed by group member id with deliveredAt/readAt timestamps. */
+    public String groupReceiptsJson;
 
     public MessageEntity() {
         messageId = "";

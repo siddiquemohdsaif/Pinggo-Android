@@ -67,6 +67,9 @@ public interface AppRestAPI {
   @POST("chats/getChat")
   Call<JsonObject> getChat(@Body RequestBody body);
 
+  @POST("chats/media")
+  Call<JsonObject> getChatMedia(@Body RequestBody body);
+
   @POST("chats/discover")
   Call<JsonObject> discoverContacts(@Body RequestBody body);
 
@@ -93,6 +96,17 @@ public interface AppRestAPI {
 
   @POST("chats/block-status")
   Call<JsonObject> getBlockStatus(@Body RequestBody body);
+
+  @POST("groups/create") Call<JsonObject> createGroup(@Body RequestBody body);
+  @POST("groups/get") Call<JsonObject> getGroup(@Body RequestBody body);
+  @POST("groups/details") Call<JsonObject> getGroupDetails(@Body RequestBody body);
+  @POST("groups/report") Call<JsonObject> reportGroup(@Body RequestBody body);
+  @POST("groups/messages") Call<JsonObject> getGroupMessages(@Body RequestBody body);
+  @POST("groups/update") Call<JsonObject> updateGroup(@Body RequestBody body);
+  @POST("groups/members/add") Call<JsonObject> addGroupMembers(@Body RequestBody body);
+  @POST("groups/members/remove") Call<JsonObject> removeGroupMembers(@Body RequestBody body);
+  @POST("groups/members/role") Call<JsonObject> updateGroupMemberRole(@Body RequestBody body);
+  @POST("groups/leave") Call<JsonObject> leaveGroup(@Body RequestBody body);
 
   @POST("profile/presence")
   Call<JsonObject> syncPresence(@Body RequestBody body);

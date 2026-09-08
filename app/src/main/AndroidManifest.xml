@@ -97,6 +97,18 @@
             android:exported="false"
             android:windowSoftInputMode="adjustNothing" />
         <activity
+            android:name=".activity.ChatDetailsActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustNothing" />
+        <activity
+            android:name=".activity.ChatInfoActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustNothing" />
+        <activity
+            android:name=".activity.ChatMediaActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustNothing" />
+        <activity
             android:name=".activity.HomeActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustNothing" />

@@ -55,6 +55,7 @@ final class ChatMessageAdapterConfig {
   final MessageLongClickListener messageLongClickListener;
   final ChatPerformanceProfiler profiler;
   final String opponentName;
+  final boolean groupChat;
 
   ChatMessageAdapterConfig(
       Bitmap transparent,
@@ -80,7 +81,8 @@ final class ChatMessageAdapterConfig {
       MessageClickListener messageClickListener,
       MessageLongClickListener messageLongClickListener,
       ChatPerformanceProfiler profiler,
-      String opponentName) {
+      String opponentName,
+      boolean groupChat) {
     this.transparent = transparent;
     this.selectionBackground = selectionBackground;
     this.messageSendingIcon = messageSendingIcon;
@@ -105,5 +107,6 @@ final class ChatMessageAdapterConfig {
     this.messageLongClickListener = messageLongClickListener;
     this.profiler = profiler;
     this.opponentName = opponentName == null ? "" : opponentName;
+    this.groupChat = groupChat;
   }
 }

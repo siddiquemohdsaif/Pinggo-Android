@@ -51,18 +51,16 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
           return i;
         });
     ViewCompat.requestApplyInsets(settingsView);
-    picker =
-        registerForActivityResult(new ActivityResultContracts.GetContent(), this::photoSelected);
+    picker = registerForActivityResult(new ActivityResultContracts.GetContent(), this::photoSelected);
     refresh();
   }
 
   private void refresh() {
     UserData user = LoginStateManager.getInstance().getUserDataModal(this);
     UserData.ProfileData p = user == null ? null : user.getProfileData();
-    phone =
-        p != null && p.getPhoneNumber() != null
-            ? p.getPhoneNumber()
-            : user == null ? "" : user.getPhoneNumber();
+    phone = p != null && p.getPhoneNumber() != null
+        ? p.getPhoneNumber()
+        : user == null ? "" : user.getPhoneNumber();
     settingsView.setValues(p == null ? null : p.getName(), phone);
     loadPhoto(p);
   }
@@ -82,17 +80,16 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
       return;
     }
     new Thread(
-            () -> {
-              try (InputStream in = new URL(url).openStream()) {
-                Bitmap b = BitmapFactory.decodeStream(in);
-                runOnUiThread(() -> settingsView.setProfilePhoto(b));
-              } catch (IOException e) {
-                runOnUiThread(
-                    () ->
-                        Toast.makeText(this, R.string.image_load_failed, Toast.LENGTH_SHORT)
-                            .show());
-              }
-            })
+        () -> {
+          try (InputStream in = new URL(url).openStream()) {
+            Bitmap b = BitmapFactory.decodeStream(in);
+            runOnUiThread(() -> settingsView.setProfilePhoto(b));
+          } catch (IOException e) {
+            runOnUiThread(
+                () -> Toast.makeText(this, R.string.image_load_failed, Toast.LENGTH_SHORT)
+                    .show());
+          }
+        })
         .start();
   }
 
@@ -107,7 +104,8 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
   }
 
   private void photoSelected(Uri uri) {
-    if (uri == null) return;
+    if (uri == null)
+      return;
     Bitmap bitmap = decode(uri);
     if (bitmap == null) {
       Toast.makeText(this, R.string.image_load_failed, Toast.LENGTH_SHORT).show();
@@ -127,13 +125,26 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
   private void showCrop(Bitmap bitmap) {
     cropDialog = new NativeCropDialogView(this, bitmap, 180, 420,
         new NativeCropDialogView.Listener() {
-          @Override public void onRetry() { picker.launch("image/*"); }
-          @Override public void onConfirm(Bitmap cropped) { upload(cropped); }
-          @Override public void onInvalidCrop() {
+          @Override
+          public void onRetry() {
+            picker.launch("image/*");
+          }
+
+          @Override
+          public void onConfirm(Bitmap cropped) {
+            upload(cropped);
+          }
+
+          @Override
+          public void onInvalidCrop() {
             Toast.makeText(SettingsActivity.this, R.string.image_load_failed,
                 Toast.LENGTH_SHORT).show();
           }
-          @Override public void onDismiss() { removeCropDialog(); }
+
+          @Override
+          public void onDismiss() {
+            removeCropDialog();
+          }
         });
     ((ViewGroup) findViewById(android.R.id.content)).addView(cropDialog,
         new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
@@ -143,7 +154,8 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
   private void removeCropDialog() {
     NativeCropDialogView current = cropDialog;
     cropDialog = null;
-    if (current == null) return;
+    if (current == null)
+      return;
     if (current.getParent() instanceof ViewGroup) {
       ((ViewGroup) current.getParent()).removeView(current);
     }
@@ -159,10 +171,9 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
             new AppFunctionManager.Callback() {
               @Override
               public void onSuccess(Object o) {
-                UserData user =
-                    o instanceof UserData
-                        ? (UserData) o
-                        : LoginStateManager.getInstance().getUserDataModal(SettingsActivity.this);
+                UserData user = o instanceof UserData
+                    ? (UserData) o
+                    : LoginStateManager.getInstance().getUserDataModal(SettingsActivity.this);
                 saveLocal(user);
                 refresh();
                 Toast.makeText(SettingsActivity.this, R.string.profile_updated, Toast.LENGTH_SHORT)
@@ -177,7 +188,8 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
   }
 
   private void saveLocal(UserData user) {
-    if (user == null || selectedPhoto == null) return;
+    if (user == null || selectedPhoto == null)
+      return;
     UserData.ProfileData p = user.getProfileData();
     if (p == null) {
       p = new UserData.ProfileData();
@@ -185,7 +197,8 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
       user.setProfileData(p);
     }
     String path = ProfilePhotoLocalStore.save(this, selectedPhoto);
-    if (path != null) p.setLocalProfilePhotoPath(path);
+    if (path != null)
+      p.setLocalProfilePhotoPath(path);
     LoginStateManager.getInstance().setUserData(this, user);
   }
 
@@ -226,7 +239,8 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
   private void removePrompt() {
     NativePromptDialogView current = promptDialog;
     promptDialog = null;
-    if (current == null) return;
+    if (current == null)
+      return;
     if (current.getParent() instanceof ViewGroup) {
       ((ViewGroup) current.getParent()).removeView(current);
     }
@@ -251,7 +265,8 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
   private String current(String field) {
     UserData u = LoginStateManager.getInstance().getUserDataModal(this);
     UserData.ProfileData p = u == null ? null : u.getProfileData();
-    if (p == null) return "";
+    if (p == null)
+      return "";
     String v = p.getName();
     return v == null ? "" : v;
   }
@@ -260,17 +275,17 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
   public void onLogout() {
     settingsView.setLoading(true);
     new Thread(
-            () -> {
-              LogoutDataCleaner.clear(this);
-              LoginStateManager.getInstance().logOut(this);
-              runOnUiThread(
-                  () -> {
-                    Intent i = new Intent(this, LoginActivity.class);
-                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                    startActivity(i);
-                    finish();
-                  });
-            })
+        () -> {
+          LogoutDataCleaner.clear(this);
+          LoginStateManager.getInstance().logOut(this);
+          runOnUiThread(
+              () -> {
+                Intent i = new Intent(this, LoginActivity.class);
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                startActivity(i);
+                finish();
+              });
+        })
         .start();
   }
 
@@ -278,7 +293,8 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
   protected void onDestroy() {
     removeCropDialog();
     removePrompt();
-    if (settingsView != null) settingsView.release();
+    if (settingsView != null)
+      settingsView.release();
     settingsView = null;
     super.onDestroy();
   }

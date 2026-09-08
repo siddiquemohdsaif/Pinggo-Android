@@ -68,6 +68,22 @@ public class ChatHandler {
         enqueueChatCall(appApi.getChat(createJsonBody(jsonObject)), callback);
     }
 
+    public static void getMedia(AppRestAPI appApi, String chatId, String phoneNumber,
+                                int pageSize, Long before,
+                                AppFunctionManager.Callback callback) {
+        JSONObject body = new JSONObject();
+        try {
+            body.put("chatId", chatId);
+            body.put("phoneNumber", normalizePhoneNumber(phoneNumber));
+            body.put("pageSize", pageSize);
+            if (before != null) body.put("before", before);
+        } catch (JSONException error) {
+            handleJsonError(error, callback);
+            return;
+        }
+        enqueueChatCall(appApi.getChatMedia(createJsonBody(body)), callback);
+    }
+
     public static void discoverContacts(AppRestAPI appApi, String phoneNumber, List<String> contacts, AppFunctionManager.Callback callback) {
         JSONObject jsonObject = new JSONObject();
         try {

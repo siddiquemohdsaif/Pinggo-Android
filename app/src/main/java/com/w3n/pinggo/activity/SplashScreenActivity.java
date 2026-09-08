@@ -38,7 +38,7 @@ public class SplashScreenActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         setContentView(R.layout.activity_splash_screen);
         splashAnimationView = findViewById(R.id.splashAnimationView);
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
@@ -50,8 +50,7 @@ public class SplashScreenActivity extends AppCompatActivity {
         loadAppConfig();
         MainRunnerThread.runDelayed(
                 this::onMinimumSplashDurationElapsed,
-                MINIMUM_SPLASH_DURATION_MS
-        );
+                MINIMUM_SPLASH_DURATION_MS);
         MainRunnerThread.runDelayed(this::onAppConfigTimeout, APP_CONFIG_TIMEOUT_MS);
     }
 
@@ -77,8 +76,7 @@ public class SplashScreenActivity extends AppCompatActivity {
                 }),
                 error -> {
                     // The two-second checkpoint displays the load error to the user.
-                }
-        ));
+                }));
     }
 
     private void onMinimumSplashDurationElapsed() {
@@ -103,7 +101,8 @@ public class SplashScreenActivity extends AppCompatActivity {
         navigationStarted = true;
 
         boolean isLoggedIn = LoginStateManager.getInstance().isLoggedIn(this);
-        if (isLoggedIn) startListRoutes();
+        if (isLoggedIn)
+            startListRoutes();
         Class<?> destination = isLoggedIn
                 ? HomeActivity.class
                 : LoginActivity.class;
@@ -117,7 +116,8 @@ public class SplashScreenActivity extends AppCompatActivity {
             return;
         }
         String uid = LoginStateManager.getInstance().getUID(getApplicationContext());
-        if (uid == null || uid.trim().isEmpty()) return;
+        if (uid == null || uid.trim().isEmpty())
+            return;
 
         listRoutesStarted = true;
         AppFunctionManager.getInstance().applyAuth(getApplicationContext());
@@ -137,29 +137,29 @@ public class SplashScreenActivity extends AppCompatActivity {
     }
 
     public void fetchAppConfig(OnSuccessListener<JSONObject> onSuccessListener, OnFailureListener onFailureListener) {
-        FirestoreManager.getInstance().readDocument("AppConfiguration", "AppConfiguration" + "_v_" + getVersionName(), "/", new OnSuccessListener<DocumentSnapshot>() {
-            @Override
-            public void onSuccess(DocumentSnapshot documentSnapshot) {
-                JSONObject appConfig = documentSnapshot.getDataJson();
-                if (appConfig != null) {
-                    onSuccessListener.onSuccess(appConfig);
-                } else {
-                    onFailureListener.onFailure(new Exception("App Config response is empty"));
-                }
-            }
-        }, new OnFailureListener() {
-            @Override
-            public void onFailure(Exception e) {
-                onFailureListener.onFailure(e);
-            }
-        });
+        FirestoreManager.getInstance().readDocument("AppConfiguration", "AppConfiguration" + "_v_" + getVersionName(),
+                "/", new OnSuccessListener<DocumentSnapshot>() {
+                    @Override
+                    public void onSuccess(DocumentSnapshot documentSnapshot) {
+                        JSONObject appConfig = documentSnapshot.getDataJson();
+                        if (appConfig != null) {
+                            onSuccessListener.onSuccess(appConfig);
+                        } else {
+                            onFailureListener.onFailure(new Exception("App Config response is empty"));
+                        }
+                    }
+                }, new OnFailureListener() {
+                    @Override
+                    public void onFailure(Exception e) {
+                        onFailureListener.onFailure(e);
+                    }
+                });
     }
 
     public String getVersionName() {
         try {
             String versionName = getPackageManager()
-                    .getPackageInfo(getPackageName(), 0)
-                    .versionName;
+                    .getPackageInfo(getPackageName(), 0).versionName;
             if (versionName == null || versionName.isEmpty()) {
                 throw new IllegalStateException("App version name is unavailable");
             }

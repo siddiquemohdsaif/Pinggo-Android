@@ -49,10 +49,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-/** Hosts the AAR-native home surface and owns lifecycle, data, and navigation. */
+/**
+ * Hosts the AAR-native home surface and owns lifecycle, data, and navigation.
+ */
 public class HomeActivity extends AppCompatActivity implements HomeView.Listener {
     private static final int SELECTION_STATUS_BAR_COLOR = 0xFFE9EDF0;
-    private static final int BOTTOM_SYSTEM_NAVIGATION_COLOR = 0xFFF9FBFE;
+    private static final int HOME_SYSTEM_BAR_COLOR = 0xFFF7F9FB;
     private HomeView homeView;
     private HomeMenuDialogView homeMenuDialog;
     private ChatRepository repository;
@@ -63,14 +65,17 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
     private boolean callListHasMore;
     private boolean callListLoading;
     private int callListGeneration;
-    private final ActivityResultLauncher<String> notificationPermission =
-            registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> { });
-    private final ActivityResultLauncher<String> contactsPermission =
-            registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
-                if (granted) warmDeviceContacts();
+    private final ActivityResultLauncher<String> notificationPermission = registerForActivityResult(
+            new ActivityResultContracts.RequestPermission(), granted -> {
+            });
+    private final ActivityResultLauncher<String> contactsPermission = registerForActivityResult(
+            new ActivityResultContracts.RequestPermission(), granted -> {
+                if (granted)
+                    warmDeviceContacts();
             });
 
-    @Override protected void onCreate(Bundle savedInstanceState) {
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         configureSystemBars();
         homeView = new HomeView(this, this);
@@ -78,21 +83,35 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         ExitAppController.install(this, null);
         ViewGroup content = findViewById(android.R.id.content);
         homeMenuDialog = new HomeMenuDialogView(this, new HomeMenuDialogView.Listener() {
-            @Override public void onNewChat() { HomeActivity.this.onNewChat(); }
-            @Override public void onNewGroup() {
-                Toast.makeText(HomeActivity.this, "New Group", Toast.LENGTH_SHORT).show();
+            @Override
+            public void onNewChat() {
+                HomeActivity.this.onNewChat();
             }
-            @Override public void onLinkedDevices() {
+
+            @Override
+            public void onNewGroup() {
+                HomeActivity.this.onNewGroup();
+            }
+
+            @Override
+            public void onLinkedDevices() {
                 Toast.makeText(HomeActivity.this, "Linked Devices", Toast.LENGTH_SHORT).show();
             }
-            @Override public void onSettings() { openSettings(); }
+
+            @Override
+            public void onSettings() {
+                openSettings();
+            }
         });
         content.addView(homeMenuDialog, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
-            @Override public void handleOnBackPressed() {
-                if (homeMenuDialog != null && homeMenuDialog.dismissIfShowing()) return;
-                if (homeView != null && homeView.clearChatSelection()) return;
+            @Override
+            public void handleOnBackPressed() {
+                if (homeMenuDialog != null && homeMenuDialog.dismissIfShowing())
+                    return;
+                if (homeView != null && homeView.clearChatSelection())
+                    return;
 
                 setEnabled(false);
                 getOnBackPressedDispatcher().onBackPressed();
@@ -111,14 +130,17 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
     }
 
     private void requestContactsPermission() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
-                == PackageManager.PERMISSION_GRANTED) warmDeviceContacts();
-        else contactsPermission.launch(Manifest.permission.READ_CONTACTS);
+        if (ContextCompat.checkSelfPermission(this,
+                Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED)
+            warmDeviceContacts();
+        else
+            contactsPermission.launch(Manifest.permission.READ_CONTACTS);
     }
 
     private void warmDeviceContacts() {
         DeviceContactResolver.warmUp(this, () -> {
-            if (homeView == null) return;
+            if (homeView == null)
+                return;
             homeView.submitChats(toChats(latestChatEntities));
             submitCachedCalls(latestCallEntities);
         });
@@ -126,8 +148,8 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
 
     private void requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED) {
+                && ContextCompat.checkSelfPermission(this,
+                        Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS);
         }
     }
@@ -138,13 +160,10 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         // react to the keyboard do so through WindowInsetsCompat.
         WindowCompat.setDecorFitsSystemWindows(window, false);
 
-        int systemBarColor = ContextCompat.getColor(
-                this, R.color.login_system_bar_background);
-        window.setStatusBarColor(systemBarColor);
-        window.setNavigationBarColor(BOTTOM_SYSTEM_NAVIGATION_COLOR);
+        window.setStatusBarColor(HOME_SYSTEM_BAR_COLOR);
+        window.setNavigationBarColor(HOME_SYSTEM_BAR_COLOR);
 
-        WindowInsetsControllerCompat controller =
-                WindowCompat.getInsetsController(window, window.getDecorView());
+        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(window, window.getDecorView());
         controller.setAppearanceLightStatusBars(true);
         controller.setAppearanceLightNavigationBars(true);
 
@@ -175,13 +194,15 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         }
     }
 
-    @Override public void onOpenChat(Chat chat) {
+    @Override
+    public void onOpenChat(Chat chat) {
         Intent intent = new Intent(this, ChatActivity.class);
         intent.putExtra(ChatActivity.EXTRA_CHAT_NAME, chat.getContactName());
         intent.putExtra(ChatActivity.EXTRA_CHAT_ID, chat.getChatId());
         intent.putExtra(ChatActivity.EXTRA_PROFILE_PHOTO_URL, chat.getProfilePhotoUrl());
         String localPath = chat.getLocalProfilePhotoPath();
-        if (localPath == null || localPath.trim().isEmpty()) {
+        boolean groupChat = chat.getChatId() != null && chat.getChatId().startsWith("grp_");
+        if (!groupChat && (localPath == null || localPath.trim().isEmpty())) {
             localPath = ChatProfilePhotoStore.getLocalPath(this, chat.getPhoneNumber());
         }
         intent.putExtra(ChatActivity.EXTRA_LOCAL_PROFILE_PHOTO_PATH, localPath);
@@ -189,20 +210,32 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         startActivity(intent);
     }
 
-    @Override protected void onResume() {
+    @Override
+    protected void onResume() {
         super.onResume();
-        if (repository == null) return;
+        if (repository == null)
+            return;
         refreshServerCalls();
         repository.acknowledgePendingIncomingDeliveries();
         repository.setEventListener(new ChatRepository.EventListener() {
-            @Override public void onTyping(String chatId, String userId, boolean typing) {
-                if (homeView != null) homeView.setChatTyping(chatId, typing);
+            @Override
+            public void onTyping(String chatId, String userId, boolean typing) {
+                if (homeView != null)
+                    homeView.setChatTyping(chatId, typing);
             }
-            @Override public void onSocketError(String error) { }
-            @Override public void onTotalUnread(int totalUnread) {
-                if (homeView != null) homeView.setTotalUnread(totalUnread);
+
+            @Override
+            public void onSocketError(String error) {
             }
-            @Override public void onCallsChanged() {
+
+            @Override
+            public void onTotalUnread(int totalUnread) {
+                if (homeView != null)
+                    homeView.setTotalUnread(totalUnread);
+            }
+
+            @Override
+            public void onCallsChanged() {
                 refreshServerCalls();
             }
         });
@@ -217,50 +250,66 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
     }
 
     private void loadServerCalls() {
-        if (callListLoading || !callListHasMore) return;
+        if (callListLoading || !callListHasMore)
+            return;
         String uid = LoginStateManager.getInstance().getUID(this);
-        if (uid == null || uid.trim().isEmpty()) return;
+        if (uid == null || uid.trim().isEmpty())
+            return;
         callListLoading = true;
         final int requestGeneration = callListGeneration;
         final String requestedCursor = nextCallCursor;
         AppFunctionManager.getInstance().getCallList(uid, 20, requestedCursor,
                 new AppFunctionManager.Callback() {
-            @Override public void onSuccess(Object object) {
-                if (requestGeneration != callListGeneration) return;
-                callListLoading = false;
-                if (!(object instanceof JsonObject)) return;
-                JsonObject response = (JsonObject) object;
-                JsonArray values = response.getAsJsonArray("calls");
-                if (values == null) values = new JsonArray();
-                if (callRepository != null) callRepository.cachePage(uid, values);
-                nextCallCursor = jsonString(response, "nextCursor");
-                callListHasMore = response.has("hasMore")
-                        && response.get("hasMore").getAsBoolean()
-                        && !nextCallCursor.isEmpty();
-            }
-            @Override public void onError(String error) {
-                if (requestGeneration == callListGeneration) callListLoading = false;
-            }
-        });
+                    @Override
+                    public void onSuccess(Object object) {
+                        if (requestGeneration != callListGeneration)
+                            return;
+                        callListLoading = false;
+                        if (!(object instanceof JsonObject))
+                            return;
+                        JsonObject response = (JsonObject) object;
+                        JsonArray values = response.getAsJsonArray("calls");
+                        if (values == null)
+                            values = new JsonArray();
+                        if (callRepository != null)
+                            callRepository.cachePage(uid, values);
+                        nextCallCursor = jsonString(response, "nextCursor");
+                        callListHasMore = response.has("hasMore")
+                                && response.get("hasMore").getAsBoolean()
+                                && !nextCallCursor.isEmpty();
+                    }
+
+                    @Override
+                    public void onError(String error) {
+                        if (requestGeneration == callListGeneration)
+                            callListLoading = false;
+                    }
+                });
     }
 
-    @Override public void onLoadMoreCalls() { loadServerCalls(); }
+    @Override
+    public void onLoadMoreCalls() {
+        loadServerCalls();
+    }
 
     private void submitCachedCalls(List<CallEntity> values) {
         List<CallLog> calls = new ArrayList<>();
         Map<String, ChatEntity> chatsById = new HashMap<>();
-        for (ChatEntity chat : latestChatEntities) chatsById.put(chat.chatId, chat);
+        for (ChatEntity chat : latestChatEntities)
+            chatsById.put(chat.chatId, chat);
         String ownId = normalizeAccountId(LoginStateManager.getInstance().getUID(this));
         DateFormat rowTime = new SimpleDateFormat("MMM d, h:mm a", Locale.getDefault());
         DateFormat fullTime = DateFormat.getDateTimeInstance(
                 DateFormat.LONG, DateFormat.SHORT, Locale.getDefault());
-        if (values == null) values = new ArrayList<>();
+        if (values == null)
+            values = new ArrayList<>();
         for (CallEntity call : values) {
             String chatId = call.chatId == null ? "" : call.chatId;
             String callerId = call.callerId == null ? "" : call.callerId;
             String receiverId = call.receiverId == null ? "" : call.receiverId;
             String otherId = ownId.equals(normalizeAccountId(callerId))
-                    ? receiverId : callerId;
+                    ? receiverId
+                    : callerId;
             ChatEntity chat = chatsById.get(chatId);
             String contact = DeviceContactResolver.cachedNameOrPhone(otherId);
             long endedAt = call.endedAt;
@@ -273,7 +322,8 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                     formatCallDuration(duration),
                     "video".equals(call.mediaType), outgoing, missed));
         }
-        if (homeView != null) homeView.submitCalls(calls);
+        if (homeView != null)
+            homeView.submitCalls(calls);
     }
 
     private static String jsonString(JsonObject object, String name) {
@@ -287,15 +337,18 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
     }
 
     private static String formatCallDuration(long seconds) {
-        if (seconds <= 0) return "0 sec";
+        if (seconds <= 0)
+            return "0 sec";
         long hours = seconds / 3600;
         long minutes = (seconds % 3600) / 60;
         long remaining = seconds % 60;
-        if (hours > 0) return String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, remaining);
+        if (hours > 0)
+            return String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, remaining);
         return String.format(Locale.getDefault(), "%d:%02d", minutes, remaining);
     }
 
-    @Override public void onOpenCall(CallLog callLog) {
+    @Override
+    public void onOpenCall(CallLog callLog) {
         Intent intent = new Intent(this, CallDetailActivity.class);
         intent.putExtra(CallDetailActivity.EXTRA_CHAT_ID, callLog.getChatId());
         intent.putExtra(CallDetailActivity.EXTRA_PHONE_NUMBER, callLog.getPhoneNumber());
@@ -308,7 +361,8 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         startActivity(intent);
     }
 
-    @Override public void onStartCall(CallLog callLog, boolean video) {
+    @Override
+    public void onStartCall(CallLog callLog, boolean video) {
         openCall(callLog.getChatId(), callLog.getPhoneNumber(), "", video);
     }
 
@@ -323,56 +377,73 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         startActivity(intent);
     }
 
-    @Override public void onNewChat() {
+    @Override
+    public void onNewChat() {
         startActivity(new Intent(this, NewChatActivity.class));
     }
 
-    @Override public void onNewGroup() {
-        Toast.makeText(this, "Create a group", Toast.LENGTH_SHORT).show();
+    @Override
+    public void onNewGroup() {
+        Intent intent = new Intent(this, NewChatActivity.class);
+        intent.putExtra(NewChatActivity.EXTRA_CREATE_GROUP, true);
+        startActivity(intent);
     }
 
-    @Override public void onMakeCall() {
+    @Override
+    public void onMakeCall() {
         Toast.makeText(this, R.string.make_call, Toast.LENGTH_SHORT).show();
     }
 
-    @Override public void onOpenMenuDialog() {
-        if (homeMenuDialog != null) homeMenuDialog.show();
+    @Override
+    public void onOpenMenuDialog() {
+        if (homeMenuDialog != null)
+            homeMenuDialog.show();
     }
 
-    @Override public void onBulkGroup(List<Chat> chats) {
-        if (homeView != null) homeView.clearChatSelection();
+    @Override
+    public void onBulkGroup(List<Chat> chats) {
+        if (homeView != null)
+            homeView.clearChatSelection();
         Toast.makeText(this, "Create group with " + chats.size() + " selected chats",
                 Toast.LENGTH_SHORT).show();
     }
 
-    @Override public void onBulkPin(List<Chat> chats) {
+    @Override
+    public void onBulkPin(List<Chat> chats) {
         boolean allPinned = !chats.isEmpty();
-        for (Chat chat : chats) allPinned &= chat.isPinned();
+        for (Chat chat : chats)
+            allPinned &= chat.isPinned();
         applyBulkSetting(chats, "pin", allPinned ? 0 : 1,
                 allPinned ? "Chats unpinned" : "Chats pinned", false);
     }
 
-    @Override public void onBulkMute(List<Chat> chats) {
+    @Override
+    public void onBulkMute(List<Chat> chats) {
         boolean allMuted = !chats.isEmpty();
-        for (Chat chat : chats) allMuted &= chat.isMuted();
+        for (Chat chat : chats)
+            allMuted &= chat.isMuted();
         applyBulkSetting(chats, "mute", allMuted ? 0 : -1,
                 allMuted ? "Chats unmuted" : "Chats muted", false);
     }
 
-    @Override public void onBulkDelete(List<Chat> chats) {
+    @Override
+    public void onBulkDelete(List<Chat> chats) {
         applyBulkSetting(chats, "delete", 1, "Chats deleted", true);
     }
 
-    @Override public void onChatSelectionChanged(boolean selected) {
+    @Override
+    public void onChatSelectionChanged(boolean selected) {
         getWindow().setStatusBarColor(selected
                 ? SELECTION_STATUS_BAR_COLOR
-                : ContextCompat.getColor(this, R.color.login_system_bar_background));
+                : HOME_SYSTEM_BAR_COLOR);
     }
 
     private void applyBulkSetting(List<Chat> chats, String setting, long value,
-                                  String successMessage, boolean deleteLocal) {
-        if (repository == null || chats == null || chats.isEmpty()) return;
-        if (homeView != null) homeView.clearChatSelection();
+            String successMessage, boolean deleteLocal) {
+        if (repository == null || chats == null || chats.isEmpty())
+            return;
+        if (homeView != null)
+            homeView.clearChatSelection();
         List<String> chatIds = new ArrayList<>();
         for (Chat chat : chats) {
             if (chat.getChatId() != null && !chat.getChatId().trim().isEmpty()) {
@@ -381,19 +452,25 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         }
         repository.updateChatSettings(chatIds, setting, value,
                 new AppFunctionManager.Callback() {
-                    @Override public void onSuccess(Object object) {
+                    @Override
+                    public void onSuccess(Object object) {
                         if (deleteLocal) {
-                            for (String chatId : chatIds) repository.deleteLocalChat(chatId);
+                            for (String chatId : chatIds)
+                                repository.deleteLocalChat(chatId);
                         }
                         finishBulkOperation(successMessage);
                     }
-                    @Override public void onError(String error) {
+
+                    @Override
+                    public void onError(String error) {
                         finishBulkOperation("Chats could not be updated");
                     }
+
                     private void finishBulkOperation(String message) {
                         Toast.makeText(HomeActivity.this, message, Toast.LENGTH_SHORT).show();
                         String uid = LoginStateManager.getInstance().getUID(HomeActivity.this);
-                        if (uid != null) repository.refreshChatList(normalizeAccountId(uid));
+                        if (uid != null)
+                            repository.refreshChatList(normalizeAccountId(uid));
                     }
                 });
     }
@@ -404,11 +481,14 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
 
     private List<Chat> toChats(List<ChatEntity> entities) {
         List<Chat> chats = new ArrayList<>();
-        if (entities == null) return chats;
+        if (entities == null)
+            return chats;
         for (ChatEntity entity : entities) {
-            String contact = DeviceContactResolver.cachedNameOrPhone(entity.otherUserId);
+            String contact = entity.isGroup
+                    ? safeGroupName(entity.contactName)
+                    : DeviceContactResolver.cachedNameOrPhone(entity.otherUserId);
             String localPath = entity.localProfilePhotoPath;
-            if (localPath == null || localPath.isEmpty()) {
+            if (!entity.isGroup && (localPath == null || localPath.isEmpty())) {
                 localPath = ChatProfilePhotoStore.getLocalPath(this, entity.otherUserId);
             }
             chats.add(new Chat(entity.chatId, contact, entity.profilePhotoUrl, localPath,
@@ -425,23 +505,30 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         return chats;
     }
 
+    private static String safeGroupName(String value) {
+        return value == null || value.trim().isEmpty() ? "Group" : value.trim();
+    }
+
     private String homeMessagePreview(ChatEntity entity) {
         String text = entity.lastMessage;
-        if (text == null) return null;
+        if (text == null)
+            return null;
         String type = entity.lastMessageType == null ? "" : entity.lastMessageType;
         String action = "chat_report".equalsIgnoreCase(type) ? "reported"
                 : "chat_block".equalsIgnoreCase(type) ? "blocked"
-                : "chat_unblock".equalsIgnoreCase(type) ? "unblocked" : "";
-        if (action.isEmpty()) return text;
+                        : "chat_unblock".equalsIgnoreCase(type) ? "unblocked" : "";
+        if (action.isEmpty())
+            return text;
         String ownNumber = normalizeAccountId(
                 LoginStateManager.getInstance().getUID(this));
         String normalizedText = text.trim();
         String[] participants = normalizedText.split(" " + action + " ", 2);
-        if (!ownNumber.isEmpty() && participants.length == 2) return
-                (ownNumber.equals(normalizeAccountId(participants[0])) ? "You" : participants[0])
-                        + " " + action + " "
-                        + (ownNumber.equals(normalizeAccountId(participants[1]))
-                        ? "You" : participants[1]);
+        if (!ownNumber.isEmpty() && participants.length == 2)
+            return (ownNumber.equals(normalizeAccountId(participants[0])) ? "You" : participants[0])
+                    + " " + action + " "
+                    + (ownNumber.equals(normalizeAccountId(participants[1]))
+                            ? "You"
+                            : participants[1]);
         return normalizedText;
     }
 
@@ -453,7 +540,8 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         return normalized.startsWith("+") ? normalized.substring(1) : normalized;
     }
 
-    @Override protected void onDestroy() {
+    @Override
+    protected void onDestroy() {
         if (homeView != null) {
             ViewCompat.setOnApplyWindowInsetsListener(homeView, null);
             homeView.release();

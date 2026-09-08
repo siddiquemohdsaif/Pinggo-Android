@@ -27,6 +27,8 @@ final class ChatMessageAdapterModels {
     final boolean deleted;
     final boolean showDelivery;
     final boolean own;
+    final boolean groupSender;
+    final String senderId;
     final String mediaType;
     final String attachmentName;
     final String attachmentSource;
@@ -44,6 +46,8 @@ final class ChatMessageAdapterModels {
         boolean deleted,
         boolean showDelivery,
         boolean own,
+        boolean groupSender,
+        String senderId,
         String mediaType,
         String attachmentName,
         String attachmentSource,
@@ -58,6 +62,8 @@ final class ChatMessageAdapterModels {
       this.deleted = deleted;
       this.showDelivery = showDelivery;
       this.own = own;
+      this.groupSender = groupSender;
+      this.senderId = senderId;
       this.mediaType = mediaType;
       this.attachmentName = attachmentName;
       this.attachmentSource = attachmentSource;

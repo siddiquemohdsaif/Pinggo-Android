@@ -30,6 +30,8 @@ final class MessageSelectionHeaderComponent {
   private final Bitmap pin;
   private final Bitmap unpin;
   private final Bitmap delete;
+  private final Bitmap info;
+  private final boolean groupChat;
 
   MessageSelectionHeaderComponent(
       Context context,
@@ -45,7 +47,9 @@ final class MessageSelectionHeaderComponent {
       Bitmap forward,
       Bitmap pin,
       Bitmap unpin,
-      Bitmap delete) {
+      Bitmap delete,
+      Bitmap info,
+      boolean groupChat) {
     this.context = context;
     this.listener = listener;
     this.clearSelection = clearSelection;
@@ -60,6 +64,8 @@ final class MessageSelectionHeaderComponent {
     this.pin = pin;
     this.unpin = unpin;
     this.delete = delete;
+    this.info = info;
+    this.groupChat = groupChat;
   }
 
   void build(ZLayer layer, List<MessageEntity> selected, float width, float top, float scale) {
@@ -89,6 +95,15 @@ final class MessageSelectionHeaderComponent {
     if (selected.size() == 1) {
       action(layer, "reply", reply, 535f, top, scale,
           () -> listener.onReplySelected(selected.get(0)));
+      MessageEntity only = selected.get(0);
+      String uid = com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager
+          .getInstance().getUID(context);
+      if (groupChat && only.senderId != null && uid != null
+          && only.senderId.replace("<plus>", "").replace("+", "")
+          .equals(uid.replace("<plus>", "").replace("+", ""))) {
+        action(layer, "info", info, 425f, top, scale,
+            () -> listener.onMessageInfoSelected(only));
+      }
     }
     action(layer, "copy", copy, 645f, top, scale,
         () -> listener.onCopySelected(selected));

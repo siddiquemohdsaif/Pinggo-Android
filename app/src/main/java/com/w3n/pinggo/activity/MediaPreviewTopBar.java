@@ -16,9 +16,13 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.w3n.pinggo.R;
 
-/** Shared media-preview chrome sized from the 1080 px chat selection-header design. */
+/**
+ * Shared media-preview chrome sized from the 1080 px chat selection-header
+ * design.
+ */
 final class MediaPreviewTopBar {
-  private MediaPreviewTopBar() {}
+  private MediaPreviewTopBar() {
+  }
 
   static FrameLayout add(
       Activity activity,
@@ -31,8 +35,9 @@ final class MediaPreviewTopBar {
     int statusBarResource = activity.getResources().getIdentifier(
         "status_bar_height", "dimen", "android");
     int initialStatusInset = statusBarResource == 0
-        ? 0 : activity.getResources().getDimensionPixelSize(statusBarResource);
-    final int[] retainedStatusInset = {initialStatusInset};
+        ? 0
+        : activity.getResources().getDimensionPixelSize(statusBarResource);
+    final int[] retainedStatusInset = { initialStatusInset };
     View statusBarScrim = new View(activity);
     statusBarScrim.setBackgroundColor(0x40000000);
     root.addView(statusBarScrim, new FrameLayout.LayoutParams(
@@ -53,8 +58,7 @@ final class MediaPreviewTopBar {
           if (statusBars.top > 0) {
             retainedStatusInset[0] = Math.max(retainedStatusInset[0], statusBars.top);
           }
-          FrameLayout.LayoutParams scrimParams =
-              (FrameLayout.LayoutParams) statusBarScrim.getLayoutParams();
+          FrameLayout.LayoutParams scrimParams = (FrameLayout.LayoutParams) statusBarScrim.getLayoutParams();
           if (scrimParams.height != retainedStatusInset[0]) {
             scrimParams.height = retainedStatusInset[0];
             statusBarScrim.setLayoutParams(scrimParams);
@@ -103,9 +107,11 @@ final class MediaPreviewTopBar {
   }
 
   static void setStatusBarShade(ViewGroup topBar, int color) {
-    if (topBar == null) return;
+    if (topBar == null)
+      return;
     Object value = topBar.getTag();
-    if (value instanceof View) ((View) value).setBackgroundColor(color);
+    if (value instanceof View)
+      ((View) value).setBackgroundColor(color);
   }
 
   private static ImageButton iconButton(Activity activity, int resource) {

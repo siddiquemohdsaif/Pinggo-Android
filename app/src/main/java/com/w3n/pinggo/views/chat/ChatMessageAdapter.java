@@ -19,6 +19,8 @@ import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.w3n.pinggo.data.cache.MediaPreviewCache;
 import com.w3n.pinggo.data.local.MessageEntity;
+import com.w3n.pinggo.contacts.DeviceContactResolver;
+import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
@@ -143,6 +145,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   private final ChatMessageAdapterConfig.MessageLongClickListener messageLongClickListener;
   private final ChatPerformanceProfiler profiler;
   private final String opponentName;
+  private final boolean groupChat;
   private final Set<String> selectedMessageIds;
   private final Typeface messageTypeface;
   private final SimpleDateFormat messageTimeFormatter;
@@ -155,6 +158,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   private final Map<String, ReplyContent> replyContents = new ConcurrentHashMap<>();
   private final Map<String, Boolean> mediaPortraits = new ConcurrentHashMap<>();
   private final Map<String, Long> audioDurations = new ConcurrentHashMap<>();
+  private final Map<String, Bitmap> senderAvatars = new ConcurrentHashMap<>();
   private final Map<String, LocationRenderTiming> locationRenderTimings =
       new ConcurrentHashMap<>();
   private Bitmap chatProfile;
@@ -212,6 +216,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     this.messageLongClickListener = config.messageLongClickListener;
     this.profiler = config.profiler;
     this.opponentName = config.opponentName;
+    this.groupChat = config.groupChat;
     this.selectedMessageIds = selectedMessageIds;
     messageTypeface = NativeFonts.load(context, NativeFonts.INTER);
     messageTimeFormatter = new SimpleDateFormat("h:mm a", Locale.getDefault());
@@ -623,6 +628,9 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         scope.id("forwarded_notice"), forwardedMessageIcon, messageTypeface,
         NOTICE_TEXT_SIZE_PX));
     row.add(new MessageNoticeComponent(
+        scope.id("group_sender_notice"), transparent, messageTypeface,
+        NOTICE_TEXT_SIZE_PX).setRegularStyle(true));
+    row.add(new MessageNoticeComponent(
         scope.id("deleted_notice"), deletedMessageIcon, messageTypeface,
         NOTICE_TEXT_SIZE_PX));
     row.add(new PreparedMessageTextComponent(scope.id("message_text")));
@@ -678,6 +686,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       item.find("forwarded_panel", ForwardedMessagePanelComponent.class).hide();
       item.find("reply_preview", ReplyPreviewComponent.class).hide();
       item.find("forwarded_notice", MessageNoticeComponent.class).hide();
+      item.find("group_sender_notice", MessageNoticeComponent.class).hide();
       item.find("deleted_notice", MessageNoticeComponent.class).hide();
       item.find("message_text", PreparedMessageTextComponent.class)
           .bind(new RectF(), null, false).setHighlight("");
@@ -733,9 +742,9 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         .setRegion(left, bubbleTop, right, bubbleBottom);
 
     float headingTop = bubbleTop
-        + (model.forwarded || model.deleted || hasReply
+        + (model.forwarded || model.groupSender || model.deleted || hasReply
             ? NOTICE_PADDING_PX : MESSAGE_TOP_PADDING_PX);
-    float attachmentTop = (attachmentPreview || call) && (model.forwarded || hasReply)
+    float attachmentTop = (attachmentPreview || call) && (model.forwarded || model.groupSender || hasReply)
         ? headingTop + metrics.forwardedHeight + metrics.replyHeight : bubbleTop;
     boolean hasAttachmentCaption = hasAttachmentCaption(model);
     float attachmentBottom = hasAttachmentCaption
@@ -834,10 +843,24 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
 
     MessageNoticeComponent forwardedNotice =
         item.find("forwarded_notice", MessageNoticeComponent.class);
+    float noticeTop = headingTop;
+    MessageNoticeComponent senderNotice =
+        item.find("group_sender_notice", MessageNoticeComponent.class);
+    if (model.groupSender) {
+      String senderLabel = DeviceContactResolver.cachedNameOrPhone(model.senderId);
+      senderNotice.bind(
+          positiveRect(bodyLeft + NOTICE_LEFT_PX, noticeTop,
+              bodyRight - NOTICE_PADDING_PX, noticeTop + NOTICE_ICON_SIZE_PX),
+          senderAvatar(model.senderId, senderLabel), senderLabel,
+          NOTICE_ICON_SIZE_PX, NOTICE_TEXT_GAP_PX);
+      noticeTop += NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX + FORWARDED_EXTRA_HEIGHT_PX;
+    } else {
+      senderNotice.hide();
+    }
     if (model.forwarded) {
       forwardedNotice.bind(
-          positiveRect(bodyLeft + NOTICE_LEFT_PX, headingTop,
-              bodyRight - NOTICE_PADDING_PX, headingTop + NOTICE_ICON_SIZE_PX),
+          positiveRect(bodyLeft + NOTICE_LEFT_PX, noticeTop,
+              bodyRight - NOTICE_PADDING_PX, noticeTop + NOTICE_ICON_SIZE_PX),
           "Forwarded", NOTICE_ICON_SIZE_PX, NOTICE_TEXT_GAP_PX);
     } else {
       forwardedNotice.hide();
@@ -962,6 +985,10 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     replySenders.clear();
     replyContents.clear();
     mediaPrefetches.clear();
+    for (Bitmap avatar : senderAvatars.values()) {
+      if (avatar != null && avatar != transparent && !avatar.isRecycled()) avatar.recycle();
+    }
+    senderAvatars.clear();
     boundRows.clear();
     measurementTools.remove();
   }
@@ -1002,9 +1029,10 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       float replyHeight = model.repliedMessageId == null || model.repliedMessageId.isEmpty()
           ? 0f : replyBlockHeight(replySender, replyValue,
               finalWidth - REPLY_BOX_INSET_PX * 2f);
-      float headerHeight = model.forwarded
-          ? FORWARDED_ATTACHMENT_HEADER_HEIGHT_PX
-          : replyHeight > 0f ? NOTICE_PADDING_PX : 0f;
+      float senderHeaderHeight = model.groupSender ? FORWARDED_ATTACHMENT_HEADER_HEIGHT_PX : 0f;
+      float forwardedHeaderHeight = model.forwarded ? FORWARDED_ATTACHMENT_HEADER_HEIGHT_PX : 0f;
+      float headerHeight = senderHeaderHeight + forwardedHeaderHeight;
+      if (headerHeight == 0f && replyHeight > 0f) headerHeight = NOTICE_PADDING_PX;
       Paint callTimePaint = new Paint(measurementTools.get().timePaint);
       Paint.FontMetrics timeFont = callTimePaint.getFontMetrics();
       MessageMetrics callMetrics = new MessageMetrics(
@@ -1012,9 +1040,10 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
           desiredHeight * scale + headerHeight + replyHeight,
           1f,
           1f,
-          model.forwarded
-              ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX + FORWARDED_LABEL_BOTTOM_GAP_PX
-              : 0f,
+          (model.forwarded ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX
+              + FORWARDED_LABEL_BOTTOM_GAP_PX : 0f)
+              + (model.groupSender ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX
+              + FORWARDED_LABEL_BOTTOM_GAP_PX : 0f),
           replyHeight,
           callTimePaint.measureText(model.formattedTime) + MESSAGE_TIME_RECT_EXTRA_PX,
           (float) Math.ceil(timeFont.descent - timeFont.ascent),
@@ -1060,9 +1089,10 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       float replyHeight = model.repliedMessageId == null || model.repliedMessageId.isEmpty()
           ? 0f : replyBlockHeight(replySender, replyValue,
               finalWidth - REPLY_BOX_INSET_PX * 2f);
-      float headerHeight = model.forwarded
-          ? FORWARDED_HEADER_HEIGHT_PX
-          : replyHeight > 0f ? NOTICE_PADDING_PX : 0f;
+      float senderHeaderHeight = model.groupSender ? FORWARDED_HEADER_HEIGHT_PX : 0f;
+      float forwardedHeaderHeight = model.forwarded ? FORWARDED_HEADER_HEIGHT_PX : 0f;
+      float headerHeight = senderHeaderHeight + forwardedHeaderHeight;
+      if (headerHeight == 0f && replyHeight > 0f) headerHeight = NOTICE_PADDING_PX;
       Paint mediaTimePaint = new Paint(measurementTools.get().timePaint);
       Paint.FontMetrics timeFont = mediaTimePaint.getFontMetrics();
       boolean hasCaption = hasAttachmentCaption(model);
@@ -1087,9 +1117,10 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
           attachmentHeight + headerHeight + replyHeight + captionHeight,
           hasCaption ? finalWidth - MESSAGE_HORIZONTAL_PADDING_PX * 2f : 1f,
           hasCaption ? captionLayout.getHeight() : 1f,
-          model.forwarded
-              ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX + FORWARDED_EXTRA_HEIGHT_PX
-              : 0f,
+          (model.forwarded ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX
+              + FORWARDED_EXTRA_HEIGHT_PX : 0f)
+              + (model.groupSender ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX
+              + FORWARDED_EXTRA_HEIGHT_PX : 0f),
           replyHeight,
           mediaTimePaint.measureText(model.formattedTime)
               + MESSAGE_TIME_RECT_EXTRA_PX,
@@ -1145,6 +1176,12 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
           NOTICE_ICON_SIZE_PX + NOTICE_TEXT_GAP_PX
               + tools.noticePaint.measureText("Forwarded"));
     }
+    if (model.groupSender) {
+      longestLine = Math.max(longestLine,
+          NOTICE_ICON_SIZE_PX + NOTICE_TEXT_GAP_PX
+              + tools.noticePaint.measureText(
+                  DeviceContactResolver.cachedNameOrPhone(model.senderId)));
+    }
     float replyDesiredBodyWidth = 0f;
     if (hasReply) {
       float replyContentWidth = Math.max(
@@ -1168,6 +1205,12 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
           + tools.noticePaint.measureText("Forwarded");
       desiredBodyWidth = Math.max(desiredBodyWidth,
           NOTICE_LEFT_PX + forwardedWidth + NOTICE_PADDING_PX);
+    }
+    if (model.groupSender) {
+      float senderWidth = NOTICE_ICON_SIZE_PX + NOTICE_TEXT_GAP_PX
+          + tools.noticePaint.measureText(DeviceContactResolver.cachedNameOrPhone(model.senderId));
+      desiredBodyWidth = Math.max(desiredBodyWidth,
+          NOTICE_LEFT_PX + senderWidth + NOTICE_PADDING_PX);
     }
     desiredBodyWidth = Math.max(desiredBodyWidth, replyDesiredBodyWidth);
     float bubbleWidth =
@@ -1209,9 +1252,11 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         ? replyBlockHeight(replySender, replyValue,
             bodyWidth - REPLY_BOX_INSET_PX * 2f)
         : 0f;
-    float forwardedHeight = model.forwarded
-        ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX + FORWARDED_EXTRA_HEIGHT_PX : 0f;
-    float messageTop = (model.forwarded || hasReply
+    float forwardedHeight = (model.forwarded
+        ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX + FORWARDED_EXTRA_HEIGHT_PX : 0f)
+        + (model.groupSender
+        ? NOTICE_ICON_SIZE_PX + NOTICE_PADDING_PX + FORWARDED_EXTRA_HEIGHT_PX : 0f);
+    float messageTop = (model.forwarded || model.groupSender || hasReply
             ? NOTICE_PADDING_PX : MESSAGE_TOP_PADDING_PX)
         + forwardedHeight + replyHeight;
     float metadataTop =
@@ -1274,6 +1319,8 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     String formattedTime = formatMessageTime(message.sentTime);
     boolean deleted = isDeletedMessage(message);
     boolean own = isOwn(message);
+    String senderId = normalize(message.senderId);
+    boolean groupSender = groupChat && !own && !deleted && !senderId.isEmpty();
     MessageRenderModel created = new MessageRenderModel(
         displayed,
         formattedTime,
@@ -1283,6 +1330,8 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         deleted,
         own && !deleted,
         own,
+        groupSender,
+        senderId,
         mediaType(message),
         message.attachmentName,
         attachmentSource(message),
@@ -1292,6 +1341,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
             + String.valueOf(message.repliedMessageId) + '\u0001'
             + String.valueOf(message.forwardedFrom) + '\u0001' + message.pinned
             + '\u0001' + deleted + '\u0001' + own
+            + '\u0001' + groupSender + '\u0001' + senderId
             + '\u0001' + sourceSignature));
     synchronized (renderModelCache) {
       renderModelCache.put(cacheKey, created);
@@ -1379,6 +1429,12 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     long previousTimestamp = -1L;
     for (MessageEntity message : values) {
       if (isReportEvent(message)) {
+        if ("group_system".equalsIgnoreCase(message.messageType)) {
+          labels.add(formatGroupEvent(message));
+          long eventTimestamp = timestampMillis(message.sentTime);
+          if (eventTimestamp > 0L) previousTimestamp = eventTimestamp;
+          continue;
+        }
         boolean own = currentUser.equals(normalize(message.senderId));
         String peer = opponentName.isEmpty() ? "this contact" : opponentName;
         boolean blockEvent = "chat_block".equalsIgnoreCase(message.messageType);
@@ -1407,7 +1463,53 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     if (message == null || message.messageType == null) return false;
     String type = message.messageType.trim().toLowerCase(Locale.US);
     return "report".equals(type) || "chat_report".equals(type)
-        || "chat_block".equals(type) || "chat_unblock".equals(type);
+        || "chat_block".equals(type) || "chat_unblock".equals(type)
+        || "group_system".equals(type);
+  }
+
+  private String formatGroupEvent(MessageEntity message) {
+    String actorId = normalize(message.groupEventActorId == null
+        ? message.senderId : message.groupEventActorId);
+    String actor = personLabel(actorId, false);
+    String event = message.groupEventType == null ? "" : message.groupEventType;
+    List<String> targets = groupTargetIds(message.groupEventTargetIds);
+    switch (event) {
+      case "group_created": return actor + " created the group";
+      case "members_added": return actor + " added " + targetLabels(targets);
+      case "members_removed": return actor + " removed " + targetLabels(targets);
+      case "member_left": return actor + " left the group";
+      case "admin_promoted": return actor + " made " + targetLabels(targets) + " an admin";
+      case "admin_demoted": return actor + " removed " + targetLabels(targets) + " as admin";
+      case "group_info_updated": return actor + " updated the group info";
+      default: return "Group updated";
+    }
+  }
+
+  private List<String> groupTargetIds(String encoded) {
+    List<String> values = new ArrayList<>();
+    if (encoded == null || encoded.isEmpty()) return values;
+    for (String value : encoded.split("\\u001F", -1)) {
+      String normalized = normalize(value);
+      if (!normalized.isEmpty()) values.add(normalized);
+    }
+    return values;
+  }
+
+  private String targetLabels(List<String> targets) {
+    if (targets == null || targets.isEmpty()) return "a member";
+    if (targets.size() == 1) return personLabel(targets.get(0), true);
+    if (targets.size() == 2) {
+      return personLabel(targets.get(0), true) + " and " + personLabel(targets.get(1), true);
+    }
+    return personLabel(targets.get(0), true) + ", " + personLabel(targets.get(1), true)
+        + " and " + (targets.size() - 2) + " others";
+  }
+
+  private String personLabel(String userId, boolean objectPosition) {
+    String normalized = normalize(userId);
+    if (currentUser.equals(normalized)) return objectPosition ? "you" : "You";
+    String label = DeviceContactResolver.cachedNameOrPhone(normalized);
+    return label == null || label.trim().isEmpty() ? normalized : label;
   }
 
   /** Returns the first match and invalidates bound-row signatures for highlight-only changes. */
@@ -1704,6 +1806,16 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     }
     return "image".equals(model.mediaType) || "video".equals(model.mediaType)
         || "file".equals(model.mediaType);
+  }
+
+  private Bitmap senderAvatar(String senderId, String senderLabel) {
+    Bitmap cached = senderAvatars.get(senderId);
+    if (cached != null && !cached.isRecycled()) return cached;
+    String path = ChatProfilePhotoStore.getLocalPath(context, senderId);
+    Bitmap avatar = ChatProfileBitmap.load(
+        context, path, senderLabel, Math.round(NOTICE_ICON_SIZE_PX), ACCENT);
+    senderAvatars.put(senderId, avatar);
+    return avatar;
   }
 
   private static String normalize(String value) {

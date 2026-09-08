@@ -51,8 +51,11 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.lifecycle.LiveData;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.data.local.MessageEntity;
+import com.w3n.pinggo.data.local.ChatEntity;
 import com.w3n.pinggo.data.local.PresenceEntity;
 import com.w3n.pinggo.data.cache.MediaPreviewCache;
 import com.w3n.pinggo.data.repository.ChatRepository;
@@ -126,30 +129,31 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private boolean mediaOrientationLocked;
   private String selectedAttachmentType;
   private Uri selectedAttachmentUri;
-  private final ActivityResultLauncher<String[]> attachmentPicker =
-      registerForActivityResult(
-          new ActivityResultContracts.OpenMultipleDocuments(), this::onAttachmentsPicked);
-  private final ActivityResultLauncher<String[]> cameraGalleryPicker =
-      registerForActivityResult(
-          new ActivityResultContracts.OpenMultipleDocuments(), this::onCameraGalleryPicked);
-  private final ActivityResultLauncher<String[]> selectedMediaAddPicker =
-      registerForActivityResult(
-          new ActivityResultContracts.OpenMultipleDocuments(), this::onSelectedMediaAdded);
-  private final ActivityResultLauncher<String[]> cameraPermissions =
-      registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), result -> {
-        if (cameraCaptureView != null) cameraCaptureView.onPermissionsResult(result);
+  private final ActivityResultLauncher<String[]> attachmentPicker = registerForActivityResult(
+      new ActivityResultContracts.OpenMultipleDocuments(), this::onAttachmentsPicked);
+  private final ActivityResultLauncher<String> visualAttachmentPicker = registerForActivityResult(
+      new ActivityResultContracts.GetMultipleContents(), this::onAttachmentsPicked);
+  private final ActivityResultLauncher<String[]> cameraGalleryPicker = registerForActivityResult(
+      new ActivityResultContracts.OpenMultipleDocuments(), this::onCameraGalleryPicked);
+  private final ActivityResultLauncher<String[]> selectedMediaAddPicker = registerForActivityResult(
+      new ActivityResultContracts.OpenMultipleDocuments(), this::onSelectedMediaAdded);
+  private final ActivityResultLauncher<String[]> cameraPermissions = registerForActivityResult(
+      new ActivityResultContracts.RequestMultiplePermissions(), result -> {
+        if (cameraCaptureView != null)
+          cameraCaptureView.onPermissionsResult(result);
       });
-  private final ActivityResultLauncher<String[]> locationPermission =
-      registerForActivityResult(
-          new ActivityResultContracts.RequestMultiplePermissions(), this::onLocationPermission);
-  private final ActivityResultLauncher<String> audioRecordingPermission =
-      registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
-        if (granted) startAudioRecorder();
-        else Toast.makeText(this, "Microphone permission is required.",
-            Toast.LENGTH_SHORT).show();
+  private final ActivityResultLauncher<String[]> locationPermission = registerForActivityResult(
+      new ActivityResultContracts.RequestMultiplePermissions(), this::onLocationPermission);
+  private final ActivityResultLauncher<String> audioRecordingPermission = registerForActivityResult(
+      new ActivityResultContracts.RequestPermission(), granted -> {
+        if (granted)
+          startAudioRecorder();
+        else
+          Toast.makeText(this, "Microphone permission is required.",
+              Toast.LENGTH_SHORT).show();
       });
-  private final ActivityResultLauncher<String> storagePermission =
-      registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
+  private final ActivityResultLauncher<String> storagePermission = registerForActivityResult(
+      new ActivityResultContracts.RequestPermission(), granted -> {
         if (granted && pendingPreviewSaveUri != null) {
           savePreviewMediaCopy(
               pendingPreviewSaveUri, pendingPreviewSaveMessage, pendingPreviewSaveVideo);
@@ -163,8 +167,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         pendingPreviewSaveMessage = null;
         pendingPreviewSaveVideo = false;
       });
-  private final ActivityResultLauncher<Intent> allFilesAccess =
-      registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+  private final ActivityResultLauncher<Intent> allFilesAccess = registerForActivityResult(
+      new ActivityResultContracts.StartActivityForResult(), result -> {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
             && !Environment.isExternalStorageManager()) {
           Toast.makeText(this,
@@ -172,25 +176,32 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
               Toast.LENGTH_LONG).show();
         }
       });
-  private final ActivityResultLauncher<String> contactsPermission =
-      registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
-        if (granted) refreshContactState(true);
+  private final ActivityResultLauncher<String> contactsPermission = registerForActivityResult(
+      new ActivityResultContracts.RequestPermission(), granted -> {
+        if (granted)
+          refreshContactState(true);
         else {
           addContactAfterLookup = false;
           Toast.makeText(this, "Contacts permission is required.", Toast.LENGTH_SHORT).show();
         }
       });
-  private final ActivityResultLauncher<Intent> contactInsert =
-      registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result ->
-          refreshContactState(false));
+  private final ActivityResultLauncher<Intent> contactInsert = registerForActivityResult(
+      new ActivityResultContracts.StartActivityForResult(), result -> refreshContactState(false));
+  private final ActivityResultLauncher<Intent> chatInfo = registerForActivityResult(
+      new ActivityResultContracts.StartActivityForResult(), result -> {
+        Intent data = result.getData();
+        if (result.getResultCode() == RESULT_OK && data != null
+            && ChatInfoActivity.ACTION_SEARCH.equals(
+                data.getStringExtra(ChatInfoActivity.RESULT_ACTION)))
+          beginSearch();
+      });
   private final Set<String> pendingSeen = new HashSet<>();
   private final Set<String> observedMessageKeys = new HashSet<>();
   private final Set<String> automaticFileDownloads = new HashSet<>();
   private final Map<String, Integer> attachmentStates = new ConcurrentHashMap<>();
   private final Map<String, Long> attachmentDownloadedBytes = new ConcurrentHashMap<>();
   private final Map<String, Long> attachmentTotalBytes = new ConcurrentHashMap<>();
-  private final ExecutorService messagePreparationExecutor =
-      Executors.newSingleThreadExecutor();
+  private final ExecutorService messagePreparationExecutor = Executors.newSingleThreadExecutor();
   private final ExecutorService contactLookupExecutor = Executors.newSingleThreadExecutor();
   private final ExecutorService previewActionExecutor = Executors.newSingleThreadExecutor();
   private ChatPerformanceProfiler profiler;
@@ -200,6 +211,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private BlockingProgressView menuProgress;
   private String chatId, currentUser, receiverId, replyingId, editingId;
   private String chatName;
+  private boolean groupChat;
+  private ChatEntity currentChatDetails;
   private String profilePhotoPath;
   private boolean typingStarted, peerTyping, locationPending, attachmentSending;
   private MediaRecorder audioRecorder;
@@ -207,8 +220,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private long audioRecordingStartedAt;
   private final List<Integer> audioRecordingSamples = new ArrayList<>();
   private final Runnable updateAudioRecordingTime = new Runnable() {
-    @Override public void run() {
-      if (audioRecorder == null || chatView == null) return;
+    @Override
+    public void run() {
+      if (audioRecorder == null || chatView == null)
+        return;
       int amplitude = 0;
       try {
         amplitude = Math.max(0, audioRecorder.getMaxAmplitude());
@@ -226,9 +241,11 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private long playingAudioDurationMs;
   private boolean audioPlaybackPrepared;
   private final Runnable updateAudioPlayback = new Runnable() {
-    @Override public void run() {
+    @Override
+    public void run() {
       MediaPlayer player = audioPlayer;
-      if (player == null || chatView == null || !audioPlaybackPrepared) return;
+      if (player == null || chatView == null || !audioPlaybackPrepared)
+        return;
       try {
         chatView.setAudioPlaybackState(playingAudioMessageId, true,
             player.getCurrentPosition(), playingAudioDurationMs);
@@ -251,8 +268,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private List<MessageEntity> latestMessages = Collections.emptyList();
   private List<MessageEntity> availableMessages = Collections.emptyList();
   private LiveData<List<MessageEntity>> messageSource;
-  // Room can deliver the whole network page immediately. The custom list receives only one
-  // viewport first, then progressively larger suffixes so its synchronous layout never blocks
+  // Room can deliver the whole network page immediately. The custom list receives
+  // only one
+  // viewport first, then progressively larger suffixes so its synchronous layout
+  // never blocks
   // the first useful frame on all 50 variable-height rows.
   private int messageLimit = ChatRepository.MESSAGE_PAGE_SIZE;
   private int renderedMessageCount;
@@ -281,36 +300,37 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private boolean addContactAfterLookup;
   private int contactLookupGeneration;
   private final Runnable refreshTyping = new Runnable() {
-    @Override public void run() {
-      if (!typingStarted || repository == null || receiverId.isEmpty()) return;
+    @Override
+    public void run() {
+      if (groupChat || !typingStarted || repository == null || receiverId.isEmpty())
+        return;
       repository.sendTyping(chatId, receiverId, true);
       typingHandler.postDelayed(this, 25_000L);
     }
   };
-  private final Runnable stopTyping =
-      () -> {
-        typingHandler.removeCallbacks(refreshTyping);
-        if (typingStarted && repository != null && !receiverId.isEmpty()) {
-          repository.sendTyping(chatId, receiverId, false);
-          typingStarted = false;
-        }
-      };
-  private final Runnable locationTimeout =
-      () -> {
-        if (!locationPending) return;
-        Location fallback = bestPendingLocation;
-        if (fallback != null && locationAgeMs(fallback) <= LOCATION_FALLBACK_MAX_AGE_MS) {
-          logLocationPerf(
-              "timeout_fallback",
-              locationDetails(fallback) + " limitMs=15000");
-          completeLocation(fallback, "timeout_fallback");
-        } else {
-          locationPending = false;
-          removeLocationUpdates();
-          logLocationPerf("timeout", "limitMs=15000");
-          Toast.makeText(this, "Unable to get current location.", Toast.LENGTH_SHORT).show();
-        }
-      };
+  private final Runnable stopTyping = () -> {
+    typingHandler.removeCallbacks(refreshTyping);
+    if (!groupChat && typingStarted && repository != null && !receiverId.isEmpty()) {
+      repository.sendTyping(chatId, receiverId, false);
+      typingStarted = false;
+    }
+  };
+  private final Runnable locationTimeout = () -> {
+    if (!locationPending)
+      return;
+    Location fallback = bestPendingLocation;
+    if (fallback != null && locationAgeMs(fallback) <= LOCATION_FALLBACK_MAX_AGE_MS) {
+      logLocationPerf(
+          "timeout_fallback",
+          locationDetails(fallback) + " limitMs=15000");
+      completeLocation(fallback, "timeout_fallback");
+    } else {
+      locationPending = false;
+      removeLocationUpdates();
+      logLocationPerf("timeout", "limitMs=15000");
+      Toast.makeText(this, "Unable to get current location.", Toast.LENGTH_SHORT).show();
+    }
+  };
 
   @Override
   protected void onCreate(Bundle state) {
@@ -319,38 +339,44 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     String name;
     chatId = getIntent().getStringExtra(EXTRA_CHAT_ID);
-    contactBlocked = getSharedPreferences("chat_menu_state", MODE_PRIVATE)
+    groupChat = chatId != null && chatId.startsWith("grp_");
+    contactBlocked = !groupChat && getSharedPreferences("chat_menu_state", MODE_PRIVATE)
         .getBoolean("blocked:" + String.valueOf(chatId), false);
     profiler = new ChatPerformanceProfiler(
         chatId, getIntent().getLongExtra(EXTRA_OPEN_REQUEST_NANOS, createStartedNanos));
     profiler.attach(getWindow());
     currentUser = normalize(LoginStateManager.getInstance().getUID(this));
     receiverId = receiver();
-    name = DeviceContactResolver.nameOrPhone(this, receiverId);
+    String suppliedName = getIntent().getStringExtra(EXTRA_CHAT_NAME);
+    name = groupChat
+        ? (suppliedName == null || suppliedName.trim().isEmpty() ? "Group" : suppliedName.trim())
+        : DeviceContactResolver.nameOrPhone(this, receiverId);
     chatName = name;
     profilePhotoPath = getIntent().getStringExtra(EXTRA_LOCAL_PROFILE_PHOTO_PATH);
-    chatView =
-        new ChatView(
-            this,
-            name,
-            currentUser,
-            profilePhotoPath,
-            this,
-            profiler);
+    chatView = new ChatView(
+        this,
+        name,
+        currentUser,
+        profilePhotoPath,
+        groupChat,
+        this,
+        profiler);
     setContentView(chatView);
     getWindow().setStatusBarColor(DEFAULT_STATUS_BAR_COLOR);
     ensurePingGoStorageAccess();
-    conversationMenuDialog =
-        new ConversationMenuDialogView(
-            this,
-            this::handleConversationMenuOption);
+    conversationMenuDialog = new ConversationMenuDialogView(
+        this,
+        this::handleConversationMenuOption);
     conversationMenuDialog.setBlocked(contactBlocked);
+    if (groupChat)
+      conversationMenuDialog.setContactExists(true);
     chatView.setContactBlocked(contactBlocked);
     ((ViewGroup) findViewById(android.R.id.content)).addView(
         conversationMenuDialog,
         new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-    refreshContactState(false);
+    if (!groupChat)
+      refreshContactState(false);
     menuProgress = new BlockingProgressView(this);
     ((ViewGroup) findViewById(android.R.id.content)).addView(
         menuProgress,
@@ -362,12 +388,14 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
           @Override
           public void handleOnBackPressed() {
             if (imagePreviewView != null) {
-              if (imagePreviewView.dismissMenu()) return;
+              if (imagePreviewView.dismissMenu())
+                return;
               closeImagePreview();
               return;
             }
             if (videoPreviewView != null) {
-              if (videoPreviewView.dismissMenu()) return;
+              if (videoPreviewView.dismissMenu())
+                return;
               closeVideoPreview();
               return;
             }
@@ -379,11 +407,15 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
               cameraCaptureView.onBackPressed();
               return;
             }
-            if (chatView != null && chatView.dismissSearch()) return;
-            if (chatView != null && chatView.dismissAttachmentPanel()) return;
-            if (chatView != null && chatView.clearMessageSelection()) return;
+            if (chatView != null && chatView.dismissSearch())
+              return;
+            if (chatView != null && chatView.dismissAttachmentPanel())
+              return;
+            if (chatView != null && chatView.clearMessageSelection())
+              return;
             if (conversationMenuDialog != null
-                && conversationMenuDialog.dismissIfShowing()) return;
+                && conversationMenuDialog.dismissIfShowing())
+              return;
             if (promptDialog != null) {
               removePrompt();
               return;
@@ -405,8 +437,17 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     ViewCompat.requestApplyInsets(chatView);
     repository = ChatRepository.getInstance(this);
     repository.observeChat(chatId).observe(this, chat -> {
+      currentChatDetails = chat;
       long mutedUntil = chat == null ? 0L : chat.notificationMuted;
       notificationsMuted = mutedUntil == -1L || mutedUntil > System.currentTimeMillis();
+      if (groupChat && chat != null) {
+        chatName = chat.contactName == null || chat.contactName.trim().isEmpty()
+            ? "Group"
+            : chat.contactName.trim();
+        chatView.setPresence(chat.groupMemberCount > 0
+            ? chat.groupMemberCount + (chat.groupMemberCount == 1 ? " member" : " members")
+            : "group");
+      }
       if (conversationMenuDialog != null) {
         conversationMenuDialog.setMuted(notificationsMuted);
       }
@@ -416,48 +457,61 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         new ChatRepository.EventListener() {
           @Override
           public void onTyping(String eventChat, String user, boolean typing) {
+            if (groupChat)
+              return;
             if (chatId != null && chatId.equals(eventChat)) {
               peerTyping = typing;
-              if (typing) chatView.setPresence("typing...");
-              else renderPresence(latestPresence);
+              if (typing)
+                chatView.setPresence("typing...");
+              else
+                renderPresence(latestPresence);
             }
           }
 
           @Override
           public void onSocketError(String error) {
             long now = System.currentTimeMillis();
-            if (now - lastSocketErrorToastAt < 15000L) return;
+            if (now - lastSocketErrorToastAt < 15000L)
+              return;
             lastSocketErrorToastAt = now;
             String message = error != null && error.contains("Control frames must be final")
                 ? "Chat connection interrupted. Reconnecting…"
                 : error;
             Toast.makeText(ChatActivity.this,
                 message == null || message.trim().isEmpty()
-                    ? "Chat connection interrupted." : message,
+                    ? "Chat connection interrupted."
+                    : message,
                 Toast.LENGTH_SHORT).show();
           }
 
           @Override
           public void onBlockStatus(String eventChatId, boolean blocked) {
-            if (chatId != null && chatId.equals(eventChatId)) applyBlockState(blocked);
+            if (chatId != null && chatId.equals(eventChatId))
+              applyBlockState(blocked);
           }
         });
-    repository.getBlockStatus(chatId, new AppFunctionManager.Callback() {
-      @Override public void onSuccess(Object object) {
-        if (object instanceof JsonObject) {
-          JsonObject json = (JsonObject) object;
-          applyBlockState(json.has("blocked") && json.get("blocked").getAsBoolean());
+    if (!groupChat)
+      repository.getBlockStatus(chatId, new AppFunctionManager.Callback() {
+        @Override
+        public void onSuccess(Object object) {
+          if (object instanceof JsonObject) {
+            JsonObject json = (JsonObject) object;
+            applyBlockState(json.has("blocked") && json.get("blocked").getAsBoolean());
+          }
         }
-      }
-      @Override public void onError(String error) { }
-    });
+
+        @Override
+        public void onError(String error) {
+        }
+      });
     observe();
     profiler.activityCreated(createStartedNanos);
   }
 
   private void ensurePingGoStorageAccess() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-      if (Environment.isExternalStorageManager()) return;
+      if (Environment.isExternalStorageManager())
+        return;
       try {
         allFilesAccess.launch(new Intent(
             Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
@@ -468,8 +522,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       return;
     }
     if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
-        && ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-        != PackageManager.PERMISSION_GRANTED) {
+        && ContextCompat.checkSelfPermission(this,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
       storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE);
     }
   }
@@ -488,21 +542,23 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       Map<String, Integer> nextStates = new HashMap<>();
       Map<String, Long> nextDownloadedBytes = new HashMap<>();
       Map<String, Long> nextTotalBytes = new HashMap<>();
-      if (values != null) for (com.w3n.pinggo.data.local.TransferEntity transfer : values) {
-        if (!"download".equals(transfer.direction) || transfer.attachmentId == null) continue;
-        Log.d("PingGoAttachmentTransfer", "stage=transfer_observed chatId=" + chatId
-            + " attachmentId=" + transfer.attachmentId + " status=" + transfer.status
-            + " transferredBytes=" + transfer.transferredBytes
-            + " totalSize=" + transfer.totalSize);
-        nextDownloadedBytes.put(transfer.attachmentId, Math.max(0L, transfer.transferredBytes));
-        nextTotalBytes.put(transfer.attachmentId, Math.max(0L, transfer.totalSize));
-        if ("queued".equals(transfer.status) || "downloading".equals(transfer.status)
-            || "retrying".equals(transfer.status)) {
-          nextStates.put(transfer.attachmentId, ATTACHMENT_DOWNLOADING);
-        } else if (transfer.localUri != null && !transfer.localUri.isEmpty()) {
-          nextStates.put(transfer.attachmentId, ATTACHMENT_AVAILABLE);
+      if (values != null)
+        for (com.w3n.pinggo.data.local.TransferEntity transfer : values) {
+          if (!"download".equals(transfer.direction) || transfer.attachmentId == null)
+            continue;
+          Log.d("PingGoAttachmentTransfer", "stage=transfer_observed chatId=" + chatId
+              + " attachmentId=" + transfer.attachmentId + " status=" + transfer.status
+              + " transferredBytes=" + transfer.transferredBytes
+              + " totalSize=" + transfer.totalSize);
+          nextDownloadedBytes.put(transfer.attachmentId, Math.max(0L, transfer.transferredBytes));
+          nextTotalBytes.put(transfer.attachmentId, Math.max(0L, transfer.totalSize));
+          if ("queued".equals(transfer.status) || "downloading".equals(transfer.status)
+              || "retrying".equals(transfer.status)) {
+            nextStates.put(transfer.attachmentId, ATTACHMENT_DOWNLOADING);
+          } else if (transfer.localUri != null && !transfer.localUri.isEmpty()) {
+            nextStates.put(transfer.attachmentId, ATTACHMENT_AVAILABLE);
+          }
         }
-      }
       if (!attachmentStates.equals(nextStates)
           || !attachmentDownloadedBytes.equals(nextDownloadedBytes)
           || !attachmentTotalBytes.equals(nextTotalBytes)) {
@@ -515,7 +571,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         refreshAttachmentRows();
       }
     });
-    if (!receiverId.isEmpty())
+    if (!groupChat && !receiverId.isEmpty())
       repository.observePresence(receiverId).observe(this, this::renderPresence);
     if (!firstMessagePageLoaded) {
       loadMessagePage(null);
@@ -524,13 +580,15 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
           + " limit=" + messageLimit
           + " hasMore=" + messageNetworkHasMore
           + " hasNextCursor=" + (nextMessageCursor != null
-          && !nextMessageCursor.isEmpty()));
+              && !nextMessageCursor.isEmpty()));
     }
-    if (!receiverId.isEmpty()) repository.syncPresence(Collections.singletonList(receiverId));
+    if (!groupChat && !receiverId.isEmpty())
+      repository.syncPresence(Collections.singletonList(receiverId));
   }
 
   private void observeMessageWindow() {
-    if (messageSource != null) messageSource.removeObservers(this);
+    if (messageSource != null)
+      messageSource.removeObservers(this);
     localPageLoading = true;
     Log.d(TESTING_TAG, "message_list source=room_cache phase=observe_start chatId="
         + chatId + " limit=" + messageLimit);
@@ -540,13 +598,16 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void loadMessagePage(String cursor) {
-    if (messagePageLoading || !messageNetworkHasMore) return;
+    if (messagePageLoading || !messageNetworkHasMore)
+      return;
     String requestedCursor = cursor == null ? "" : cursor;
-    if (requestedCursor.equals(inFlightMessageCursor)) return;
+    if (requestedCursor.equals(inFlightMessageCursor))
+      return;
     long requestGeneration = ++messagePageRequestGeneration;
     int localCountBefore = availableMessages.size();
     String oldestBefore = availableMessages.isEmpty()
-        ? "" : stableMessageKey(availableMessages.get(0));
+        ? ""
+        : stableMessageKey(availableMessages.get(0));
     inFlightMessageCursor = requestedCursor;
     messagePageLoading = true;
     Log.d(TESTING_TAG, "message_list source=routes phase=activity_request chatId=" + chatId
@@ -564,10 +625,13 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
           @Override
           public void onLoaded(
               String newCursor, boolean hasMore, int loadedCount, int uniqueCount) {
-            if (requestGeneration != messagePageRequestGeneration) return;
+            if (requestGeneration != messagePageRequestGeneration)
+              return;
             String returnedCursor = newCursor == null ? "" : newCursor;
-            if (uniqueCount > 0) consecutiveMessagePagesWithoutUniqueRows = 0;
-            else consecutiveMessagePagesWithoutUniqueRows++;
+            if (uniqueCount > 0)
+              consecutiveMessagePagesWithoutUniqueRows = 0;
+            else
+              consecutiveMessagePagesWithoutUniqueRows++;
             boolean stalled = loadedCount <= 0
                 || (!requestedCursor.isEmpty() && requestedCursor.equals(returnedCursor));
             firstMessagePageLoaded = true;
@@ -591,14 +655,17 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
                 + " hasMore=" + messageNetworkHasMore);
             updateOlderMessagesState();
             if (searchLoadingAll) {
-              if (messageNetworkHasMore) loadMessagePage(nextMessageCursor);
-              else searchLoadingAll = false;
+              if (messageNetworkHasMore)
+                loadMessagePage(nextMessageCursor);
+              else
+                searchLoadingAll = false;
             }
           }
 
           @Override
           public void onError(String message) {
-            if (requestGeneration != messagePageRequestGeneration) return;
+            if (requestGeneration != messagePageRequestGeneration)
+              return;
             messagePageLoading = false;
             inFlightMessageCursor = null;
             Log.e(TESTING_TAG, "message_list source=routes phase=activity_error chatId="
@@ -611,7 +678,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private static String cursorLabel(String cursor) {
-    if (cursor == null || cursor.isEmpty()) return "none";
+    if (cursor == null || cursor.isEmpty())
+      return "none";
     return Integer.toHexString(cursor.hashCode()) + ":" + cursor.length();
   }
 
@@ -626,21 +694,25 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   protected void onStop() {
-    if (audioRecorder != null) finishAudioRecording(false);
+    if (audioRecorder != null)
+      finishAudioRecording(false);
     pendingAudioPlaybackMessageId = "";
     stopAudioPlayback();
     saveMessageSessionState();
-    if (repository != null && chatId != null) repository.clearActiveChat(chatId);
+    if (repository != null && chatId != null)
+      repository.clearActiveChat(chatId);
     super.onStop();
   }
 
   public void setFloatingCallInset(int insetPx) {
-    if (chatView != null) chatView.setFloatingCallInset(insetPx);
+    if (chatView != null)
+      chatView.setFloatingCallInset(insetPx);
   }
 
   private void messages(List<MessageEntity> values) {
     List<MessageEntity> raw = values == null
-        ? Collections.emptyList() : new ArrayList<>(values);
+        ? Collections.emptyList()
+        : new ArrayList<>(values);
     raw = deduplicateMessages(raw);
     LocalMessageWindow window = trimLocalMessageSentinel(raw);
     List<MessageEntity> snapshot = window.messages;
@@ -656,7 +728,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     }
     int generation = ++replyTargetLoadGeneration;
     repository.loadReplyTargets(chatId, snapshot, replyTargets -> {
-      if (generation != replyTargetLoadGeneration || isFinishing() || isDestroyed()) return;
+      if (generation != replyTargetLoadGeneration || isFinishing() || isDestroyed())
+        return;
       messagesHydrated(snapshot, replyTargets, window.hasOlder);
     });
   }
@@ -666,14 +739,16 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     int anonymousIndex = 0;
     for (MessageEntity message : values) {
       String key = stableMessageKey(message);
-      if (key.isEmpty()) key = "anonymous:" + anonymousIndex++;
+      if (key.isEmpty())
+        key = "anonymous:" + anonymousIndex++;
       unique.put(key, message);
     }
     return new ArrayList<>(unique.values());
   }
 
   private static String stableMessageKey(MessageEntity message) {
-    if (message == null) return "";
+    if (message == null)
+      return "";
     if (message.messageId != null && !message.messageId.isEmpty()) {
       return "server:" + message.messageId;
     }
@@ -688,14 +763,17 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     if (messages != null) {
       for (MessageEntity message : messages) {
         String messageKey = stableMessageKey(message);
-        if (!messageKey.isEmpty()) currentKeys.add(messageKey);
-        if (messageKey.isEmpty() || observedMessageKeys.contains(messageKey)) continue;
+        if (!messageKey.isEmpty())
+          currentKeys.add(messageKey);
+        if (messageKey.isEmpty() || observedMessageKeys.contains(messageKey))
+          continue;
         if (!"file".equals(message.messageType)
             || currentUser.equals(normalize(message.senderId))
             || message.attachmentId == null || message.attachmentId.trim().isEmpty()
             || message.attachmentUrl == null || message.attachmentUrl.trim().isEmpty()
             || (message.attachmentLocalUri != null
-                && canRead(Uri.parse(message.attachmentLocalUri)))) continue;
+                && canRead(Uri.parse(message.attachmentLocalUri))))
+          continue;
         if (automaticFileDownloads.add(message.attachmentId)) {
           startAutomaticFileDownload(message);
         }
@@ -715,21 +793,24 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         + " transferredBytes=0 totalSize=" + totalSize);
     refreshAttachmentRows();
     repository.downloadAttachment(message, new ChatRepository.DownloadCallback() {
-      @Override public void onAvailable(Uri uri) {
+      @Override
+      public void onAvailable(Uri uri) {
         attachmentStates.put(key, ATTACHMENT_AVAILABLE);
         Log.d("PingGoAttachmentTransfer", "stage=automatic_download_available attachmentId="
             + message.attachmentId + " uri=" + uri);
         refreshAttachmentRows();
       }
 
-      @Override public void onQueued() {
+      @Override
+      public void onQueued() {
         attachmentStates.put(key, ATTACHMENT_DOWNLOADING);
         Log.d("PingGoAttachmentTransfer", "stage=automatic_download_queued attachmentId="
             + message.attachmentId);
         refreshAttachmentRows();
       }
 
-      @Override public void onError(String error) {
+      @Override
+      public void onError(String error) {
         attachmentStates.put(key, ATTACHMENT_DOWNLOAD_REQUIRED);
         attachmentDownloadedBytes.remove(key);
         attachmentTotalBytes.remove(key);
@@ -740,7 +821,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     });
   }
 
-  /** Keeps every pin while removing the extra timeline row used as a has-more sentinel. */
+  /**
+   * Keeps every pin while removing the extra timeline row used as a has-more
+   * sentinel.
+   */
   private LocalMessageWindow trimLocalMessageSentinel(List<MessageEntity> raw) {
     if (raw == null || raw.isEmpty()) {
       return new LocalMessageWindow(Collections.emptyList(), false);
@@ -790,7 +874,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       }
       List<MessageEntity> pinnedMessages = new ArrayList<>();
       for (MessageEntity message : availableMessages) {
-        if (message != null && message.pinned) pinnedMessages.add(message);
+        if (message != null && message.pinned)
+          pinnedMessages.add(message);
       }
       pinnedMessages.sort((first, second) -> Long.compare(first.sentTime, second.sentTime));
       chatView.setPinnedMessages(pinnedMessages);
@@ -815,13 +900,16 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     }
     long oldestTime = availableMessages.isEmpty() ? 0L : availableMessages.get(0).sentTime;
     long newestTime = availableMessages.isEmpty()
-        ? 0L : availableMessages.get(availableMessages.size() - 1).sentTime;
+        ? 0L
+        : availableMessages.get(availableMessages.size() - 1).sentTime;
     Log.d(TESTING_TAG, "message_list source=room_cache phase=loaded chatId=" + chatId
         + " count=" + availableMessages.size() + " limit=" + messageLimit
         + " localHasMore=" + localHasMore + " oldestTime=" + oldestTime
         + " newestTime=" + newestTime);
-    if (availableMessages.isEmpty()) renderedMessageCount = 0;
-    else if (searchActive) renderedMessageCount = availableMessages.size();
+    if (availableMessages.isEmpty())
+      renderedMessageCount = 0;
+    else if (searchActive)
+      renderedMessageCount = availableMessages.size();
     else if (renderedMessageCount == 0) {
       renderedMessageCount = Math.min(INITIAL_RENDER_WINDOW_SIZE, availableMessages.size());
     } else {
@@ -834,7 +922,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
             || (nextMessageCursor != null && !nextMessageCursor.isEmpty()))) {
       loadMessagePage(firstMessagePageLoaded ? nextMessageCursor : null);
     } else {
-      if (revealedOlderCachedMessages) saveMessageSessionState();
+      if (revealedOlderCachedMessages)
+        saveMessageSessionState();
       updateOlderMessagesState();
     }
   }
@@ -843,7 +932,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     submitPreparedMessages(renderedMessagesSnapshot(), phase);
   }
 
-  /** Measures attachment orientation and final row heights before the list sees this data set. */
+  /**
+   * Measures attachment orientation and final row heights before the list sees
+   * this data set.
+   */
   private void prepareAndRenderAvailableMessages(String phase) {
     List<MessageEntity> messagesToPrepare = renderedMessagesSnapshot();
     int generation = ++messagePreparationGeneration;
@@ -854,7 +946,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       return;
     }
     ChatView view = chatView;
-    if (view == null) return;
+    if (view == null)
+      return;
     float availableWidth = view.getMessageLayoutWidth();
     messagePreparationRunning = true;
     updateOlderMessagesState();
@@ -867,27 +960,35 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
           "count=" + messagesToPrepare.size());
       typingHandler.post(() -> {
         ChatView currentView = chatView;
-        if (currentView == null || generation != messagePreparationGeneration) return;
+        if (currentView == null || generation != messagePreparationGeneration)
+          return;
         Runnable applyPrepared = () -> {
-          if (chatView == null || generation != messagePreparationGeneration) return;
+          if (chatView == null || generation != messagePreparationGeneration)
+            return;
           messagePreparationRunning = false;
           submitPreparedMessages(messagesToPrepare, phase, prepared);
           updateOlderMessagesState();
           scheduleProgressiveRender();
         };
-        if (!currentView.deferUntilMessageScrollIdle(applyPrepared)) applyPrepared.run();
+        if (!currentView.deferUntilMessageScrollIdle(applyPrepared))
+          applyPrepared.run();
       });
     });
   }
 
-  /** Keeps every pinned target addressable while progressively revealing the recent timeline. */
+  /**
+   * Keeps every pinned target addressable while progressively revealing the
+   * recent timeline.
+   */
   private List<MessageEntity> renderedMessagesSnapshot() {
-    if (availableMessages.isEmpty()) return Collections.emptyList();
+    if (availableMessages.isEmpty())
+      return Collections.emptyList();
     int firstRendered = Math.max(0, availableMessages.size() - renderedMessageCount);
     List<MessageEntity> result = new ArrayList<>();
     for (int index = 0; index < availableMessages.size(); index++) {
       MessageEntity message = availableMessages.get(index);
-      if (index >= firstRendered || message.pinned) result.add(message);
+      if (index >= firstRendered || message.pinned)
+        result.add(message);
     }
     return result;
   }
@@ -946,7 +1047,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     List<MessageEntity> targetMessages = new ArrayList<>();
     for (int index = 0; index < snapshot.size(); index++) {
       MessageEntity message = snapshot.get(index);
-      if (index >= firstToPrepare || message.pinned) targetMessages.add(message);
+      if (index >= firstToPrepare || message.pinned)
+        targetMessages.add(message);
     }
     float availableWidth = chatView.getMessageLayoutWidth();
     messagePreparationRunning = true;
@@ -954,9 +1056,9 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     messagePreparationExecutor.execute(() -> {
       long preparationStartedNanos = SystemClock.elapsedRealtimeNanos();
       ChatView view = chatView;
-      if (view == null) return;
-      ChatView.PreparedMessages prepared =
-          view.prepareMessages(targetMessages, availableWidth);
+      if (view == null)
+        return;
+      ChatView.PreparedMessages prepared = view.prepareMessages(targetMessages, availableWidth);
       profiler.operation(
           "prepare_chunk",
           preparationStartedNanos,
@@ -964,17 +1066,21 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
               + " targetRendered=" + targetRenderedCount);
       typingHandler.post(() -> {
         ChatView currentView = chatView;
-        if (currentView == null || generation != messagePreparationGeneration) return;
+        if (currentView == null || generation != messagePreparationGeneration)
+          return;
         Runnable applyPrepared = () -> {
-          if (chatView == null || generation != messagePreparationGeneration) return;
+          if (chatView == null || generation != messagePreparationGeneration)
+            return;
           availableMessages = snapshot;
           renderedMessageCount = targetRenderedCount;
           messagePreparationRunning = renderedMessageCount < snapshot.size();
           submitPreparedMessages(targetMessages, "background", prepared);
           updateOlderMessagesState();
-          if (messagePreparationRunning) scheduleProgressiveRender();
+          if (messagePreparationRunning)
+            scheduleProgressiveRender();
         };
-        if (!currentView.deferUntilMessageScrollIdle(applyPrepared)) applyPrepared.run();
+        if (!currentView.deferUntilMessageScrollIdle(applyPrepared))
+          applyPrepared.run();
       });
     });
   }
@@ -989,7 +1095,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       boolean incoming = !currentUser.equals(normalize(m.senderId));
       if (incoming && m.readTime == null && !pendingSeen.contains(m.messageId))
         unseen.add(m.messageId);
-      else if (m.readTime != null) pendingSeen.remove(m.messageId);
+      else if (m.readTime != null)
+        pendingSeen.remove(m.messageId);
     }
     if (!unseen.isEmpty()) {
       pendingSeen.addAll(unseen);
@@ -998,7 +1105,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void updateOlderMessagesState() {
-    if (chatView == null) return;
+    if (chatView == null)
+      return;
     chatView.setOlderMessagesState(
         localPageLoading || messagePageLoading,
         !isProgressiveRendering() && (localHasMore || messageNetworkHasMore));
@@ -1019,11 +1127,13 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         + " routeHasMore=" + messageNetworkHasMore
         + " hasNextCursor=" + (nextMessageCursor != null && !nextMessageCursor.isEmpty()));
     if (isProgressiveRendering() || localPageLoading || messagePageLoading
-        || (!localHasMore && !messageNetworkHasMore)) return;
+        || (!localHasMore && !messageNetworkHasMore))
+      return;
     localExpansionRequested = true;
     localExpansionPreviousCount = availableMessages.size();
     localExpansionPreviousOldestId = availableMessages.isEmpty()
-        ? null : availableMessages.get(0).messageId;
+        ? null
+        : availableMessages.get(0).messageId;
     messageLimit += MESSAGE_WINDOW_INCREMENT;
     observeMessageWindow();
   }
@@ -1033,13 +1143,15 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void restoreMessageSessionState() {
-    if (repository == null || chatId == null || chatId.trim().isEmpty()) return;
+    if (repository == null || chatId == null || chatId.trim().isEmpty())
+      return;
     ChatRepository.MessageSessionState state = repository.getMessageSessionState(chatId);
     if (state == null) {
       Log.d(TESTING_TAG, "message_cache source=session phase=miss chatId=" + chatId);
       return;
     }
-    // Reopen with one normal Room window for the progressive renderer. The persisted cursor
+    // Reopen with one normal Room window for the progressive renderer. The
+    // persisted cursor
     // state independently determines whether any network page is still required.
     messageLimit = ChatRepository.MESSAGE_PAGE_SIZE;
     firstMessagePageLoaded = state.isFirstPageLoaded();
@@ -1058,7 +1170,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   private void saveMessageSessionState() {
     if (repository == null || !firstMessagePageLoaded
-        || chatId == null || chatId.trim().isEmpty()) return;
+        || chatId == null || chatId.trim().isEmpty())
+      return;
     repository.saveMessageSessionState(chatId, messageLimit, true,
         nextMessageCursor, messageNetworkHasMore,
         oldestSynchronizedMessageId, lastSuccessfulPaginationAt);
@@ -1066,7 +1179,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   private void renderPresence(PresenceEntity p) {
     latestPresence = p;
-    if (peerTyping) return;
+    if (peerTyping)
+      return;
     if (p == null) {
       chatView.setPresence("");
       return;
@@ -1084,9 +1198,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onSend() {
-    if (contactBlocked) return;
+    if (contactBlocked)
+      return;
     String text = chatView.getDraft();
-    if (chatId == null || chatId.isEmpty() || receiverId.isEmpty()) {
+    if (chatId == null || chatId.isEmpty() || (!groupChat && receiverId.isEmpty())) {
       Toast.makeText(this, "Chat information missing.", Toast.LENGTH_SHORT).show();
       return;
     }
@@ -1099,7 +1214,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       repository.editMessage(chatId, editingId, text);
       editingId = null;
     } else if (selectedAttachmentUri != null) {
-      if (attachmentSending) return;
+      if (attachmentSending)
+        return;
       attachmentSending = true;
       chatView.clearAttachmentPreview();
       repository.uploadAndSendAttachment(
@@ -1143,8 +1259,9 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void sendSelectedAttachments(List<Uri> uris, List<String> types, String caption) {
-    if (uris == null || uris.isEmpty() || attachmentSending) return;
-    if (chatId == null || chatId.isEmpty() || receiverId.isEmpty()) {
+    if (uris == null || uris.isEmpty() || attachmentSending)
+      return;
+    if (chatId == null || chatId.isEmpty() || (!groupChat && receiverId.isEmpty())) {
       Toast.makeText(this, "Chat information missing.", Toast.LENGTH_SHORT).show();
       return;
     }
@@ -1166,15 +1283,18 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       return;
     }
     String type = index < types.size() && types.get(index) != null
-        ? types.get(index).toLowerCase() : "image";
+        ? types.get(index).toLowerCase()
+        : "image";
     repository.uploadAndSendAttachment(
         chatId, receiverId, index == 0 ? caption : "", index == 0 ? replyId : null,
         uris.get(index), type, new ChatRepository.AttachmentCallback() {
-          @Override public void onSent() {
+          @Override
+          public void onSent() {
             uploadCameraAttachment(uris, types, index + 1, caption, replyId);
           }
 
-          @Override public void onError(String message) {
+          @Override
+          public void onError(String message) {
             Toast.makeText(ChatActivity.this, message, Toast.LENGTH_SHORT).show();
             uploadCameraAttachment(uris, types, index + 1, caption, replyId);
           }
@@ -1183,10 +1303,12 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onReplyTargetRequested(String messageId) {
-    if (messageId == null || messageId.trim().isEmpty()) return;
+    if (messageId == null || messageId.trim().isEmpty())
+      return;
     for (int index = 0; index < availableMessages.size(); index++) {
       MessageEntity message = availableMessages.get(index);
-      if (!messageId.equals(message.messageId)) continue;
+      if (!messageId.equals(message.messageId))
+        continue;
       int requiredCount = availableMessages.size() - index;
       if (renderedMessageCount < requiredCount) {
         renderedMessageCount = requiredCount;
@@ -1204,14 +1326,16 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onAudioRecordingStart() {
-    if (contactBlocked) return;
-    if (attachmentSending || audioRecorder != null) return;
-    if (chatId == null || chatId.isEmpty() || receiverId.isEmpty()) {
+    if (contactBlocked)
+      return;
+    if (attachmentSending || audioRecorder != null)
+      return;
+    if (chatId == null || chatId.isEmpty() || (!groupChat && receiverId.isEmpty())) {
       Toast.makeText(this, "Chat information missing.", Toast.LENGTH_SHORT).show();
       return;
     }
-    if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-        == PackageManager.PERMISSION_GRANTED) {
+    if (ContextCompat.checkSelfPermission(this,
+        Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
       startAudioRecorder();
     } else {
       audioRecordingPermission.launch(Manifest.permission.RECORD_AUDIO);
@@ -1219,7 +1343,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void startAudioRecorder() {
-    if (audioRecorder != null) return;
+    if (audioRecorder != null)
+      return;
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
         && !Environment.isExternalStorageManager()) {
       ensurePingGoStorageAccess();
@@ -1236,7 +1361,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     File output = new File(audioDirectory,
         "AUD_" + System.currentTimeMillis() + ".m4a");
     MediaRecorder recorder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-        ? new MediaRecorder(this) : new MediaRecorder();
+        ? new MediaRecorder(this)
+        : new MediaRecorder();
     try {
       recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
       recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
@@ -1254,8 +1380,12 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       chatView.startAudioRecording();
       typingHandler.post(updateAudioRecordingTime);
     } catch (IOException | RuntimeException error) {
-      try { recorder.release(); } catch (RuntimeException ignored) {}
-      if (output.exists()) output.delete();
+      try {
+        recorder.release();
+      } catch (RuntimeException ignored) {
+      }
+      if (output.exists())
+        output.delete();
       Toast.makeText(this, "Unable to start audio recording.", Toast.LENGTH_SHORT).show();
     }
   }
@@ -1274,7 +1404,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     MediaRecorder recorder = audioRecorder;
     File output = recordedAudioFile;
     long duration = audioRecordingStartedAt == 0L
-        ? 0L : SystemClock.elapsedRealtime() - audioRecordingStartedAt;
+        ? 0L
+        : SystemClock.elapsedRealtime() - audioRecordingStartedAt;
     List<Integer> amplitudeSamples = new ArrayList<>(audioRecordingSamples);
     audioRecordingSamples.clear();
     audioRecorder = null;
@@ -1282,7 +1413,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     audioRecordingStartedAt = 0L;
     typingHandler.removeCallbacks(updateAudioRecordingTime);
     if (recorder == null) {
-      if (chatView != null) chatView.stopAudioRecording();
+      if (chatView != null)
+        chatView.stopAudioRecording();
       return;
     }
     boolean stopped = false;
@@ -1291,13 +1423,19 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       stopped = true;
     } catch (RuntimeException ignored) {
     } finally {
-      try { recorder.release(); } catch (RuntimeException ignored) {}
+      try {
+        recorder.release();
+      } catch (RuntimeException ignored) {
+      }
     }
-    if (chatView != null) chatView.stopAudioRecording();
+    if (chatView != null)
+      chatView.stopAudioRecording();
     if (!sendRecording || !stopped || duration < 500L || output == null || !output.isFile()) {
-      if (output != null && output.exists()) output.delete();
-      if (sendRecording) Toast.makeText(this, "Record a longer audio message.",
-          Toast.LENGTH_SHORT).show();
+      if (output != null && output.exists())
+        output.delete();
+      if (sendRecording)
+        Toast.makeText(this, "Record a longer audio message.",
+            Toast.LENGTH_SHORT).show();
       return;
     }
     attachmentSending = true;
@@ -1308,12 +1446,14 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         chatId, receiverId, buildAudioMetadata(duration, amplitudeSamples),
         replyingId, audioUri, "audio",
         new ChatRepository.AttachmentCallback() {
-          @Override public void onSent() {
+          @Override
+          public void onSent() {
             attachmentSending = false;
             finishComposeAction();
           }
 
-          @Override public void onError(String message) {
+          @Override
+          public void onError(String message) {
             attachmentSending = false;
             Toast.makeText(ChatActivity.this, message, Toast.LENGTH_SHORT).show();
           }
@@ -1323,7 +1463,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   @Override
   public void onAudioPlaybackToggle(String messageId) {
     String key = messageId == null ? "" : messageId;
-    if (key.isEmpty()) return;
+    if (key.isEmpty())
+      return;
     if (key.equals(playingAudioMessageId) && audioPlayer != null) {
       stopAudioPlayback();
       return;
@@ -1334,7 +1475,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       return;
     }
     Uri local = message.attachmentLocalUri == null
-        ? null : Uri.parse(message.attachmentLocalUri);
+        ? null
+        : Uri.parse(message.attachmentLocalUri);
     if (local != null && canRead(local)) {
       startAudioPlayback(key, local);
       return;
@@ -1344,24 +1486,28 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       return;
     }
     if (attachmentStates.getOrDefault(
-        attachmentKey(message), ATTACHMENT_DOWNLOAD_REQUIRED) == ATTACHMENT_DOWNLOADING) return;
+        attachmentKey(message), ATTACHMENT_DOWNLOAD_REQUIRED) == ATTACHMENT_DOWNLOADING)
+      return;
     attachmentStates.put(attachmentKey(message), ATTACHMENT_DOWNLOADING);
     pendingAudioPlaybackMessageId = key;
     refreshAttachmentRows();
     repository.downloadAttachment(message, new ChatRepository.DownloadCallback() {
-      @Override public void onAvailable(Uri uri) {
+      @Override
+      public void onAvailable(Uri uri) {
         pendingAudioPlaybackMessageId = "";
         attachmentStates.put(attachmentKey(message), ATTACHMENT_AVAILABLE);
         refreshAttachmentRows();
         startAudioPlayback(key, uri);
       }
 
-      @Override public void onQueued() {
+      @Override
+      public void onQueued() {
         attachmentStates.put(attachmentKey(message), ATTACHMENT_DOWNLOADING);
         refreshAttachmentRows();
       }
 
-      @Override public void onError(String error) {
+      @Override
+      public void onError(String error) {
         pendingAudioPlaybackMessageId = "";
         attachmentStates.put(attachmentKey(message), ATTACHMENT_DOWNLOAD_REQUIRED);
         refreshAttachmentRows();
@@ -1388,7 +1534,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
           .build());
       player.setDataSource(this, uri);
       player.setOnPreparedListener(prepared -> {
-        if (prepared != audioPlayer) return;
+        if (prepared != audioPlayer)
+          return;
         audioPlaybackPrepared = true;
         playingAudioDurationMs = Math.max(0, prepared.getDuration());
         prepared.start();
@@ -1421,8 +1568,14 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     audioPlaybackPrepared = false;
     typingHandler.removeCallbacks(updateAudioPlayback);
     if (player != null) {
-      try { player.stop(); } catch (RuntimeException ignored) {}
-      try { player.release(); } catch (RuntimeException ignored) {}
+      try {
+        player.stop();
+      } catch (RuntimeException ignored) {
+      }
+      try {
+        player.release();
+      } catch (RuntimeException ignored) {
+      }
     }
     if (chatView != null && !previousId.isEmpty()) {
       chatView.setAudioPlaybackState(previousId, false, 0L, previousDuration);
@@ -1432,11 +1585,13 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private MessageEntity findMessageByKey(String key) {
     for (MessageEntity message : availableMessages) {
       if (message != null
-          && (key.equals(message.messageId) || key.equals(message.clientMessageId))) return message;
+          && (key.equals(message.messageId) || key.equals(message.clientMessageId)))
+        return message;
     }
     for (MessageEntity message : latestMessages) {
       if (message != null
-          && (key.equals(message.messageId) || key.equals(message.clientMessageId))) return message;
+          && (key.equals(message.messageId) || key.equals(message.clientMessageId)))
+        return message;
     }
     return null;
   }
@@ -1466,7 +1621,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     StringBuilder metadata = new StringBuilder(formatAudioDuration(durationMs));
     metadata.append("|waveform=");
     for (int index = 0; index < bars.length; index++) {
-      if (index > 0) metadata.append(',');
+      if (index > 0)
+        metadata.append(',');
       float normalized = maximum <= 0 ? .16f : (float) Math.sqrt(bars[index] / (float) maximum);
       int level = Math.max(12, Math.min(100, Math.round(normalized * 100f)));
       metadata.append(level);
@@ -1476,6 +1632,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onVideoCall() {
+    if (isGroupChat()) {
+      Toast.makeText(this, "Group call implementation pending.", Toast.LENGTH_SHORT).show();
+      return;
+    }
     if (contactBlocked) {
       Toast.makeText(this, "Unblock this contact to make a call.", Toast.LENGTH_SHORT).show();
       return;
@@ -1485,6 +1645,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onVoiceCall() {
+    if (isGroupChat()) {
+      Toast.makeText(this, "Group call implementation pending.", Toast.LENGTH_SHORT).show();
+      return;
+    }
     if (contactBlocked) {
       Toast.makeText(this, "Unblock this contact to make a call.", Toast.LENGTH_SHORT).show();
       return;
@@ -1494,7 +1658,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   private void openCall(Class<? extends AppCompatActivity> activityClass) {
     String requestedType = activityClass == VideoCallActivity.class
-        ? ActiveCallRegistry.TYPE_VIDEO : ActiveCallRegistry.TYPE_VOICE;
+        ? ActiveCallRegistry.TYPE_VIDEO
+        : ActiveCallRegistry.TYPE_VOICE;
     ActiveCallRegistry registry = ActiveCallRegistry.getInstance();
     if (registry.matches(chatId, requestedType)) {
       registry.openExisting(this);
@@ -1527,16 +1692,17 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onAttachmentSelected(String type) {
-    if (contactBlocked) return;
+    if (contactBlocked)
+      return;
     if ("Image".equals(type)) {
       selectedAttachmentType = type;
-      attachmentPicker.launch(new String[] {"image/*"});
+      visualAttachmentPicker.launch("image/*");
     } else if ("Video".equals(type)) {
       selectedAttachmentType = type;
-      attachmentPicker.launch(new String[] {"video/*"});
+      visualAttachmentPicker.launch("video/*");
     } else if ("File".equals(type)) {
       selectedAttachmentType = type;
-      attachmentPicker.launch(new String[] {"*/*"});
+      attachmentPicker.launch(new String[] { "*/*" });
     } else if ("Location".equals(type)) {
       locationPressedElapsedMs = SystemClock.elapsedRealtime();
       locationPressedWallMs = System.currentTimeMillis();
@@ -1548,8 +1714,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onCameraSelected() {
-    if (contactBlocked) return;
-    if (attachmentSending || audioRecorder != null) return;
+    if (contactBlocked)
+      return;
+    if (attachmentSending || audioRecorder != null)
+      return;
     startActivityForResultCamera();
   }
 
@@ -1557,41 +1725,60 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     closeCameraCapture();
     lockMediaOrientation();
     cameraCaptureView = new CameraCaptureView(this, new CameraCaptureView.Listener() {
-      @Override public void onPermissionsRequired(String[] permissions) {
+      @Override
+      public void onPermissionsRequired(String[] permissions) {
         cameraPermissions.launch(permissions);
       }
-      @Override public void onPreviewRequested(ArrayList<Uri> uris, ArrayList<String> types,
+
+      @Override
+      public void onPreviewRequested(ArrayList<Uri> uris, ArrayList<String> types,
           boolean captured) {
         showSelectedMediaPreview(uris, types, captured, new SelectedMediaOverlayView.Listener() {
-          @Override public void onSend(ArrayList<Uri> selected, ArrayList<String> selectedTypes) {
+          @Override
+          public void onSend(ArrayList<Uri> selected, ArrayList<String> selectedTypes) {
             CameraCaptureView camera = cameraCaptureView;
-            if (camera != null) camera.onPreviewResult(true, selected, selectedTypes);
+            if (camera != null)
+              camera.onPreviewResult(true, selected, selectedTypes);
           }
-          @Override public void onSend(ArrayList<Uri> selected, ArrayList<String> selectedTypes,
+
+          @Override
+          public void onSend(ArrayList<Uri> selected, ArrayList<String> selectedTypes,
               String caption) {
             CameraCaptureView camera = cameraCaptureView;
-            if (camera != null) camera.onPreviewResult(true, selected, selectedTypes, caption);
+            if (camera != null)
+              camera.onPreviewResult(true, selected, selectedTypes, caption);
           }
-          @Override public void onCancel(ArrayList<Uri> selected, ArrayList<String> selectedTypes) {
+
+          @Override
+          public void onCancel(ArrayList<Uri> selected, ArrayList<String> selectedTypes) {
             CameraCaptureView camera = cameraCaptureView;
-            if (camera != null) camera.onPreviewResult(false, selected, selectedTypes);
+            if (camera != null)
+              camera.onPreviewResult(false, selected, selectedTypes);
           }
         });
       }
-      @Override public void onGalleryRequested(boolean videoOnly) {
+
+      @Override
+      public void onGalleryRequested(boolean videoOnly) {
         cameraGalleryPicker.launch(videoOnly
-            ? new String[] {"video/*"}
-            : new String[] {"image/*", "video/*"});
+            ? new String[] { "video/*" }
+            : new String[] { "image/*", "video/*" });
       }
-      @Override public void onSend(ArrayList<Uri> uris, ArrayList<String> types) {
+
+      @Override
+      public void onSend(ArrayList<Uri> uris, ArrayList<String> types) {
         closeCameraCapture();
         sendSelectedAttachments(uris, types);
       }
-      @Override public void onSend(ArrayList<Uri> uris, ArrayList<String> types, String caption) {
+
+      @Override
+      public void onSend(ArrayList<Uri> uris, ArrayList<String> types, String caption) {
         closeCameraCapture();
         sendSelectedAttachments(uris, types, caption);
       }
-      @Override public void onClose() {
+
+      @Override
+      public void onClose() {
         closeCameraCapture();
         if (pendingMediaComposerDraft != null) {
           String draft = pendingMediaComposerDraft;
@@ -1608,24 +1795,32 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     ViewCompat.requestApplyInsets(cameraCaptureView);
   }
 
+  private boolean isGroupChat() {
+    return chatId != null && chatId.startsWith("grp_");
+  }
+
   private void closeCameraCapture() {
     closeSelectedMediaPreview();
     CameraCaptureView current = cameraCaptureView;
     cameraCaptureView = null;
-    if (current == null) return;
-    if (current.getParent() instanceof ViewGroup) ((ViewGroup) current.getParent()).removeView(current);
+    if (current == null)
+      return;
+    if (current.getParent() instanceof ViewGroup)
+      ((ViewGroup) current.getParent()).removeView(current);
     current.release();
     restoreMediaOrientationIfPossible();
     updateMediaSystemBars();
   }
 
   private void onAttachmentsPicked(List<Uri> picked) {
-    if (picked == null || picked.isEmpty()) return;
+    if (picked == null || picked.isEmpty())
+      return;
     String pickerType = selectedAttachmentType;
     ArrayList<Uri> uris = new ArrayList<>();
     ArrayList<String> types = new ArrayList<>();
     for (Uri uri : picked) {
-      if (uri == null) continue;
+      if (uri == null)
+        continue;
       try {
         getContentResolver().takePersistableUriPermission(
             uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -1634,17 +1829,20 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       uris.add(uri);
       types.add(selectedPreviewType(uri, pickerType));
     }
-    if (uris.isEmpty()) return;
+    if (uris.isEmpty())
+      return;
     showSelectedMediaPreview(uris, types, false, null);
   }
 
   private void onCameraGalleryPicked(List<Uri> picked) {
     CameraCaptureView camera = cameraCaptureView;
-    if (camera == null || picked == null || picked.isEmpty()) return;
+    if (camera == null || picked == null || picked.isEmpty())
+      return;
     ArrayList<Uri> uris = new ArrayList<>();
     ArrayList<String> types = new ArrayList<>();
     for (Uri uri : picked) {
-      if (uri == null) continue;
+      if (uri == null)
+        continue;
       try {
         getContentResolver().takePersistableUriPermission(
             uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -1653,20 +1851,24 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       uris.add(uri);
       types.add(selectedPreviewType(uri, null));
     }
-    if (!uris.isEmpty()) camera.onExternalGalleryPicked(uris, types);
+    if (!uris.isEmpty())
+      camera.onExternalGalleryPicked(uris, types);
   }
 
   private void onSelectedMediaAdded(List<Uri> picked) {
     SelectedMediaPreviewView preview = selectedMediaPreviewView;
-    if (preview == null || picked == null || picked.isEmpty()) return;
+    if (preview == null || picked == null || picked.isEmpty())
+      return;
     ArrayList<Uri> uris = new ArrayList<>();
     ArrayList<String> types = new ArrayList<>();
     for (Uri uri : picked) {
-      if (uri == null) continue;
+      if (uri == null)
+        continue;
       try {
         getContentResolver().takePersistableUriPermission(
             uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-      } catch (SecurityException ignored) {}
+      } catch (SecurityException ignored) {
+      }
       uris.add(uri);
       types.add(selectedPreviewType(uri, null));
     }
@@ -1675,27 +1877,37 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   private void showSelectedMediaPreview(ArrayList<Uri> uris, ArrayList<String> types,
       boolean captured, SelectedMediaOverlayView.Listener downstream) {
-    if (pendingMediaComposerDraft == null) pendingMediaComposerDraft = chatView.getDraft();
+    if (pendingMediaComposerDraft == null)
+      pendingMediaComposerDraft = chatView.getDraft();
     final String composerCaption = pendingMediaComposerDraft;
     chatView.clearDraft();
     closeSelectedMediaPreview();
     lockMediaOrientation();
     selectedMediaPreviewView = new SelectedMediaPreviewView(this, uris, types, captured, receiverId,
         new SelectedMediaOverlayView.Listener() {
-          @Override public void onSend(ArrayList<Uri> selected, ArrayList<String> selectedTypes) {
+          @Override
+          public void onSend(ArrayList<Uri> selected, ArrayList<String> selectedTypes) {
             closeSelectedMediaPreview();
             pendingMediaComposerDraft = null;
-            if (downstream != null) downstream.onSend(selected, selectedTypes);
-            else sendSelectedAttachments(selected, selectedTypes);
+            if (downstream != null)
+              downstream.onSend(selected, selectedTypes);
+            else
+              sendSelectedAttachments(selected, selectedTypes);
           }
-          @Override public void onSend(ArrayList<Uri> selected, ArrayList<String> selectedTypes,
+
+          @Override
+          public void onSend(ArrayList<Uri> selected, ArrayList<String> selectedTypes,
               String caption) {
             closeSelectedMediaPreview();
             pendingMediaComposerDraft = null;
-            if (downstream != null) downstream.onSend(selected, selectedTypes, caption);
-            else sendSelectedAttachments(selected, selectedTypes, caption);
+            if (downstream != null)
+              downstream.onSend(selected, selectedTypes, caption);
+            else
+              sendSelectedAttachments(selected, selectedTypes, caption);
           }
-          @Override public void onCancel(ArrayList<Uri> selected, ArrayList<String> selectedTypes) {
+
+          @Override
+          public void onCancel(ArrayList<Uri> selected, ArrayList<String> selectedTypes) {
             closeSelectedMediaPreview();
             if (downstream != null) {
               // Returning to the in-app camera is still part of the media flow. Restoring the
@@ -1706,10 +1918,14 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
               pendingMediaComposerDraft = null;
             }
           }
-          @Override public void onAddMedia() {
-            selectedMediaAddPicker.launch(new String[] {"image/*", "video/*"});
+
+          @Override
+          public void onAddMedia() {
+            selectedMediaAddPicker.launch(new String[] { "image/*", "video/*" });
           }
-          @Override public void onCameraRequested(
+
+          @Override
+          public void onCameraRequested(
               ArrayList<Uri> selected, ArrayList<String> selectedTypes) {
             closeSelectedMediaPreview();
             if (downstream != null) {
@@ -1731,35 +1947,45 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private void closeSelectedMediaPreview() {
     SelectedMediaPreviewView current = selectedMediaPreviewView;
     selectedMediaPreviewView = null;
-    if (current == null) return;
-    if (current.getParent() instanceof ViewGroup) ((ViewGroup) current.getParent()).removeView(current);
+    if (current == null)
+      return;
+    if (current.getParent() instanceof ViewGroup)
+      ((ViewGroup) current.getParent()).removeView(current);
     current.release();
     restoreMediaOrientationIfPossible();
     updateMediaSystemBars();
   }
 
   private void lockMediaOrientation() {
-    if (mediaOrientationLocked) return;
+    if (mediaOrientationLocked)
+      return;
     mediaPreviousOrientation = getRequestedOrientation();
     mediaOrientationLocked = true;
     setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LOCKED);
   }
 
   private void restoreMediaOrientationIfPossible() {
-    if (!mediaOrientationLocked || selectedMediaPreviewView != null || cameraCaptureView != null) return;
+    if (!mediaOrientationLocked || selectedMediaPreviewView != null || cameraCaptureView != null)
+      return;
     setRequestedOrientation(mediaPreviousOrientation);
     mediaOrientationLocked = false;
   }
 
   private String selectedPreviewType(Uri uri, String pickerType) {
-    // The entry point is authoritative. Files must remain file messages even when their
+    // The entry point is authoritative. Files must remain file messages even when
+    // their
     // underlying MIME type is image/* or video/*.
-    if ("File".equals(pickerType)) return "File";
-    if ("Image".equals(pickerType)) return "Image";
-    if ("Video".equals(pickerType)) return "Video";
+    if ("File".equals(pickerType))
+      return "File";
+    if ("Image".equals(pickerType))
+      return "Image";
+    if ("Video".equals(pickerType))
+      return "Video";
     String mime = getContentResolver().getType(uri);
-    if (mime != null && mime.startsWith("image/")) return "Image";
-    if (mime != null && mime.startsWith("video/")) return "Video";
+    if (mime != null && mime.startsWith("image/"))
+      return "Image";
+    if (mime != null && mime.startsWith("video/"))
+      return "Video";
     return "File";
   }
 
@@ -1773,7 +1999,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     try (Cursor cursor = getContentResolver().query(uri, null, null, null, null)) {
       if (cursor != null && cursor.moveToFirst()) {
         int column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-        if (column >= 0) return cursor.getString(column);
+        if (column >= 0)
+          return cursor.getString(column);
       }
     } catch (RuntimeException error) {
     }
@@ -1781,12 +2008,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void requestLocationPermission() {
-    boolean fine =
-        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-            == PackageManager.PERMISSION_GRANTED;
-    boolean coarse =
-        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)
-            == PackageManager.PERMISSION_GRANTED;
+    boolean fine = ContextCompat.checkSelfPermission(this,
+        Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    boolean coarse = ContextCompat.checkSelfPermission(this,
+        Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
     if (fine || coarse) {
       logLocationPerf("permission_ready", "fine=" + fine + " coarse=" + coarse);
       requestCurrentLocation();
@@ -1795,27 +2020,26 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     logLocationPerf("permission_prompt", "fine=false coarse=false");
     locationPermission.launch(
         new String[] {
-          Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION
+            Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION
         });
   }
 
   private void onLocationPermission(Map<String, Boolean> result) {
-    boolean granted =
-        Boolean.TRUE.equals(result.get(Manifest.permission.ACCESS_FINE_LOCATION))
-            || Boolean.TRUE.equals(result.get(Manifest.permission.ACCESS_COARSE_LOCATION));
+    boolean granted = Boolean.TRUE.equals(result.get(Manifest.permission.ACCESS_FINE_LOCATION))
+        || Boolean.TRUE.equals(result.get(Manifest.permission.ACCESS_COARSE_LOCATION));
     logLocationPerf("permission_result", "granted=" + granted);
-    if (granted) requestCurrentLocation();
-    else Toast.makeText(this, "Location permission is required.", Toast.LENGTH_SHORT).show();
+    if (granted)
+      requestCurrentLocation();
+    else
+      Toast.makeText(this, "Location permission is required.", Toast.LENGTH_SHORT).show();
   }
 
   private void requestCurrentLocation() {
     locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
-    boolean fine =
-        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-            == PackageManager.PERMISSION_GRANTED;
-    boolean coarse =
-        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)
-            == PackageManager.PERMISSION_GRANTED;
+    boolean fine = ContextCompat.checkSelfPermission(this,
+        Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    boolean coarse = ContextCompat.checkSelfPermission(this,
+        Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
     boolean networkEnabled = coarse || fine;
     networkEnabled = networkEnabled && isLocationProviderEnabled(LocationManager.NETWORK_PROVIDER);
     boolean gpsEnabled = fine && isLocationProviderEnabled(LocationManager.GPS_PROVIDER);
@@ -1846,8 +2070,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     logLocationPerf(
         "location_request",
         "network=" + networkEnabled + " gps=" + gpsEnabled);
-    if (networkEnabled) requestLocationFromProvider(LocationManager.NETWORK_PROVIDER);
-    if (gpsEnabled) requestLocationFromProvider(LocationManager.GPS_PROVIDER);
+    if (networkEnabled)
+      requestLocationFromProvider(LocationManager.NETWORK_PROVIDER);
+    if (gpsEnabled)
+      requestLocationFromProvider(LocationManager.GPS_PROVIDER);
   }
 
   private boolean isLocationProviderEnabled(String provider) {
@@ -1860,10 +2086,12 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   private Location bestCachedLocation(boolean networkEnabled, boolean gpsEnabled) {
     Location best = null;
-    if (networkEnabled) best = betterLocation(
-        best, lastKnownLocation(LocationManager.NETWORK_PROVIDER));
-    if (gpsEnabled) best = betterLocation(
-        best, lastKnownLocation(LocationManager.GPS_PROVIDER));
+    if (networkEnabled)
+      best = betterLocation(
+          best, lastKnownLocation(LocationManager.NETWORK_PROVIDER));
+    if (gpsEnabled)
+      best = betterLocation(
+          best, lastKnownLocation(LocationManager.GPS_PROVIDER));
     return best;
   }
 
@@ -1891,12 +2119,22 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
             location -> onLocationCandidate(location, provider));
       } else {
         LocationListener listener = new LocationListener() {
-          @Override public void onLocationChanged(Location location) {
+          @Override
+          public void onLocationChanged(Location location) {
             onLocationCandidate(location, provider);
           }
-          @Override public void onStatusChanged(String value, int status, Bundle extras) {}
-          @Override public void onProviderEnabled(String value) {}
-          @Override public void onProviderDisabled(String value) {}
+
+          @Override
+          public void onStatusChanged(String value, int status, Bundle extras) {
+          }
+
+          @Override
+          public void onProviderEnabled(String value) {
+          }
+
+          @Override
+          public void onProviderDisabled(String value) {
+          }
         };
         if (LocationManager.NETWORK_PROVIDER.equals(provider)) {
           networkLocationListener = listener;
@@ -1913,7 +2151,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void onLocationCandidate(Location location, String requestedProvider) {
-    if (!locationPending) return;
+    if (!locationPending)
+      return;
     if (location == null) {
       logLocationPerf("location_null", "provider=" + requestedProvider);
       return;
@@ -1929,12 +2168,13 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void completeLocation(Location location, String source) {
-    if (!locationPending) return;
+    if (!locationPending)
+      return;
     locationPending = false;
     typingHandler.removeCallbacks(locationTimeout);
     removeLocationUpdates();
     logLocationPerf("location_ready", "source=" + source + " " + locationDetails(location));
-    if (chatId == null || chatId.isEmpty() || receiverId.isEmpty()) {
+    if (chatId == null || chatId.isEmpty() || (!groupChat && receiverId.isEmpty())) {
       Toast.makeText(this, "Chat information missing.", Toast.LENGTH_SHORT).show();
       return;
     }
@@ -1957,17 +2197,22 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void rememberLocationCandidate(Location candidate) {
-    if (candidate == null || locationAgeMs(candidate) > LOCATION_FALLBACK_MAX_AGE_MS) return;
+    if (candidate == null || locationAgeMs(candidate) > LOCATION_FALLBACK_MAX_AGE_MS)
+      return;
     bestPendingLocation = betterLocation(bestPendingLocation, candidate);
   }
 
   private Location betterLocation(Location first, Location second) {
-    if (first == null) return second;
-    if (second == null) return first;
+    if (first == null)
+      return second;
+    if (second == null)
+      return first;
     boolean firstAcceptable = isAcceptableLocation(first, LOCATION_CACHE_MAX_AGE_MS);
     boolean secondAcceptable = isAcceptableLocation(second, LOCATION_CACHE_MAX_AGE_MS);
-    if (firstAcceptable != secondAcceptable) return secondAcceptable ? second : first;
-    if (second.getAccuracy() + 5f < first.getAccuracy()) return second;
+    if (firstAcceptable != secondAcceptable)
+      return secondAcceptable ? second : first;
+    if (second.getAccuracy() + 5f < first.getAccuracy())
+      return second;
     return locationAgeMs(second) < locationAgeMs(first) ? second : first;
   }
 
@@ -1979,7 +2224,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private long locationAgeMs(Location location) {
-    if (location == null) return Long.MAX_VALUE;
+    if (location == null)
+      return Long.MAX_VALUE;
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1
         && location.getElapsedRealtimeNanos() > 0L) {
       return Math.max(0L, SystemClock.elapsedRealtime()
@@ -1995,8 +2241,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void removeLocationUpdates() {
-    if (networkLocationCancellation != null) networkLocationCancellation.cancel();
-    if (gpsLocationCancellation != null) gpsLocationCancellation.cancel();
+    if (networkLocationCancellation != null)
+      networkLocationCancellation.cancel();
+    if (gpsLocationCancellation != null)
+      gpsLocationCancellation.cancel();
     networkLocationCancellation = null;
     gpsLocationCancellation = null;
     removeLocationListener(networkLocationListener);
@@ -2007,7 +2255,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void removeLocationListener(LocationListener listener) {
-    if (locationManager == null || listener == null) return;
+    if (locationManager == null || listener == null)
+      return;
     try {
       locationManager.removeUpdates(listener);
     } catch (SecurityException ignored) {
@@ -2028,7 +2277,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onTypingChanged(String text) {
-    if (repository == null || chatId == null || receiverId.isEmpty()) return;
+    if (groupChat || repository == null || chatId == null || receiverId.isEmpty())
+      return;
     typingHandler.removeCallbacks(stopTyping);
     if (text != null && !text.isEmpty()) {
       if (!typingStarted) {
@@ -2038,7 +2288,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         typingHandler.postDelayed(refreshTyping, 25_000L);
       }
       typingHandler.postDelayed(stopTyping, 2000);
-    } else stopTyping.run();
+    } else
+      stopTyping.run();
   }
 
   @Override
@@ -2048,15 +2299,18 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       return;
     }
     String type = message.messageType == null ? "text" : message.messageType;
-    // Audio playback is intentionally handled only by AudioMessageComponent's play/stop
+    // Audio playback is intentionally handled only by AudioMessageComponent's
+    // play/stop
     // control. A generic message-bubble click must never toggle the player.
-    if ("audio".equals(type)) return;
+    if ("audio".equals(type))
+      return;
     if ("location".equals(type) && message.latitude != null && message.longitude != null) {
       String coordinates = message.latitude + "," + message.longitude;
       openLocationChooser(coordinates);
       return;
     }
-    if (!("image".equals(type) || "video".equals(type) || "file".equals(type))) return;
+    if (!("image".equals(type) || "video".equals(type) || "file".equals(type)))
+      return;
     String fileMediaType = "file".equals(type) ? attachmentMediaType(message) : null;
     if ("image".equals(type) || "video".equals(type) || fileMediaType != null) {
       String previewType = fileMediaType == null ? type : fileMediaType;
@@ -2069,7 +2323,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         return;
       }
       String mediaType = "video".equals(previewType)
-          ? MediaPreviewCache.TYPE_VIDEO : MediaPreviewCache.TYPE_IMAGE;
+          ? MediaPreviewCache.TYPE_VIDEO
+          : MediaPreviewCache.TYPE_IMAGE;
       if (!MediaPreviewCache.isMediaReady(this, source, mediaType)) {
         if (!"file".equals(type)) {
           Toast.makeText(this, "This file does not exist.", Toast.LENGTH_SHORT).show();
@@ -2078,11 +2333,13 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         String remoteSource = source;
         MediaPreviewCache.resolveMedia(this, remoteSource, mediaType,
             new MediaPreviewCache.Callback<Uri>() {
-              @Override public void onSuccess(Uri local) {
+              @Override
+              public void onSuccess(Uri local) {
                 openMediaPreview(local.toString(), previewType, message);
               }
 
-              @Override public void onError() {
+              @Override
+              public void onError() {
                 Toast.makeText(ChatActivity.this,
                     "This file does not exist.", Toast.LENGTH_SHORT).show();
               }
@@ -2108,10 +2365,11 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       return;
     }
     if (attachmentStates.getOrDefault(
-        attachmentKey(message), ATTACHMENT_DOWNLOAD_REQUIRED) == ATTACHMENT_DOWNLOADING) return;
+        attachmentKey(message), ATTACHMENT_DOWNLOAD_REQUIRED) == ATTACHMENT_DOWNLOADING)
+      return;
     if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
-        && ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-        != PackageManager.PERMISSION_GRANTED) {
+        && ContextCompat.checkSelfPermission(this,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
       pendingDownloadMessage = message;
       storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE);
       return;
@@ -2136,16 +2394,17 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     StringBuilder copied = new StringBuilder();
     for (MessageEntity message : messages) {
       String value = copyValue(message);
-      if (value.isEmpty()) continue;
-      if (copied.length() > 0) copied.append('\n');
+      if (value.isEmpty())
+        continue;
+      if (copied.length() > 0)
+        copied.append('\n');
       copied.append(value);
     }
     if (copied.length() == 0) {
       Toast.makeText(this, "Nothing to copy.", Toast.LENGTH_SHORT).show();
       return;
     }
-    ClipboardManager clipboard =
-        (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+    ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
     clipboard.setPrimaryClip(ClipData.newPlainText("PingGo messages", copied.toString()));
     chatView.clearMessageSelection();
     Toast.makeText(this, messages.size() == 1 ? "Message copied." : "Messages copied.",
@@ -2196,16 +2455,115 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   public void onDeleteSelected(List<MessageEntity> messages) {
     List<String> own = new ArrayList<>(), opponent = new ArrayList<>();
     for (MessageEntity message : messages) {
-      if (!hasServerMessageId(message)) continue;
-      if (currentUser.equals(normalize(message.senderId))) own.add(message.messageId);
-      else opponent.add(message.messageId);
+      if (!hasServerMessageId(message))
+        continue;
+      if (currentUser.equals(normalize(message.senderId)))
+        own.add(message.messageId);
+      else
+        opponent.add(message.messageId);
     }
-    if (!own.isEmpty()) repository.deleteOwnMessages(chatId, own);
-    if (!opponent.isEmpty()) repository.deleteOpponentMessages(chatId, opponent);
+    if (!own.isEmpty())
+      repository.deleteOwnMessages(chatId, own);
+    if (!opponent.isEmpty())
+      repository.deleteOpponentMessages(chatId, opponent);
     chatView.clearMessageSelection();
     if (own.isEmpty() && opponent.isEmpty()) {
       Toast.makeText(this, "Wait until the selected messages are sent.", Toast.LENGTH_SHORT).show();
     }
+  }
+
+  @Override
+  public void onMessageInfoSelected(MessageEntity message) {
+    if (message == null || !currentUser.equals(normalize(message.senderId))) return;
+    final android.app.Dialog sheet = new android.app.Dialog(this);
+    android.widget.LinearLayout content = new android.widget.LinearLayout(this);
+    content.setOrientation(android.widget.LinearLayout.VERTICAL);
+    int pad = Math.round(getResources().getDisplayMetrics().density * 20f);
+    content.setPadding(pad, pad, pad, pad);
+    content.setBackgroundColor(0xFFFFFFFF);
+    android.widget.TextView title = infoText("Message info", 20, true);
+    content.addView(title);
+    android.widget.ProgressBar progress = new android.widget.ProgressBar(this);
+    content.addView(progress, new android.widget.LinearLayout.LayoutParams(-1, pad * 2));
+    sheet.setContentView(content);
+    android.view.Window window = sheet.getWindow();
+    if (window != null) {
+      window.setBackgroundDrawableResource(android.R.color.transparent);
+      window.setLayout(-1, -2);
+      window.setGravity(android.view.Gravity.BOTTOM);
+    }
+    sheet.setOnShowListener(ignored -> {
+      android.view.Window shown = sheet.getWindow();
+      if (shown != null) shown.setLayout(-1, -2);
+    });
+    sheet.show();
+    if (!groupChat) {
+      content.removeView(progress);
+      if (message.readTime != null) addInfoSection(content, "Seen", receiverId);
+      else if (message.deliveredTime != null) addInfoSection(content, "Delivered", receiverId);
+      else addInfoSection(content, "Not delivered", receiverId);
+      return;
+    }
+    AppFunctionManager manager = AppFunctionManager.getInstance();
+    manager.applyAuth(this);
+    manager.getGroupDetails(currentUser, chatId, new AppFunctionManager.Callback() {
+      @Override public void onSuccess(Object object) {
+        runOnUiThread(() -> renderGroupMessageInfo(content, progress, message, object));
+      }
+      @Override public void onError(String error) {
+        runOnUiThread(() -> { content.removeView(progress); addInfoSection(content,
+            "Unable to load", error == null ? "Please try again" : error); });
+      }
+    });
+  }
+
+  private android.widget.TextView infoText(String value, int sp, boolean heading) {
+    android.widget.TextView view = new android.widget.TextView(this);
+    view.setText(value);
+    view.setTextSize(sp);
+    view.setTextColor(heading ? 0xFF131D2F : 0xFF687382);
+    view.setPadding(0, 12, 0, 12);
+    if (heading) view.setTypeface(android.graphics.Typeface.DEFAULT,
+        android.graphics.Typeface.BOLD);
+    return view;
+  }
+
+  private void addInfoSection(android.widget.LinearLayout parent, String heading, String values) {
+    if (values == null || values.trim().isEmpty()) return;
+    parent.addView(infoText(heading, 16, true));
+    parent.addView(infoText(values, 15, false));
+  }
+
+  private void renderGroupMessageInfo(android.widget.LinearLayout parent,
+      android.widget.ProgressBar progress, MessageEntity message, Object object) {
+    parent.removeView(progress);
+    JsonObject root = object instanceof JsonObject ? (JsonObject) object : null;
+    JsonObject group = root != null && root.has("group") && root.get("group").isJsonObject()
+        ? root.getAsJsonObject("group") : null;
+    JsonArray members = group != null && group.has("members") && group.get("members").isJsonArray()
+        ? group.getAsJsonArray("members") : new JsonArray();
+    JsonObject receipts = new JsonObject();
+    try {
+      if (message.groupReceiptsJson != null)
+        receipts = com.google.gson.JsonParser.parseString(message.groupReceiptsJson).getAsJsonObject();
+    } catch (RuntimeException ignored) { }
+    StringBuilder missing = new StringBuilder(), delivered = new StringBuilder(), seen = new StringBuilder();
+    for (JsonElement element : members) {
+      if (!element.isJsonObject()) continue;
+      JsonObject member = element.getAsJsonObject();
+      String id = normalize(member.has("userId") ? member.get("userId").getAsString() : "");
+      if (id.isEmpty() || id.equals(currentUser)) continue;
+      String label = DeviceContactResolver.cachedNameOrPhone(id);
+      JsonObject receipt = receipts.has(id) && receipts.get(id).isJsonObject()
+          ? receipts.getAsJsonObject(id) : null;
+      StringBuilder target = receipt != null && receipt.has("readAt") ? seen
+          : receipt != null && receipt.has("deliveredAt") ? delivered : missing;
+      if (target.length() > 0) target.append('\n');
+      target.append(label);
+    }
+    addInfoSection(parent, "Not delivered", missing.toString());
+    addInfoSection(parent, "Delivered", delivered.toString());
+    addInfoSection(parent, "Seen", seen.toString());
   }
 
   @Override
@@ -2241,9 +2599,11 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private static String copyValue(MessageEntity message) {
-    if (message == null) return "";
+    if (message == null)
+      return "";
     String text = message.text == null ? "" : message.text.trim();
-    if (!text.isEmpty()) return text;
+    if (!text.isEmpty())
+      return text;
     String type = message.messageType == null ? "text" : message.messageType;
     if (message.attachmentName != null && !message.attachmentName.trim().isEmpty()) {
       return message.attachmentName.trim();
@@ -2257,7 +2617,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private void openUri(Uri target, String mimeType) {
     try {
       Intent intent = new Intent(Intent.ACTION_VIEW, target);
-      if (mimeType != null && !mimeType.isEmpty()) intent.setDataAndType(target, mimeType);
+      if (mimeType != null && !mimeType.isEmpty())
+        intent.setDataAndType(target, mimeType);
       intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
       startActivity(intent);
     } catch (RuntimeException error) {
@@ -2286,20 +2647,25 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         + " transferredBytes=0 totalSize=" + totalSize);
     refreshAttachmentRows();
     repository.downloadAttachment(message, new ChatRepository.DownloadCallback() {
-      @Override public void onAvailable(Uri uri) {
+      @Override
+      public void onAvailable(Uri uri) {
         attachmentStates.put(attachmentKey(message), ATTACHMENT_AVAILABLE);
         Log.d("PingGoAttachmentTransfer", "stage=download_available attachmentId="
             + message.attachmentId + " uri=" + uri);
         refreshAttachmentRows();
         openAttachment(message, uri);
       }
-      @Override public void onQueued() {
+
+      @Override
+      public void onQueued() {
         attachmentStates.put(attachmentKey(message), ATTACHMENT_DOWNLOADING);
         Log.d("PingGoAttachmentTransfer", "stage=download_queued attachmentId="
             + message.attachmentId);
         refreshAttachmentRows();
       }
-      @Override public void onError(String error) {
+
+      @Override
+      public void onError(String error) {
         attachmentStates.put(attachmentKey(message), ATTACHMENT_DOWNLOAD_REQUIRED);
         attachmentDownloadedBytes.remove(attachmentKey(message));
         attachmentTotalBytes.remove(attachmentKey(message));
@@ -2312,7 +2678,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void refreshAttachmentRows() {
-    if (chatView != null) chatView.submitMessages(latestMessages);
+    if (chatView != null)
+      chatView.submitMessages(latestMessages);
   }
 
   private String attachmentKey(MessageEntity message) {
@@ -2321,8 +2688,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private boolean canRead(Uri uri) {
-    try (android.content.res.AssetFileDescriptor ignored =
-             getContentResolver().openAssetFileDescriptor(uri, "r")) {
+    try (android.content.res.AssetFileDescriptor ignored = getContentResolver().openAssetFileDescriptor(uri, "r")) {
       return ignored != null;
     } catch (FileNotFoundException | SecurityException error) {
       return false;
@@ -2359,8 +2725,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void openMediaPreview(String source, String mediaType, MessageEntity message) {
-    if ("video".equals(mediaType)) showVideoPreview(source, message);
-    else showImagePreview(source, message);
+    if ("video".equals(mediaType))
+      showVideoPreview(source, message);
+    else
+      showImagePreview(source, message);
   }
 
   private void showImagePreview(String source, MessageEntity message) {
@@ -2368,20 +2736,52 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     closeImagePreview();
     final String messageId = message == null ? null : message.messageId;
     String senderId = message == null || message.senderId == null
-        ? receiverId : normalize(message.senderId);
+        ? receiverId
+        : normalize(message.senderId);
     String sentTime = message == null || message.sentTime <= 0 ? ""
         : DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
             .format(new Date(message.sentTime));
     imagePreviewView = new ImagePreviewView(this, source, senderId, sentTime,
         new ImagePreviewView.Listener() {
-          @Override public void onClose() { closeImagePreview(); }
-          @Override public void onForward() { forwardPreviewMessage(messageId); }
-          @Override public void onShowInChat() { showPreviewMessageInChat(messageId); }
-          @Override public void onDownload() { downloadPreviewImage(source, message); }
-          @Override public void onShare() { sharePreviewImage(source, message); }
-          @Override public void onDelete() { deletePreviewMessage(message, false); }
-          @Override public void onViewInGallery() { viewPreviewImage(source, message); }
-          @Override public void onReply(String text) { sendPreviewReply(message, text, false); }
+          @Override
+          public void onClose() {
+            closeImagePreview();
+          }
+
+          @Override
+          public void onForward() {
+            forwardPreviewMessage(messageId);
+          }
+
+          @Override
+          public void onShowInChat() {
+            showPreviewMessageInChat(messageId);
+          }
+
+          @Override
+          public void onDownload() {
+            downloadPreviewImage(source, message);
+          }
+
+          @Override
+          public void onShare() {
+            sharePreviewImage(source, message);
+          }
+
+          @Override
+          public void onDelete() {
+            deletePreviewMessage(message, false);
+          }
+
+          @Override
+          public void onViewInGallery() {
+            viewPreviewImage(source, message);
+          }
+
+          @Override
+          public void onReply(String text) {
+            sendPreviewReply(message, text, false);
+          }
         });
     imagePreviewView.setOnSystemBarsChangedListener(this::updateMediaSystemBars);
     ((ViewGroup) findViewById(android.R.id.content)).addView(imagePreviewView,
@@ -2410,8 +2810,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   private void savePreviewMediaCopy(Uri source, MessageEntity message, boolean video) {
     if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
-        && ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-        != PackageManager.PERMISSION_GRANTED) {
+        && ContextCompat.checkSelfPermission(this,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
       pendingPreviewSaveUri = source;
       pendingPreviewSaveMessage = message;
       pendingPreviewSaveVideo = video;
@@ -2452,7 +2852,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         : MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
     Uri destination = getContentResolver().insert(
         collection, values);
-    if (destination == null) throw new IOException("Unable to create gallery media");
+    if (destination == null)
+      throw new IOException("Unable to create gallery media");
     boolean complete = false;
     try {
       copyPreviewMedia(source, getContentResolver().openOutputStream(destination));
@@ -2461,7 +2862,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       getContentResolver().update(destination, ready, null, null);
       complete = true;
     } finally {
-      if (!complete) getContentResolver().delete(destination, null, null);
+      if (!complete)
+        getContentResolver().delete(destination, null, null);
     }
   }
 
@@ -2469,7 +2871,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       Uri source, String fileName, String mimeType, boolean video) throws IOException {
     File directory = new File(
         Environment.getExternalStoragePublicDirectory(
-            video ? Environment.DIRECTORY_MOVIES : Environment.DIRECTORY_PICTURES), "PingGo");
+            video ? Environment.DIRECTORY_MOVIES : Environment.DIRECTORY_PICTURES),
+        "PingGo");
     if (!directory.exists() && !directory.mkdirs()) {
       throw new IOException("Unable to create gallery directory");
     }
@@ -2484,16 +2887,18 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       }
     }
     MediaScannerConnection.scanFile(
-        this, new String[] {destination.getAbsolutePath()}, new String[] {mimeType}, null);
+        this, new String[] { destination.getAbsolutePath() }, new String[] { mimeType }, null);
   }
 
   private void copyPreviewMedia(Uri source, OutputStream destination) throws IOException {
     try (InputStream input = getContentResolver().openInputStream(source);
-         OutputStream output = destination) {
-      if (input == null || output == null) throw new IOException("Image stream unavailable");
+        OutputStream output = destination) {
+      if (input == null || output == null)
+        throw new IOException("Image stream unavailable");
       byte[] buffer = new byte[16 * 1024];
       int count;
-      while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+      while ((count = input.read(buffer)) != -1)
+        output.write(buffer, 0, count);
     }
   }
 
@@ -2503,12 +2908,12 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     if (video) {
       extension = "video/webm".equals(mimeType) ? ".webm"
           : "video/3gpp".equals(mimeType) ? ".3gp"
-          : "video/quicktime".equals(mimeType) ? ".mov"
-          : "video/x-matroska".equals(mimeType) ? ".mkv" : ".mp4";
+              : "video/quicktime".equals(mimeType) ? ".mov"
+                  : "video/x-matroska".equals(mimeType) ? ".mkv" : ".mp4";
     } else {
       extension = "image/png".equals(mimeType) ? ".png"
           : "image/webp".equals(mimeType) ? ".webp"
-          : "image/gif".equals(mimeType) ? ".gif" : ".jpg";
+              : "image/gif".equals(mimeType) ? ".gif" : ".jpg";
     }
     return "PingGo_" + System.currentTimeMillis() + "_"
         + UUID.randomUUID().toString().substring(0, 8) + extension;
@@ -2518,7 +2923,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     String mimeType = message == null ? null : message.attachmentMimeType;
     String prefix = video ? "video/" : "image/";
     return mimeType == null || !mimeType.startsWith(prefix)
-        ? (video ? "video/mp4" : "image/jpeg") : mimeType;
+        ? (video ? "video/mp4" : "image/jpeg")
+        : mimeType;
   }
 
   private void sharePreviewImage(String source, MessageEntity message) {
@@ -2568,10 +2974,12 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     Set<String> externalComponents = new HashSet<>();
     for (ResolveInfo handler : handlers) {
       if (handler.activityInfo == null
-          || getPackageName().equals(handler.activityInfo.packageName)) continue;
+          || getPackageName().equals(handler.activityInfo.packageName))
+        continue;
       ComponentName component = new ComponentName(
           handler.activityInfo.packageName, handler.activityInfo.name);
-      if (!externalComponents.add(component.flattenToString())) continue;
+      if (!externalComponents.add(component.flattenToString()))
+        continue;
       externalIntents.add(new Intent(baseIntent).setComponent(component));
     }
     if (externalIntents.isEmpty()) {
@@ -2607,12 +3015,19 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       return;
     }
     repository.downloadAttachment(message, new ChatRepository.DownloadCallback() {
-      @Override public void onAvailable(Uri uri) { action.accept(uri); }
-      @Override public void onQueued() {
+      @Override
+      public void onAvailable(Uri uri) {
+        action.accept(uri);
+      }
+
+      @Override
+      public void onQueued() {
         Toast.makeText(ChatActivity.this, mediaName + " download queued.",
             Toast.LENGTH_SHORT).show();
       }
-      @Override public void onError(String error) {
+
+      @Override
+      public void onError(String error) {
         Toast.makeText(ChatActivity.this, error, Toast.LENGTH_SHORT).show();
       }
     });
@@ -2620,10 +3035,13 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   private Uri readablePreviewMediaUri(String source, MessageEntity message) {
     String localSource = message == null ? null : message.attachmentLocalUri;
-    if (localSource == null || localSource.trim().isEmpty()) localSource = source;
-    if (localSource == null || localSource.trim().isEmpty()) return null;
+    if (localSource == null || localSource.trim().isEmpty())
+      localSource = source;
+    if (localSource == null || localSource.trim().isEmpty())
+      return null;
     Uri uri = Uri.parse(localSource);
-    if (uri.getScheme() == null) uri = Uri.fromFile(new File(localSource));
+    if (uri.getScheme() == null)
+      uri = Uri.fromFile(new File(localSource));
     String scheme = uri.getScheme();
     return ("file".equals(scheme) || "content".equals(scheme)) && canRead(uri) ? uri : null;
   }
@@ -2638,10 +3056,14 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         this, "Delete " + mediaName + "?", "Delete this " + mediaName + " message?",
         "Delete", () -> {
           boolean own = currentUser.equals(normalize(message.senderId));
-          if (video) closeVideoPreview();
-          else closeImagePreview();
-          if (own) repository.deleteOwnMessage(chatId, message.messageId);
-          else repository.deleteOpponentMessage(chatId, message.messageId);
+          if (video)
+            closeVideoPreview();
+          else
+            closeImagePreview();
+          if (own)
+            repository.deleteOwnMessage(chatId, message.messageId);
+          else
+            repository.deleteOpponentMessage(chatId, message.messageId);
         }, this::removePrompt));
   }
 
@@ -2651,11 +3073,15 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       return;
     }
     String reply = text == null ? "" : text.trim();
-    if (reply.isEmpty()) return;
+    if (reply.isEmpty())
+      return;
     repository.sendMessage(chatId, receiverId, reply, message.messageId);
-    if (video) closeVideoPreview();
-    else closeImagePreview();
-    if (chatView != null) chatView.scrollToBottom();
+    if (video)
+      closeVideoPreview();
+    else
+      closeImagePreview();
+    if (chatView != null)
+      chatView.scrollToBottom();
   }
 
   private interface PreviewMediaUriAction {
@@ -2667,23 +3093,53 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     closeVideoPreview();
     final String messageId = message == null ? null : message.messageId;
     String senderId = message == null || message.senderId == null
-        ? receiverId : normalize(message.senderId);
+        ? receiverId
+        : normalize(message.senderId);
     String sentTime = message == null || message.sentTime <= 0 ? ""
         : DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
             .format(new Date(message.sentTime));
     videoPreviewView = new VideoPreviewView(this, source, senderId, sentTime,
         new VideoPreviewView.Listener() {
-          @Override public void onClose() { closeVideoPreview(); }
-          @Override public void onForward() { forwardPreviewMessage(messageId); }
-          @Override public void onShowInChat() {
+          @Override
+          public void onClose() {
+            closeVideoPreview();
+          }
+
+          @Override
+          public void onForward() {
+            forwardPreviewMessage(messageId);
+          }
+
+          @Override
+          public void onShowInChat() {
             closeVideoPreview();
             showPreviewMessageInChat(messageId);
           }
-          @Override public void onDownload() { downloadPreviewVideo(source, message); }
-          @Override public void onShare() { sharePreviewVideo(source, message); }
-          @Override public void onDelete() { deletePreviewMessage(message, true); }
-          @Override public void onViewInGallery() { viewPreviewVideo(source, message); }
-          @Override public void onReply(String text) { sendPreviewReply(message, text, true); }
+
+          @Override
+          public void onDownload() {
+            downloadPreviewVideo(source, message);
+          }
+
+          @Override
+          public void onShare() {
+            sharePreviewVideo(source, message);
+          }
+
+          @Override
+          public void onDelete() {
+            deletePreviewMessage(message, true);
+          }
+
+          @Override
+          public void onViewInGallery() {
+            viewPreviewVideo(source, message);
+          }
+
+          @Override
+          public void onReply(String text) {
+            sendPreviewReply(message, text, true);
+          }
         });
     videoPreviewView.setOnSystemBarsChangedListener(this::updateMediaSystemBars);
     ((ViewGroup) findViewById(android.R.id.content)).addView(videoPreviewView,
@@ -2709,8 +3165,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private void closeImagePreview() {
     ImagePreviewView current = imagePreviewView;
     imagePreviewView = null;
-    if (current == null) return;
-    if (current.getParent() instanceof ViewGroup) ((ViewGroup) current.getParent()).removeView(current);
+    if (current == null)
+      return;
+    if (current.getParent() instanceof ViewGroup)
+      ((ViewGroup) current.getParent()).removeView(current);
     current.release();
     updateMediaSystemBars();
   }
@@ -2718,8 +3176,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private void closeVideoPreview() {
     VideoPreviewView current = videoPreviewView;
     videoPreviewView = null;
-    if (current == null) return;
-    if (current.getParent() instanceof ViewGroup) ((ViewGroup) current.getParent()).removeView(current);
+    if (current == null)
+      return;
+    if (current.getParent() instanceof ViewGroup)
+      ((ViewGroup) current.getParent()).removeView(current);
     current.release();
     updateMediaSystemBars();
   }
@@ -2749,25 +3209,35 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private static String attachmentMediaType(MessageEntity message) {
-    if (message == null) return null;
+    if (message == null)
+      return null;
     String mime = message.attachmentMimeType == null
-        ? "" : message.attachmentMimeType.toLowerCase(java.util.Locale.US);
-    if (mime.startsWith("image/")) return "image";
-    if (mime.startsWith("video/")) return "video";
+        ? ""
+        : message.attachmentMimeType.toLowerCase(java.util.Locale.US);
+    if (mime.startsWith("image/"))
+      return "image";
+    if (mime.startsWith("video/"))
+      return "video";
     String name = message.attachmentName == null
-        ? "" : message.attachmentName.toLowerCase(java.util.Locale.US);
-    if (name.matches(".*\\.(jpg|jpeg|png|gif|webp|bmp|heic|heif)$")) return "image";
-    if (name.matches(".*\\.(mp4|m4v|mov|webm|mkv|avi|3gp)$")) return "video";
+        ? ""
+        : message.attachmentName.toLowerCase(java.util.Locale.US);
+    if (name.matches(".*\\.(jpg|jpeg|png|gif|webp|bmp|heic|heif)$"))
+      return "image";
+    if (name.matches(".*\\.(mp4|m4v|mov|webm|mkv|avi|3gp)$"))
+      return "video";
     return null;
   }
 
   @Override
   public int attachmentState(MessageEntity message) {
-    if (currentUser.equals(normalize(message.senderId))) return ATTACHMENT_AVAILABLE;
+    if (currentUser.equals(normalize(message.senderId)))
+      return ATTACHMENT_AVAILABLE;
     Integer state = attachmentStates.get(attachmentKey(message));
-    if (state != null) return state;
+    if (state != null)
+      return state;
     return message.attachmentLocalUri != null && !message.attachmentLocalUri.isEmpty()
-        ? ATTACHMENT_AVAILABLE : ATTACHMENT_DOWNLOAD_REQUIRED;
+        ? ATTACHMENT_AVAILABLE
+        : ATTACHMENT_DOWNLOAD_REQUIRED;
   }
 
   private void handleAction(String action, MessageEntity message, boolean own) {
@@ -2788,8 +3258,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       chatView.setDraft(message.text);
       return;
     }
-    if (own) repository.deleteOwnMessage(chatId, message.messageId);
-    else repository.deleteOpponentMessage(chatId, message.messageId);
+    if (own)
+      repository.deleteOwnMessage(chatId, message.messageId);
+    else
+      repository.deleteOpponentMessage(chatId, message.messageId);
     if (message.messageId.equals(editingId)) {
       editingId = null;
       chatView.clearDraft();
@@ -2806,26 +3278,36 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       finishAudioRecording(false);
       return;
     }
-    if (chatView != null && chatView.dismissSearch()) return;
-    if (chatView != null && chatView.dismissAttachmentPanel()) return;
-    if (chatView != null && chatView.clearMessageSelection()) return;
+    if (chatView != null && chatView.dismissSearch())
+      return;
+    if (chatView != null && chatView.dismissAttachmentPanel())
+      return;
+    if (chatView != null && chatView.clearMessageSelection())
+      return;
     finish();
   }
 
   @Override
   public void onMore() {
     removePrompt();
-    refreshContactState(false);
-    if (conversationMenuDialog != null) conversationMenuDialog.show();
+    if (!groupChat)
+      refreshContactState(false);
+    if (conversationMenuDialog != null)
+      conversationMenuDialog.show();
   }
 
   private void handleConversationMenuOption(String option) {
     if ("Clear chat".equals(option)) {
       showPrompt(NativePromptDialogView.actions(this,
           java.util.Arrays.asList("Clear chat", "Cancel"), index -> {
-            if (index == 0) clearChat();
+            if (index == 0)
+              clearChat();
           }, this::removePrompt));
     } else if ("Report".equals(option)) {
+      if (groupChat) {
+        Toast.makeText(this, "Group reporting implementation pending.", Toast.LENGTH_SHORT).show();
+        return;
+      }
       showReportReasons();
     } else if ("Search".equals(option)) {
       beginSearch();
@@ -2833,15 +3315,21 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         || "Unmute notifications".equals(option)) {
       updateMuteSetting();
     } else if ("Block".equals(option) || "Unblock".equals(option)) {
+      if (groupChat) {
+        Toast.makeText(this, "Members cannot be blocked from the group menu.", Toast.LENGTH_SHORT).show();
+        return;
+      }
       updateBlockState(!contactBlocked);
     } else if ("Add to contacts".equals(option)) {
+      if (groupChat)
+        return;
       addOpponentToContacts();
     }
   }
 
   private void addOpponentToContacts() {
-    if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
-        != PackageManager.PERMISSION_GRANTED) {
+    if (ContextCompat.checkSelfPermission(this,
+        Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
       addContactAfterLookup = true;
       contactsPermission.launch(Manifest.permission.READ_CONTACTS);
       return;
@@ -2850,24 +3338,30 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void refreshContactState(boolean continueAdd) {
-    if (continueAdd) addContactAfterLookup = true;
+    if (groupChat)
+      return;
+    if (continueAdd)
+      addContactAfterLookup = true;
     if (receiverId == null || receiverId.isEmpty()
-        || ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
-            != PackageManager.PERMISSION_GRANTED
-        || contactLookupExecutor.isShutdown()) return;
+        || ContextCompat.checkSelfPermission(this,
+            Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED
+        || contactLookupExecutor.isShutdown())
+      return;
     int generation = ++contactLookupGeneration;
     String opponent = receiverId;
     contactLookupExecutor.execute(() -> {
       boolean exists = isPhoneInContacts(opponent);
       runOnUiThread(() -> {
-        if (isFinishing() || isDestroyed() || generation != contactLookupGeneration) return;
+        if (isFinishing() || isDestroyed() || generation != contactLookupGeneration)
+          return;
         contactExists = exists;
         if (conversationMenuDialog != null) {
           conversationMenuDialog.setContactExists(exists);
         }
         boolean shouldInsert = addContactAfterLookup;
         addContactAfterLookup = false;
-        if (shouldInsert && !exists) launchContactInsert(opponent);
+        if (shouldInsert && !exists)
+          launchContactInsert(opponent);
         else if (shouldInsert) {
           Toast.makeText(this, "Contact already exists.", Toast.LENGTH_SHORT).show();
         }
@@ -2876,16 +3370,18 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private boolean isPhoneInContacts(String opponent) {
-    String[] projection = {ContactsContract.CommonDataKinds.Phone.NUMBER};
+    String[] projection = { ContactsContract.CommonDataKinds.Phone.NUMBER };
     try (Cursor cursor = getContentResolver().query(
         ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
         projection, null, null, null)) {
-      if (cursor == null) return false;
+      if (cursor == null)
+        return false;
       int numberIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER);
       while (cursor.moveToNext()) {
         String number = numberIndex < 0 ? null : cursor.getString(numberIndex);
         if (number != null && (PhoneNumberUtils.compare(number, opponent)
-            || normalize(number).equals(normalize(opponent)))) return true;
+            || normalize(number).equals(normalize(opponent))))
+          return true;
       }
     } catch (SecurityException ignored) {
       return false;
@@ -2914,13 +3410,16 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private void updateBlockState(boolean blocked) {
     setMenuLoading(true);
     repository.updateBlock(chatId, blocked, new AppFunctionManager.Callback() {
-      @Override public void onSuccess(Object object) {
+      @Override
+      public void onSuccess(Object object) {
         setMenuLoading(false);
         applyBlockState(blocked);
         Toast.makeText(ChatActivity.this, blocked ? "Contact blocked." : "Contact unblocked.",
             Toast.LENGTH_SHORT).show();
       }
-      @Override public void onError(String error) {
+
+      @Override
+      public void onError(String error) {
         setMenuLoading(false);
         Toast.makeText(ChatActivity.this, error == null ? "Block action failed." : error,
             Toast.LENGTH_LONG).show();
@@ -2932,21 +3431,30 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     contactBlocked = blocked;
     getSharedPreferences("chat_menu_state", MODE_PRIVATE).edit()
         .putBoolean("blocked:" + String.valueOf(chatId), blocked).apply();
-    if (conversationMenuDialog != null) conversationMenuDialog.setBlocked(blocked);
-    if (chatView != null) chatView.setContactBlocked(blocked);
+    if (conversationMenuDialog != null)
+      conversationMenuDialog.setBlocked(blocked);
+    if (chatView != null)
+      chatView.setContactBlocked(blocked);
   }
 
-  @Override public void onBlockedUnblock() { updateBlockState(false); }
+  @Override
+  public void onBlockedUnblock() {
+    updateBlockState(false);
+  }
 
-  @Override public void onBlockedDeleteChat() {
+  @Override
+  public void onBlockedDeleteChat() {
     setMenuLoading(true);
     repository.updateChatSetting(chatId, "delete", 1L, new AppFunctionManager.Callback() {
-      @Override public void onSuccess(Object object) {
+      @Override
+      public void onSuccess(Object object) {
         setMenuLoading(false);
         repository.deleteLocalChat(chatId);
         finish();
       }
-      @Override public void onError(String error) {
+
+      @Override
+      public void onError(String error) {
         setMenuLoading(false);
         Toast.makeText(ChatActivity.this, error == null ? "Unable to delete chat." : error,
             Toast.LENGTH_LONG).show();
@@ -2995,10 +3503,11 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     if (!messagePageLoading && messageNetworkHasMore) {
       loadMessagePage(firstMessagePageLoaded ? nextMessageCursor : null);
     }
-    if (chatView != null) chatView.showSearch(() -> {
-      searchActive = false;
-      searchLoadingAll = false;
-    });
+    if (chatView != null)
+      chatView.showSearch(() -> {
+        searchActive = false;
+        searchLoadingAll = false;
+      });
   }
 
   private void updateMuteSetting() {
@@ -3012,12 +3521,14 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   private AppFunctionManager.Callback callback(String successText, String failureText) {
     return new AppFunctionManager.Callback() {
-      @Override public void onSuccess(Object object) {
+      @Override
+      public void onSuccess(Object object) {
         setMenuLoading(false);
         Toast.makeText(ChatActivity.this, successText, Toast.LENGTH_SHORT).show();
       }
 
-      @Override public void onError(String error) {
+      @Override
+      public void onError(String error) {
         setMenuLoading(false);
         String detail = error == null || error.trim().isEmpty() ? failureText : error;
         Toast.makeText(ChatActivity.this, detail, Toast.LENGTH_LONG).show();
@@ -3026,11 +3537,13 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void setMenuLoading(boolean loading) {
-    if (menuProgress != null) menuProgress.setLoading(loading);
+    if (menuProgress != null)
+      menuProgress.setLoading(loading);
   }
 
   private void showPrompt(NativePromptDialogView prompt) {
-    if (conversationMenuDialog != null) conversationMenuDialog.dismissIfShowing();
+    if (conversationMenuDialog != null)
+      conversationMenuDialog.dismissIfShowing();
     removePrompt();
     promptDialog = prompt;
     ((ViewGroup) findViewById(android.R.id.content)).addView(prompt,
@@ -3041,7 +3554,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private void removePrompt() {
     NativePromptDialogView current = promptDialog;
     promptDialog = null;
-    if (current == null) return;
+    if (current == null)
+      return;
     if (current.getParent() instanceof ViewGroup) {
       ((ViewGroup) current.getParent()).removeView(current);
     }
@@ -3049,19 +3563,41 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private String receiver() {
-    if (chatId == null) return "";
+    if (chatId == null)
+      return "";
+    if (chatId.startsWith("grp_"))
+      return "";
     for (String value : chatId.split("_")) {
       String n = normalize(value);
-      if (!n.equals(currentUser)) return n;
+      if (!n.equals(currentUser))
+        return n;
     }
     return "";
   }
 
   private static String normalize(String v) {
-    if (v == null) return "";
+    if (v == null)
+      return "";
     String n = v.trim();
-    if (n.startsWith("<plus>")) n = n.substring(6);
+    if (n.startsWith("<plus>"))
+      n = n.substring(6);
     return n.startsWith("+") ? n.substring(1) : n;
+  }
+
+  @Override
+  public void onChatDetails() {
+    Intent intent = new Intent(this, ChatInfoActivity.class);
+    intent.putExtra(ChatInfoActivity.EXTRA_CHAT_ID, chatId);
+    intent.putExtra(ChatInfoActivity.EXTRA_IS_GROUP, groupChat);
+    intent.putExtra(ChatInfoActivity.EXTRA_NAME, chatName);
+    intent.putExtra(ChatInfoActivity.EXTRA_PHONE, groupChat ? "" : receiverId);
+    intent.putExtra(ChatInfoActivity.EXTRA_PROFILE_PATH, profilePhotoPath);
+    if (currentChatDetails != null) {
+      intent.putExtra(ChatInfoActivity.EXTRA_DESCRIPTION, currentChatDetails.groupDescription);
+      intent.putExtra(ChatInfoActivity.EXTRA_MEMBER_COUNT, currentChatDetails.groupMemberCount);
+      intent.putExtra(ChatInfoActivity.EXTRA_ROLE, currentChatDetails.ownGroupRole);
+    }
+    chatInfo.launch(intent);
   }
 
   @Override
@@ -3073,22 +3609,32 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   @Override
   public long attachmentTotalBytes(MessageEntity message) {
     Long value = attachmentTotalBytes.get(attachmentKey(message));
-    if (value != null && value > 0L) return value;
+    if (value != null && value > 0L)
+      return value;
     return message != null && message.attachmentSize != null
-        ? Math.max(0L, message.attachmentSize) : 0L;
+        ? Math.max(0L, message.attachmentSize)
+        : 0L;
   }
 
-  @Override protected void onResume() {
+  @Override
+  protected void onResume() {
     super.onResume();
-    if (videoPreviewView != null) videoPreviewView.onHostResume();
-    if (selectedMediaPreviewView != null) selectedMediaPreviewView.onHostResume();
-    if (cameraCaptureView != null) cameraCaptureView.onHostResume();
+    if (videoPreviewView != null)
+      videoPreviewView.onHostResume();
+    if (selectedMediaPreviewView != null)
+      selectedMediaPreviewView.onHostResume();
+    if (cameraCaptureView != null)
+      cameraCaptureView.onHostResume();
   }
 
-  @Override protected void onPause() {
-    if (videoPreviewView != null) videoPreviewView.onHostPause();
-    if (selectedMediaPreviewView != null) selectedMediaPreviewView.onHostPause();
-    if (cameraCaptureView != null) cameraCaptureView.onHostPause();
+  @Override
+  protected void onPause() {
+    if (videoPreviewView != null)
+      videoPreviewView.onHostPause();
+    if (selectedMediaPreviewView != null)
+      selectedMediaPreviewView.onHostPause();
+    if (cameraCaptureView != null)
+      cameraCaptureView.onHostPause();
     super.onPause();
   }
 
@@ -3115,10 +3661,13 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     typingHandler.removeCallbacksAndMessages(null);
     locationPending = false;
     removeLocationUpdates();
-    if (repository != null) repository.setEventListener(null);
-    if (chatView != null) chatView.release();
+    if (repository != null)
+      repository.setEventListener(null);
+    if (chatView != null)
+      chatView.release();
     chatView = null;
-    if (profiler != null) profiler.release();
+    if (profiler != null)
+      profiler.release();
     profiler = null;
     super.onDestroy();
   }

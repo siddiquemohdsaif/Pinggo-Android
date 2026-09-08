@@ -20,7 +20,7 @@ public final class MessageTypeCodec {
     // term=callTerminationReason.
     public static final int TEXT = 0, IMAGE = 1, VIDEO = 2, AUDIO = 3, FILE = 4,
             LOCATION = 5, VOICE_CALL = 6, VIDEO_CALL = 7, REPORT = 8,
-            CHAT_REPORT = 9, CHAT_BLOCK = 10, CHAT_UNBLOCK = 11;
+            CHAT_REPORT = 9, CHAT_BLOCK = 10, CHAT_UNBLOCK = 11, GROUP_SYSTEM = 12;
 
     private MessageTypeCodec() {}
 
@@ -39,6 +39,7 @@ public final class MessageTypeCodec {
             case "chat_report": return CHAT_REPORT;
             case "chat_block": return CHAT_BLOCK;
             case "chat_unblock": return CHAT_UNBLOCK;
+            case "group_system": return GROUP_SYSTEM;
             default: throw new IllegalArgumentException("Unknown messageType: " + value);
         }
     }
@@ -56,6 +57,7 @@ public final class MessageTypeCodec {
             case CHAT_REPORT: return "chat_report";
             case CHAT_BLOCK: return "chat_block";
             case CHAT_UNBLOCK: return "chat_unblock";
+            case GROUP_SYSTEM: return "group_system";
             case TEXT: return "text";
             default: throw new IllegalArgumentException("Unknown messageTypeCode: " + value);
         }

@@ -27,6 +27,8 @@ final class NotificationStateStore {
             chat.put("senderId", value(data, "senderId"));
             chat.put("senderName", value(data, "senderName"));
             chat.put("profilePhotoUrl", value(data, "profilePhotoUrl"));
+            chat.put("groupName", value(data, "groupName"));
+            chat.put("groupIcon", value(data, "groupIcon"));
             chat.put("hidden", false);
             JSONArray messages = chat.optJSONArray("messages");
             if (messages == null) messages = new JSONArray();
@@ -44,6 +46,8 @@ final class NotificationStateStore {
                 message.put("messageType", value(data, "messageType"));
                 message.put("preview", value(data, "preview"));
                 message.put("attachmentUrl", value(data, "attachmentUrl"));
+                message.put("senderId", value(data, "senderId"));
+                message.put("senderName", value(data, "senderName"));
                 message.put("receivedAt", System.currentTimeMillis());
                 messages.put(message);
             }
@@ -102,6 +106,8 @@ final class NotificationStateStore {
             chat.senderId = value.optString("senderId");
             chat.senderName = value.optString("senderName", chat.senderId);
             chat.profilePhotoUrl = value.optString("profilePhotoUrl");
+            chat.groupName = value.optString("groupName");
+            chat.groupIcon = value.optString("groupIcon");
             JSONArray messages = value.optJSONArray("messages");
             for (int index = 0; messages != null && index < messages.length(); index++) {
                 JSONObject valueMessage = messages.optJSONObject(index);
@@ -111,6 +117,8 @@ final class NotificationStateStore {
                 message.messageType = valueMessage.optString("messageType", "text");
                 message.preview = valueMessage.optString("preview", "New message");
                 message.attachmentUrl = valueMessage.optString("attachmentUrl");
+                message.senderId = valueMessage.optString("senderId", chat.senderId);
+                message.senderName = valueMessage.optString("senderName", message.senderId);
                 message.receivedAt = valueMessage.optLong("receivedAt", System.currentTimeMillis());
                 chat.messages.add(message);
             }
@@ -127,13 +135,13 @@ final class NotificationStateStore {
     }
 
     static final class ChatState {
-        String chatId, senderId, senderName, profilePhotoUrl;
+        String chatId, senderId, senderName, profilePhotoUrl, groupName, groupIcon;
         final List<MessageState> messages = new ArrayList<>();
         MessageState latest() { return messages.get(messages.size() - 1); }
     }
 
     static final class MessageState {
-        String messageId, messageType, preview, attachmentUrl;
+        String messageId, messageType, preview, attachmentUrl, senderId, senderName;
         long receivedAt;
     }
 }

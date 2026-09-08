@@ -9,6 +9,7 @@ public interface ChatViewListener {
   void onVideoCall();
   void onVoiceCall();
   void onMore();
+  void onChatDetails();
   void onSend();
   void onAudioRecordingStart();
   void onAudioRecordingSend();
@@ -25,6 +26,7 @@ public interface ChatViewListener {
   void onPinSelected(List<MessageEntity> messages);
   void onUnpinSelected(List<MessageEntity> messages);
   void onDeleteSelected(List<MessageEntity> messages);
+  void onMessageInfoSelected(MessageEntity message);
   void onMessageSelectionChanged(boolean selected);
   void onLoadOlderMessages();
   void onReplyTargetRequested(String messageId);

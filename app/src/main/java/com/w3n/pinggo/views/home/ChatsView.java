@@ -1011,7 +1011,8 @@ public final class ChatsView extends View {
     private void bindAvatar(ComponentList.Item item, Chat chat) {
         long started = SystemClock.elapsedRealtimeNanos();
         String path = chat.getLocalProfilePhotoPath();
-        if (path == null || path.trim().isEmpty()) {
+        boolean groupChat = chat.getChatId() != null && chat.getChatId().startsWith("grp_");
+        if (!groupChat && (path == null || path.trim().isEmpty())) {
             path = ChatProfilePhotoStore.getLocalPath(getContext(), chat.getPhoneNumber());
         }
         int size = avatarPixelSize();
@@ -1139,10 +1140,14 @@ public final class ChatsView extends View {
         List<Chat> chats = new ArrayList<>();
         if (entities == null) return chats;
         for (ChatEntity entity : entities) {
-            String name = DeviceContactResolver.cachedNameOrPhone(entity.otherUserId);
+            String name = entity.isGroup
+                    ? (entity.contactName == null || entity.contactName.trim().isEmpty()
+                        ? "Group" : entity.contactName.trim())
+                    : DeviceContactResolver.cachedNameOrPhone(entity.otherUserId);
             String path = entity.localProfilePhotoPath == null
                     || entity.localProfilePhotoPath.isEmpty()
-                    ? ChatProfilePhotoStore.getLocalPath(getContext(), entity.otherUserId)
+                    ? (entity.isGroup ? null
+                        : ChatProfilePhotoStore.getLocalPath(getContext(), entity.otherUserId))
                     : entity.localProfilePhotoPath;
             chats.add(new Chat(entity.chatId, name, entity.profilePhotoUrl, path,
                     homeMessagePreview(entity), entity.lastMessageTime,

@@ -98,6 +98,7 @@ public final class ChatView extends View {
       selectionPinIcon = namedDrawableBitmap("conversation_selection_pin"),
       selectionUnpinIcon = namedDrawableBitmap("conversation_selection_unpin"),
       selectionDeleteIcon = namedDrawableBitmap("conversation_selection_delete"),
+      selectionInfoIcon = drawableBitmap(R.drawable.conversation_selection_info),
       messageSendingIcon = resourceBitmap(R.drawable.chat_status_sending_image),
       messageSentIcon = resourceBitmap(R.drawable.chat_status_sent),
       messageDeliveredIcon = resourceBitmap(R.drawable.chat_status_delivered),
@@ -183,6 +184,7 @@ public final class ChatView extends View {
       String name,
       String currentUser,
       String photoPath,
+      boolean groupChat,
       ChatViewListener l,
       ChatPerformanceProfiler profiler) {
     super(c);
@@ -201,7 +203,7 @@ public final class ChatView extends View {
         c, listener, this::clearMessageSelection, pinnedAdapter::isPinnedByCurrentUser,
         selectionBackground, selectionStatusBarBackground, transparent, backIcon,
         selectionReplyIcon, selectionCopyIcon, selectionForwardIcon, selectionPinIcon,
-        selectionUnpinIcon, selectionDeleteIcon);
+        selectionUnpinIcon, selectionDeleteIcon, selectionInfoIcon, groupChat);
     adapter =
         new ChatMessageAdapter(
             c,
@@ -240,7 +242,8 @@ public final class ChatView extends View {
                 this::handleMessageClick,
                 this::toggleMessageSelection,
                 profiler,
-                name),
+                name,
+                groupChat),
             selection.ids());
     profile = ChatProfileBitmap.load(c, photoPath, name, Math.round(px(132f)), ACCENT);
     adapter.setChatProfile(profile);

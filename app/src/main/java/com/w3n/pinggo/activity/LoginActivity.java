@@ -42,8 +42,7 @@ public class LoginActivity extends AppCompatActivity {
         window.setStatusBarColor(systemBarColor);
         window.setNavigationBarColor(systemBarColor);
 
-        WindowInsetsControllerCompat controller =
-                WindowCompat.getInsetsController(window, window.getDecorView());
+        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(window, window.getDecorView());
         controller.setAppearanceLightStatusBars(true);
         controller.setAppearanceLightNavigationBars(true);
 
@@ -73,7 +72,6 @@ public class LoginActivity extends AppCompatActivity {
         });
         ViewCompat.requestApplyInsets(root);
     }
-
 
     @Override
     public boolean dispatchTouchEvent(MotionEvent event) {

@@ -29,6 +29,11 @@ public class ChatEntity {
     public boolean isOnline;
     public long lastSeen;
     public long updatedAt;
+    public boolean isGroup;
+    public String groupDescription;
+    public int groupMemberCount;
+    public String ownGroupRole;
+    public long membershipVersion;
 
     public ChatEntity(
             @NonNull String chatId,

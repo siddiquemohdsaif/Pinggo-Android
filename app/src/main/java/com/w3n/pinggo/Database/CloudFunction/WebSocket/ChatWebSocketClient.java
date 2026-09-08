@@ -108,7 +108,8 @@ public class ChatWebSocketClient {
                     Log.d(TAG, "receive type=" + type + " callId="
                             + JsonParserUtil.getString(event, "callId"));
                 }
-                if ("message_ack".equals(type) || "message_failed".equals(type)) {
+                if ("message_ack".equals(type) || "message_failed".equals(type)
+                        || "group_message_ack".equals(type) || "group_message_failed".equals(type)) {
                     String clientMessageId = JsonParserUtil.getString(event, "clientMessageId");
                     if (!clientMessageId.isEmpty()) unacknowledgedMessages.remove(clientMessageId);
                 }
@@ -169,7 +170,7 @@ public class ChatWebSocketClient {
                     + JsonParserUtil.getString(event, "callId")
                     + " socket=" + (webSocket != null) + " authenticated=" + authenticated);
         }
-        if ("send_message".equals(type)) {
+        if ("send_message".equals(type) || "send_group_message".equals(type)) {
             String clientMessageId = JsonParserUtil.getString(event, "clientMessageId");
             if (!clientMessageId.isEmpty()) unacknowledgedMessages.put(clientMessageId, event.deepCopy());
             if (webSocket == null || !authenticated) {

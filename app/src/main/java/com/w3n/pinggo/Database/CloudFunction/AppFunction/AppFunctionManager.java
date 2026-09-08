@@ -10,6 +10,7 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.ChatHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.CallLogHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.EmailOtpHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.GoogleAuthHandler;
+import com.w3n.pinggo.Database.CloudFunction.Utils.GroupHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.OtpHandler;
@@ -183,6 +184,52 @@ public class AppFunctionManager {
 
   public void getBlockStatus(String phoneNumber, String chatId, Callback callback) {
     ChatHandler.getBlockStatus(appApi, phoneNumber, chatId, callback);
+  }
+
+  public void createGroup(String userId, String name, String description,
+                          List<String> memberIds, Callback callback) {
+    GroupHandler.create(appApi, userId, name, description, memberIds, callback);
+  }
+
+  public void getGroup(String userId, String groupId, Callback callback) {
+    GroupHandler.get(appApi, userId, groupId, callback);
+  }
+
+  public void getGroupDetails(String userId, String groupId, Callback callback) {
+    GroupHandler.details(appApi, userId, groupId, callback);
+  }
+
+  public void getChatMedia(String userId, String chatId, int pageSize, Long before,
+                           Callback callback) {
+    ChatHandler.getMedia(appApi, chatId, userId, pageSize, before, callback);
+  }
+
+  public void getGroupMessages(String userId, String groupId, int pageSize, Long before,
+                               Callback callback) {
+    GroupHandler.messages(appApi, userId, groupId, pageSize, before, callback);
+  }
+
+  public void updateGroup(String userId, String groupId, String name, String description,
+                          Callback callback) {
+    GroupHandler.update(appApi, userId, groupId, name, description, callback);
+  }
+
+  public void updateGroupMembers(String userId, String groupId, List<String> memberIds,
+                                 boolean add, Callback callback) {
+    GroupHandler.members(appApi, userId, groupId, memberIds, add, callback);
+  }
+
+  public void updateGroupMemberRole(String userId, String groupId, String memberId,
+                                    String role, Callback callback) {
+    GroupHandler.role(appApi, userId, groupId, memberId, role, callback);
+  }
+
+  public void leaveGroup(String userId, String groupId, Callback callback) {
+    GroupHandler.leave(appApi, userId, groupId, callback);
+  }
+
+  public void reportGroup(String userId, String groupId, String reason, Callback callback) {
+    GroupHandler.report(appApi, userId, groupId, reason, callback);
   }
 
   public void syncPresence(List<String> userIds, Callback callback) {

@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.database.Cursor;
+import android.database.sqlite.SQLiteConstraintException;
 import android.graphics.BitmapFactory;
 import android.media.MediaMetadataRetriever;
 import android.net.Uri;
@@ -58,6 +59,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ConcurrentHashMap;
 import java.nio.charset.StandardCharsets;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 
@@ -114,6 +116,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     public interface ReplyTargetsCallback {
         void onLoaded(List<MessageEntity> messages);
+    }
+
+    public interface StoredMediaCallback {
+        void onLoaded(List<MessageEntity> messages, Long nextCursor, boolean hasMore);
     }
 
     public interface SeenCallback {
@@ -592,6 +598,17 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         return transferDao.observeChat(chatId);
     }
 
+    public void loadStoredMedia(String chatId, int pageSize, Long before,
+                                StoredMediaCallback callback) {
+        ioExecutor.execute(() -> {
+            int limit = Math.max(1, pageSize);
+            long cursor = before == null ? Long.MAX_VALUE : before;
+            List<MessageEntity> values = messageDao.findStoredMediaPage(chatId, cursor, limit);
+            Long next = values.size() == limit ? values.get(values.size() - 1).sentTime : null;
+            mainHandler.post(() -> callback.onLoaded(values, next, values.size() == limit));
+        });
+    }
+
     public void downloadAttachment(MessageEntity message, DownloadCallback callback) {
         ioExecutor.execute(() -> {
             if (message == null || message.attachmentId == null || message.attachmentUrl == null) {
@@ -1017,13 +1034,16 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                                      String receiverId, String text, String repliedMessageId,
                                      String messageType, JsonObject attachment, JsonObject location) {
         JsonObject event = new JsonObject();
-        event.addProperty("type", "send_message");
+        boolean groupMessage = chatId != null && chatId.startsWith("grp_");
+        event.addProperty("type", groupMessage ? "send_group_message" : "send_message");
         event.addProperty("clientMessageId", clientMessageId);
         event.addProperty("chatId", chatId);
         event.addProperty("senderId", senderId);
-        event.addProperty("receiverId", receiverId);
+        if (groupMessage) event.addProperty("groupId", chatId);
+        else event.addProperty("receiverId", receiverId);
         event.addProperty("text", text);
-        event.addProperty("messageType",
+        if (groupMessage) event.addProperty("messageType", messageType);
+        else event.addProperty("messageType",
                 com.w3n.pinggo.data.local.MessageTypeCodec.encode(messageType));
         if (attachment != null) event.addProperty("attachmentId", JsonParserUtil.getString(attachment, "id"));
         if (attachment != null && attachment.has("width")) {
@@ -1056,16 +1076,36 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         String clientId = message.clientMessageId == null ? message.messageId : message.clientMessageId;
         if (("image".equals(message.messageType) || "video".equals(message.messageType)
                 || "audio".equals(message.messageType) || "file".equals(message.messageType))
-                && message.attachmentId == null
-                && message.attachmentLocalUri != null) {
+                && message.attachmentId == null) {
             AttachmentCallback mainCallback = onMainThread(new AttachmentCallback() {
                         @Override public void onSent() {}
                         @Override public void onError(String error) { notifySocketError(error); }
                     });
-            ioExecutor.execute(() -> enqueueAttachmentTransfer(
-                    message.chatId, message.receiverId, message.text,
-                    message.repliedMessageId, Uri.parse(message.attachmentLocalUri),
-                    message.messageType, clientId, mainCallback));
+            ioExecutor.execute(() -> {
+                TransferEntity existing = transferDao.findByClientMessageId(clientId);
+                File staged = existing == null || existing.stagedPath == null
+                        ? null : new File(existing.stagedPath);
+                if (existing != null && staged != null && staged.isFile()
+                        && staged.length() > 0 && existing.fileHash != null) {
+                    Log.i("PingGoAttachment", "Requeue staged upload client=" + clientId
+                            + " group=" + (message.chatId != null && message.chatId.startsWith("grp_")));
+                    transferDao.failed(existing.transferId, "queued", null, System.currentTimeMillis());
+                    messageDao.updateStatusByClientMessageId(clientId, MessageStatus.SENDING);
+                    enqueueUploadWork(existing.transferId);
+                    mainCallback.onSent();
+                    return;
+                }
+                if (message.attachmentLocalUri == null) {
+                    Log.e("PingGoAttachment", "Retry unavailable: no staged file or source URI client=" + clientId);
+                    mainCallback.onError("Image is no longer available. Select it again.");
+                    return;
+                }
+                Log.i("PingGoAttachment", "Requeue upload from source URI client=" + clientId
+                        + " group=" + (message.chatId != null && message.chatId.startsWith("grp_")));
+                enqueueAttachmentTransfer(message.chatId, message.receiverId, message.text,
+                        message.repliedMessageId, Uri.parse(message.attachmentLocalUri),
+                        message.messageType, clientId, mainCallback);
+            });
             return;
         }
         JsonObject attachment = null;
@@ -1284,7 +1324,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         for (String messageId : messageIds) {
             ids.add(messageId);
         }
-        event.addProperty("type", "message_seen");
+        event.addProperty("type", chatId != null && chatId.startsWith("grp_")
+                ? "group_message_seen" : "message_seen");
         event.addProperty("chatId", chatId);
         event.add("messageIds", ids);
         if (callback != null) pendingSeenCallbacks.put(chatId, callback);
@@ -1301,6 +1342,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             return;
         }
         JsonObject event = new JsonObject();
+        if (chatId.startsWith("grp_")) {
+            if (callback != null) callback.onError("Group read receipts require explicit message ids.");
+            return;
+        }
         event.addProperty("type", "message_seen");
         event.addProperty("chatId", chatId);
         event.addProperty("markAll", true);
@@ -1321,7 +1366,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         for (String messageId : messageIds) {
             ids.add(messageId);
         }
-        event.addProperty("type", "message_delivered");
+        event.addProperty("type", chatId != null && chatId.startsWith("grp_")
+                ? "group_message_delivered" : "message_delivered");
         event.addProperty("chatId", chatId);
         event.add("messageIds", ids);
         socketClient.send(event);
@@ -1353,7 +1399,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     || message.messageId == null || message.messageId.isEmpty()
                     || message.chatId == null || message.chatId.isEmpty()
                     || message.deliveredTime != null || message.readTime != null
-                    || !receiverId.equals(normalizeAccountId(message.receiverId))) {
+                    || (!message.chatId.startsWith("grp_")
+                    && !receiverId.equals(normalizeAccountId(message.receiverId)))) {
                 continue;
             }
             if (!pendingDeliveredAcks.add(message.messageId)) continue;
@@ -2178,11 +2225,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 if (callEventListener == listener) listener.onCallEvent(event);
             });
         }
-        if ("message_ack".equals(type)) {
+        if ("message_ack".equals(type) || "group_message_ack".equals(type)) {
             handleMessageAck(event);
-        } else if ("message_failed".equals(type)) {
+        } else if ("message_failed".equals(type) || "group_message_failed".equals(type)) {
             handleMessageFailed(event);
-        } else if ("new_message".equals(type)) {
+        } else if ("new_message".equals(type) || "new_group_message".equals(type)) {
             handleNewMessage(event, totalUnreadBeforeEvent, serverTotalUnread);
         } else if ("calls_list_updated".equals(type)) {
             notifyCallsChanged();
@@ -2202,6 +2249,22 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             handleMessageDelivered(event);
         } else if ("message_delivered_ack".equals(type)) {
             handleMessageDelivered(event);
+        } else if ("group_message_seen".equals(type)
+                || "group_message_delivered".equals(type)) {
+            handleGroupReceipt(event, "group_message_seen".equals(type));
+        } else if ("group_message_delivered_ack".equals(type)) {
+            handleGroupReceipt(event, false);
+        } else if ("group_message_delivered_ack".equals(type)) {
+            handleGroupReceipt(event, false);
+        } else if ("group_message_seen_ack".equals(type)) {
+            handleGroupReceipt(event, true);
+            String groupId = JsonParserUtil.getString(event, "groupId");
+            ioExecutor.execute(() -> chatDao.clearUnreadCount(groupId));
+            SeenCallback callback = pendingSeenCallbacks.remove(groupId);
+            if (callback != null) mainHandler.post(callback::onSuccess);
+        } else if ("group_message_read_failed".equals(type)
+                || "group_message_delivered_failed".equals(type)) {
+            notifySocketError(JsonParserUtil.getString(event, "message"));
         } else if ("edit_message_ack".equals(type)) {
             handleMessageEdited(event);
         } else if ("edit_message_failed".equals(type)) {
@@ -2307,7 +2370,19 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         String chatId = JsonParserUtil.getString(event, "chatId");
         long sentTime = JsonParserUtil.getLong(event, "sentTime");
         ioExecutor.execute(() -> {
-            messageDao.applyAck(clientMessageId, messageId, MessageStatus.SENT, sentTime);
+            try {
+                messageDao.reconcileAck(clientMessageId, messageId, MessageStatus.SENT, sentTime);
+            } catch (SQLiteConstraintException conflict) {
+                // A socket delivery can insert the authoritative row between the transaction's
+                // existence check and its optimistic primary-key rename. Recover by keeping the
+                // server row and removing only the now-duplicate local row.
+                Log.w(TESTING_TAG, "message_ack phase=primary_key_race clientMessageId="
+                        + clientMessageId + " messageId=" + messageId);
+                messageDao.preserveAckAttachmentUri(clientMessageId, messageId);
+                messageDao.deleteOptimisticAckDuplicate(clientMessageId, messageId);
+                messageDao.updateAcknowledgedServerMessage(
+                        clientMessageId, messageId, MessageStatus.SENT, sentTime);
+            }
             if (!chatId.isEmpty()) chatDao.applyLastMessageAck(chatId, clientMessageId,
                     messageId, sentTime, MessageStatus.SENT, System.currentTimeMillis());
             MessageEntity acknowledged = messageDao.findByClientMessageId(clientMessageId);
@@ -2470,6 +2545,32 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 Long deliveredTime = message == null ? null : message.deliveredTime;
                 if (!chatId.isEmpty()) chatDao.updateLastMessageReceipt(chatId, messageId,
                         sentTime, deliveredTime, readTime, MessageStatus.SEEN);
+            }
+        });
+    }
+
+    private void handleGroupReceipt(JsonObject event, boolean seen) {
+        JsonArray ids = event.getAsJsonArray("messageIds");
+        String userId = normalizeAccountId(JsonParserUtil.getString(event, "userId"));
+        long at = JsonParserUtil.getLong(event, "at");
+        if (ids == null || userId.isEmpty() || at <= 0L) return;
+        ioExecutor.execute(() -> {
+            for (JsonElement id : ids) {
+                MessageEntity message = messageDao.findByMessageId(id.getAsString());
+                if (message == null) continue;
+                JsonObject receipts = new JsonObject();
+                try {
+                    if (message.groupReceiptsJson != null) {
+                        receipts = com.google.gson.JsonParser.parseString(message.groupReceiptsJson)
+                                .getAsJsonObject();
+                    }
+                } catch (RuntimeException ignored) { receipts = new JsonObject(); }
+                JsonObject receipt = receipts.has(userId) && receipts.get(userId).isJsonObject()
+                        ? receipts.getAsJsonObject(userId) : new JsonObject();
+                if (!receipt.has("deliveredAt")) receipt.addProperty("deliveredAt", at);
+                if (seen) receipt.addProperty("readAt", at);
+                receipts.add(userId, receipt);
+                messageDao.updateGroupReceipts(message.messageId, receipts.toString());
             }
         });
     }
@@ -2652,8 +2753,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 || isInvisibleToCurrentUser(message);
         String id = JsonParserUtil.getString(message, "id");
         String status = JsonParserUtil.getString(message, "status");
-        String messageType = com.w3n.pinggo.data.local.MessageTypeCodec.decode(
-                message.get("messageType").getAsInt());
+        String messageType = strictMessageType(message);
         MessageEntity entity = new MessageEntity(
                 id,
                 JsonParserUtil.getString(message, "clientMessageId"),
@@ -2697,6 +2797,26 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         entity.deletedText = message.has("deletedText") && !message.get("deletedText").isJsonNull()
                 ? JsonParserUtil.getString(message, "deletedText") : null;
         entity.invisible = invisible;
+        if (message.has("systemEvent") && message.get("systemEvent").isJsonObject()) {
+            JsonObject systemEvent = message.getAsJsonObject("systemEvent");
+            entity.groupEventType = JsonParserUtil.getString(systemEvent, "event");
+            entity.groupEventActorId = normalizeAccountId(
+                    JsonParserUtil.getString(systemEvent, "actorId"));
+            JsonArray targets = systemEvent.has("targetIds")
+                    && systemEvent.get("targetIds").isJsonArray()
+                    ? systemEvent.getAsJsonArray("targetIds") : null;
+            if (targets != null) {
+                List<String> values = new ArrayList<>();
+                for (JsonElement target : targets) {
+                    if (target == null || target.isJsonNull()) continue;
+                    String value = normalizeAccountId(target.getAsString());
+                    if (!value.isEmpty()) values.add(value);
+                }
+        entity.groupEventTargetIds = android.text.TextUtils.join(PIN_USER_SEPARATOR, values);
+            }
+        }
+        entity.groupReceiptsJson = message.has("receipts") && message.get("receipts").isJsonObject()
+                ? message.getAsJsonObject("receipts").toString() : null;
         return entity;
     }
 
@@ -2713,9 +2833,13 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     private static String strictMessageType(JsonObject message) {
         if (message == null || !message.has("messageType")
-                || message.get("messageType").isJsonNull()
-                || !message.get("messageType").getAsJsonPrimitive().isNumber()) {
+                || message.get("messageType").isJsonNull()) {
             throw new IllegalArgumentException("messageTypeCode is required");
+        }
+        if (message.get("messageType").getAsJsonPrimitive().isString()) {
+            String value = message.get("messageType").getAsString();
+            com.w3n.pinggo.data.local.MessageTypeCodec.encode(value);
+            return value;
         }
         return com.w3n.pinggo.data.local.MessageTypeCodec.decode(
                 message.get("messageType").getAsInt());
@@ -2849,7 +2973,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             return null;
         }
         String profilePhotoUrl = JsonParserUtil.getString(profile, "profilePhotoUrl");
-        return new ChatEntity(
+        ChatEntity entity = new ChatEntity(
                 chatId,
                 phoneNumber,
                 normalizeAccountId(phoneNumber),
@@ -2872,6 +2996,18 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 lastSeen,
                 updatedAt
         );
+        entity.isGroup = "group".equals(JsonParserUtil.getString(profile, "chatType"))
+                || chatId.startsWith("grp_");
+        if (entity.isGroup) {
+            entity.contactName = JsonParserUtil.getString(profile, "groupName");
+            entity.otherUserId = "";
+            entity.profilePhotoUrl = JsonParserUtil.getString(profile, "groupIcon");
+            entity.groupDescription = JsonParserUtil.getString(profile, "groupDescription");
+            entity.groupMemberCount = (int) JsonParserUtil.getLong(profile, "groupMemberCount");
+            entity.ownGroupRole = JsonParserUtil.getString(profile, "ownGroupRole");
+            entity.membershipVersion = JsonParserUtil.getLong(profile, "membershipVersion");
+        }
+        return entity;
     }
 
     private String getMessagePreview(JsonObject message) {
@@ -2973,6 +3109,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             case "voice_call": return "Voice call";
             case "video_call": return "Video call";
             case "location": return "Location";
+            case "group_system": return "Group updated";
             default: return "Message";
         }
     }

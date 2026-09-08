@@ -51,22 +51,29 @@ public class VoiceCallActivity extends AppCompatActivity
   private ToneGenerator outgoingTone;
   private boolean incomingToneActive, outgoingToneActive;
   private final Runnable incomingToneLoop = new Runnable() {
-    @Override public void run() {
-      if (!incomingToneActive) return;
-      if (incomingRingtone != null && !incomingRingtone.isPlaying()) incomingRingtone.play();
+    @Override
+    public void run() {
+      if (!incomingToneActive)
+        return;
+      if (incomingRingtone != null && !incomingRingtone.isPlaying())
+        incomingRingtone.play();
       timerHandler.postDelayed(this, 2000);
     }
   };
   private final Runnable outgoingToneLoop = new Runnable() {
-    @Override public void run() {
-      if (!outgoingToneActive || outgoingTone == null) return;
+    @Override
+    public void run() {
+      if (!outgoingToneActive || outgoingTone == null)
+        return;
       outgoingTone.startTone(ToneGenerator.TONE_SUP_RINGTONE, 2500);
       timerHandler.postDelayed(this, 4000);
     }
   };
   private final Runnable callTimer = new Runnable() {
-    @Override public void run() {
-      if (!timerRunning || callView == null) return;
+    @Override
+    public void run() {
+      if (!timerRunning || callView == null)
+        return;
       long elapsed = Math.max(0, SystemClock.elapsedRealtime() - connectedAt) / 1000;
       callView.setCallStatus(String.format(java.util.Locale.US, "%02d:%02d", elapsed / 60,
           elapsed % 60));
@@ -78,11 +85,16 @@ public class VoiceCallActivity extends AppCompatActivity
   private final ActivityResultLauncher<String> microphonePermission = registerForActivityResult(
       new ActivityResultContracts.RequestPermission(), granted -> {
         Log.i(CALL_TRACE, "voice_permission_result callId=" + callId() + " granted=" + granted);
-        if (granted) startCall();
-        else { Toast.makeText(this, "Microphone permission is required.", Toast.LENGTH_LONG).show(); finish(); }
+        if (granted)
+          startCall();
+        else {
+          Toast.makeText(this, "Microphone permission is required.", Toast.LENGTH_LONG).show();
+          finish();
+        }
       });
 
-  @Override protected void onCreate(Bundle state) {
+  @Override
+  protected void onCreate(Bundle state) {
     super.onCreate(state);
     Log.i(CALL_TRACE, "voice_activity_created callId=" + callId()
         + " hasOffer=" + isIncoming() + " autoAccept="
@@ -112,7 +124,8 @@ public class VoiceCallActivity extends AppCompatActivity
       ChatRepository.getInstance(this).setCallEventListener(this);
       notifyCallerRinging();
       startIncomingRingtone();
-      if (getIntent().getBooleanExtra(EXTRA_AUTO_ACCEPT, false)) onAccept();
+      if (getIntent().getBooleanExtra(EXTRA_AUTO_ACCEPT, false))
+        onAccept();
     } else {
       startOutgoingTone();
       requestMicrophoneAndStart();
@@ -137,8 +150,10 @@ public class VoiceCallActivity extends AppCompatActivity
     boolean granted = androidx.core.content.ContextCompat.checkSelfPermission(this,
         Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
     Log.i(CALL_TRACE, "voice_permission_check callId=" + callId() + " granted=" + granted);
-    if (granted) startCall();
-    else microphonePermission.launch(Manifest.permission.RECORD_AUDIO);
+    if (granted)
+      startCall();
+    else
+      microphonePermission.launch(Manifest.permission.RECORD_AUDIO);
   }
 
   private void startCall() {
@@ -154,31 +169,44 @@ public class VoiceCallActivity extends AppCompatActivity
           getIntent().getStringExtra(EXTRA_CALLER_ID), incomingOffer);
     } else {
       callClient.startOutgoing(getIntent().getStringExtra(EXTRA_CALL_CHAT_ID), local,
-          getIntent().getStringExtra(EXTRA_PHONE_NUMBER));
+          getIntent().getStringExtra(EXTRA_CALLER_ID));
     }
   }
 
-  @Override public void onBack() {
+  @Override
+  public void onBack() {
     FloatingVoiceCallController.getInstance().minimizeAndReturn(this);
   }
-  @Override public void onAccept() {
+
+  @Override
+  public void onAccept() {
     Log.i(CALL_TRACE, "voice_answer_requested callId=" + callId() + " incoming="
         + isIncoming() + " alreadyAccepted=" + incomingAccepted);
-    if (!isIncoming() || incomingAccepted) return;
+    if (!isIncoming() || incomingAccepted)
+      return;
     incomingAccepted = true;
     stopIncomingRingtone();
     callView.hideIncomingPrompt();
     callView.setCallStatus("Connecting…");
     requestMicrophoneAndStart();
   }
+
   private String callId() {
     String value = getIntent().getStringExtra(EXTRA_CALL_ID);
     return value == null ? "" : value;
   }
-  @Override public void onReject() { rejectIncoming(); }
+
+  @Override
+  public void onReject() {
+    rejectIncoming();
+  }
+
   private void rejectIncoming() {
     stopIncomingRingtone();
-    if (!isIncoming() || incomingAccepted) { finish(); return; }
+    if (!isIncoming() || incomingAccepted) {
+      finish();
+      return;
+    }
     JsonObject event = new JsonObject();
     event.addProperty("type", "call_reject");
     event.addProperty("callId", getIntent().getStringExtra(EXTRA_CALL_ID));
@@ -187,52 +215,77 @@ public class VoiceCallActivity extends AppCompatActivity
     ChatRepository.getInstance(this).sendCallEvent(event);
     finish();
   }
-  @Override public void onEnd() { if (callClient != null) callClient.endCall(); finish(); }
+
+  @Override
+  public void onEnd() {
+    if (callClient != null)
+      callClient.endCall();
+    finish();
+  }
+
   private void endFromFloatingView() {
     if (isIncoming() && !incomingAccepted) {
       rejectIncoming();
       return;
     }
-    if (callClient != null) callClient.endCall();
+    if (callClient != null)
+      callClient.endCall();
     FloatingVoiceCallController.getInstance().clear();
     finish();
   }
-  @Override public void onSpeaker() {
+
+  @Override
+  public void onSpeaker() {
     speakerOn = !speakerOn;
-    if (audioManager != null) audioManager.setSpeakerphoneOn(speakerOn);
+    if (audioManager != null)
+      audioManager.setSpeakerphoneOn(speakerOn);
     callView.setAudioState(speakerOn, muted);
   }
-  @Override public void onMute() {
+
+  @Override
+  public void onMute() {
     muted = !muted;
-    if (audioManager != null) audioManager.setMicrophoneMute(muted);
-    if (callClient != null) callClient.setMuted(muted);
+    if (audioManager != null)
+      audioManager.setMicrophoneMute(muted);
+    if (callClient != null)
+      callClient.setMuted(muted);
     callView.setAudioState(speakerOn, muted);
   }
-  @Override public void onState(String state) {
+
+  @Override
+  public void onState(String state) {
     Log.i(CALL_TRACE, "voice_state callId=" + callId() + " state=" + state);
     FloatingVoiceCallController.getInstance().updateStatus(state);
     if ("Connected".equals(state)) {
       ActiveCallRegistry.getInstance().setConnected(this, true);
-      if (callView != null) callView.setCallConnected(true);
+      if (callView != null)
+        callView.setCallConnected(true);
       stopCallTones();
       startCallTimer();
     } else if ("Connecting…".equals(state)) {
       ActiveCallRegistry.getInstance().setConnected(this, false);
-      if (callView != null) callView.setCallConnected(false);
+      if (callView != null)
+        callView.setCallConnected(false);
       stopCallTones();
-      if (!timerRunning && callView != null) callView.setCallStatus(state);
-    }
-    else if (!timerRunning && callView != null) {
+      if (!timerRunning && callView != null)
+        callView.setCallStatus(state);
+    } else if (!timerRunning && callView != null) {
       ActiveCallRegistry.getInstance().setConnected(this, false);
       callView.setCallConnected(false);
       callView.setCallStatus(state);
     }
   }
-  @Override public void onRemoteMuteChanged(boolean muted) {
-    if (callView != null) callView.setRemoteMuted(muted);
+
+  @Override
+  public void onRemoteMuteChanged(boolean muted) {
+    if (callView != null)
+      callView.setRemoteMuted(muted);
   }
-  @Override public void onCallEvent(JsonObject event) {
-    if (incomingAccepted) return;
+
+  @Override
+  public void onCallEvent(JsonObject event) {
+    if (incomingAccepted)
+      return;
     String type = com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil.getString(event, "type");
     if ("call_socket_disconnected".equals(type)) {
       Toast.makeText(this, "Call connection lost.", Toast.LENGTH_SHORT).show();
@@ -240,27 +293,33 @@ public class VoiceCallActivity extends AppCompatActivity
       return;
     }
     String callId = com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil.getString(event, "callId");
-    if (!getIntent().getStringExtra(EXTRA_CALL_ID).equals(callId)) return;
+    if (!getIntent().getStringExtra(EXTRA_CALL_ID).equals(callId))
+      return;
     if ("call_end".equals(type) || "call_no_answer".equals(type)) {
       Toast.makeText(this, "Call ended.", Toast.LENGTH_SHORT).show();
       finish();
     }
   }
+
   private void startCallTimer() {
-    if (timerRunning) return;
+    if (timerRunning)
+      return;
     timerRunning = true;
     connectedAt = SystemClock.elapsedRealtime();
     timerHandler.post(callTimer);
   }
+
   private void stopCallTimer() {
     timerRunning = false;
     timerHandler.removeCallbacks(callTimer);
   }
+
   private void startIncomingRingtone() {
     stopCallTones();
     incomingRingtone = RingtoneManager.getRingtone(this,
         RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE));
-    if (incomingRingtone == null) return;
+    if (incomingRingtone == null)
+      return;
     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
       incomingRingtone.setLooping(true);
     }
@@ -268,18 +327,22 @@ public class VoiceCallActivity extends AppCompatActivity
     incomingRingtone.play();
     timerHandler.postDelayed(incomingToneLoop, 2000);
   }
+
   private void stopIncomingRingtone() {
     incomingToneActive = false;
     timerHandler.removeCallbacks(incomingToneLoop);
-    if (incomingRingtone != null && incomingRingtone.isPlaying()) incomingRingtone.stop();
+    if (incomingRingtone != null && incomingRingtone.isPlaying())
+      incomingRingtone.stop();
     incomingRingtone = null;
   }
+
   private void startOutgoingTone() {
     stopCallTones();
     outgoingTone = new ToneGenerator(AudioManager.STREAM_RING, 100);
     outgoingToneActive = true;
     outgoingToneLoop.run();
   }
+
   private void stopOutgoingTone() {
     outgoingToneActive = false;
     timerHandler.removeCallbacks(outgoingToneLoop);
@@ -289,36 +352,48 @@ public class VoiceCallActivity extends AppCompatActivity
       outgoingTone = null;
     }
   }
+
   private void stopCallTones() {
     stopIncomingRingtone();
     stopOutgoingTone();
   }
-  @Override public void onEnded(String reason) {
+
+  @Override
+  public void onEnded(String reason) {
     Log.w(CALL_TRACE, "voice_ended callId=" + callId() + " reason=" + reason);
     FloatingVoiceCallController.getInstance().clear();
     stopCallTones();
     stopCallTimer();
-    Toast.makeText(this, "Call " + reason.replace('_', ' ') + ".", Toast.LENGTH_SHORT).show(); finish();
+    Toast.makeText(this, "Call " + reason.replace('_', ' ') + ".", Toast.LENGTH_SHORT).show();
+    finish();
   }
-  @Override public void onError(String message) {
+
+  @Override
+  public void onError(String message) {
     Log.e(CALL_TRACE, "voice_error callId=" + callId() + " message=" + message);
     FloatingVoiceCallController.getInstance().clear();
     stopCallTones();
     stopCallTimer();
     Toast.makeText(this, message == null || message.isEmpty() ? "Call failed." : message,
-        Toast.LENGTH_LONG).show(); finish();
+        Toast.LENGTH_LONG).show();
+    finish();
   }
-  @Override protected void onDestroy() {
+
+  @Override
+  protected void onDestroy() {
     stopCallTones();
     stopCallTimer();
     if (audioManager != null) {
       audioManager.setSpeakerphoneOn(false);
       audioManager.setMicrophoneMute(false);
     }
-    if (callClient != null) callClient.close(true);
-    else ChatRepository.getInstance(this).setCallEventListener(null);
+    if (callClient != null)
+      callClient.close(true);
+    else
+      ChatRepository.getInstance(this).setCallEventListener(null);
     callClient = null;
-    if (callView != null) callView.release();
+    if (callView != null)
+      callView.release();
     callView = null;
     FloatingVoiceCallController.getInstance().clear();
     ActiveCallRegistry.getInstance().clear(this);

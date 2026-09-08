@@ -252,8 +252,14 @@ public final class PingGoNotificationManager {
         NotificationStateStore.MessageState latest = chat.latest();
         String senderName = DeviceContactResolver.nameOrPhone(context, senderId);
         String preview = latest.preview.isEmpty() ? "New message" : latest.preview;
+        boolean groupChat = chatId.startsWith("grp_");
+        String groupName = chat.groupName;
+        if (groupName == null || groupName.isEmpty()) groupName = value(data, "chatName");
+        if (groupName.isEmpty()) groupName = "Group";
+        String conversationName = groupChat ? groupName : senderName;
+        String notificationPreview = groupChat ? senderName + ": " + preview : preview;
 
-        Bitmap avatar = downloadBitmap(chat.profilePhotoUrl);
+        Bitmap avatar = downloadBitmap(groupChat ? chat.groupIcon : chat.profilePhotoUrl);
         Bitmap brandingIcon = avatar != null ? avatar
                 : BitmapFactory.decodeResource(context.getResources(), R.drawable.pinggo_logo);
         Bitmap picture = chat.messages.size() == 1 && "image".equals(latest.messageType)
@@ -262,7 +268,7 @@ public final class PingGoNotificationManager {
 
         Intent openChat = new Intent(context, ChatActivity.class)
                 .putExtra(ChatActivity.EXTRA_CHAT_ID, chatId)
-                .putExtra(ChatActivity.EXTRA_CHAT_NAME, senderName)
+                .putExtra(ChatActivity.EXTRA_CHAT_NAME, conversationName)
                 .putExtra(ChatActivity.EXTRA_OPEN_REQUEST_NANOS,
                         SystemClock.elapsedRealtimeNanos())
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -280,8 +286,8 @@ public final class PingGoNotificationManager {
                 context, MESSAGE_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_pinggo_notification)
                 .setLargeIcon(brandingIcon)
-                .setContentTitle(senderName)
-                .setContentText(preview)
+                .setContentTitle(conversationName)
+                .setContentText(notificationPreview)
                 .setSubText("PingGo")
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -301,13 +307,21 @@ public final class PingGoNotificationManager {
 
         if (picture != null) {
             notification.setStyle(new NotificationCompat.BigPictureStyle()
-                    .bigPicture(picture).bigLargeIcon(brandingIcon).setSummaryText(senderName));
+                    .bigPicture(picture).bigLargeIcon(brandingIcon).setSummaryText(notificationPreview));
         } else {
             Person self = new Person.Builder().setName("You").setKey("pinggo_self").build();
             NotificationCompat.MessagingStyle style =
-                    new NotificationCompat.MessagingStyle(self).setConversationTitle(senderName);
+                    new NotificationCompat.MessagingStyle(self)
+                            .setConversationTitle(conversationName)
+                            .setGroupConversation(groupChat);
             for (NotificationStateStore.MessageState storedMessage : chat.messages) {
-                style.addMessage(storedMessage.preview, storedMessage.receivedAt, sender);
+                String storedSenderId = storedMessage.senderId == null
+                        ? senderId : storedMessage.senderId;
+                String storedSenderName = DeviceContactResolver.nameOrPhone(
+                        context, storedSenderId);
+                Person storedSender = new Person.Builder().setName(storedSenderName)
+                        .setKey(storedSenderId).build();
+                style.addMessage(storedMessage.preview, storedMessage.receivedAt, storedSender);
             }
             notification.setStyle(style);
         }
@@ -352,7 +366,10 @@ public final class PingGoNotificationManager {
         for (NotificationStateStore.ChatState chat : chats) {
             totalMessages += chat.messages.size();
             NotificationStateStore.MessageState latest = chat.latest();
-            String name = DeviceContactResolver.nameOrPhone(context, chat.senderId);
+            String name = chat.chatId != null && chat.chatId.startsWith("grp_")
+                    && chat.groupName != null && !chat.groupName.isEmpty()
+                    ? chat.groupName
+                    : DeviceContactResolver.nameOrPhone(context, chat.senderId);
             Person sender = new Person.Builder().setName(name).setKey(chat.senderId).build();
             style.addMessage(latest.preview, latest.receivedAt, sender);
         }

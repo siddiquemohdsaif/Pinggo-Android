@@ -10,6 +10,8 @@ import android.os.Bundle;
 import android.provider.ContactsContract;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
 import android.widget.Toast;
+import android.widget.EditText;
+import androidx.appcompat.app.AlertDialog;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
@@ -37,10 +39,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class NewChatActivity extends AppCompatActivity implements NewChatView.Listener {
-  public static final String EXTRA_FORWARD_SOURCE_CHAT_ID =
-      "com.w3n.pinggo.EXTRA_FORWARD_SOURCE_CHAT_ID";
-  public static final String EXTRA_FORWARD_MESSAGE_IDS =
-      "com.w3n.pinggo.EXTRA_FORWARD_MESSAGE_IDS";
+  public static final String EXTRA_CREATE_GROUP = "com.w3n.pinggo.EXTRA_CREATE_GROUP";
+  public static final String EXTRA_FORWARD_SOURCE_CHAT_ID = "com.w3n.pinggo.EXTRA_FORWARD_SOURCE_CHAT_ID";
+  public static final String EXTRA_FORWARD_MESSAGE_IDS = "com.w3n.pinggo.EXTRA_FORWARD_MESSAGE_IDS";
   private static final int CONTACTS_PERMISSION_REQUEST = 42, DISCOVER_BATCH_SIZE = 50;
   private final ExecutorService discoveryExecutor = Executors.newSingleThreadExecutor();
   private final ExecutorService photoExecutor = Executors.newFixedThreadPool(3);
@@ -52,6 +53,8 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   private ChatRepository repository;
   private String forwardSourceChatId;
   private ArrayList<String> forwardMessageIds;
+  private boolean createGroupMode;
+  private boolean creatingGroup;
 
   @Override
   protected void onCreate(Bundle state) {
@@ -61,7 +64,11 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     forwardSourceChatId = getIntent().getStringExtra(EXTRA_FORWARD_SOURCE_CHAT_ID);
     forwardMessageIds = getIntent().getStringArrayListExtra(EXTRA_FORWARD_MESSAGE_IDS);
     repository = ChatRepository.getInstance(this);
-    if (isForwarding()) newChatView.setTitle("Forward to");
+    createGroupMode = getIntent().getBooleanExtra(EXTRA_CREATE_GROUP, false);
+    if (createGroupMode)
+      newChatView.setGroupMode(true);
+    else if (isForwarding())
+      newChatView.setTitle("Forward to");
     setContentView(newChatView);
     ViewCompat.setOnApplyWindowInsetsListener(
         newChatView,
@@ -75,13 +82,13 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   }
 
   private void loadContactsWithPermission() {
-    if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
-        == PackageManager.PERMISSION_GRANTED) {
+    if (ContextCompat.checkSelfPermission(this,
+        Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
       DeviceContactResolver.warmUp(this, this::discoverContacts);
       return;
     }
     ActivityCompat.requestPermissions(
-        this, new String[] {Manifest.permission.READ_CONTACTS}, CONTACTS_PERMISSION_REQUEST);
+        this, new String[] { Manifest.permission.READ_CONTACTS }, CONTACTS_PERMISSION_REQUEST);
   }
 
   @Override
@@ -92,7 +99,8 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
         && results.length > 0
         && results[0] == PackageManager.PERMISSION_GRANTED) {
       DeviceContactResolver.warmUp(this, this::discoverContacts);
-    } else newChatView.showStatus("Contacts permission is required to discover chats.");
+    } else
+      newChatView.showStatus("Contacts permission is required to discover chats.");
   }
 
   private void discoverContacts() {
@@ -111,12 +119,14 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
                 rendered.clear();
                 newChatView.showStatus("Discovering contacts...");
               });
-          if (!contacts.isEmpty()) discoverNextBatch(contacts, 0);
+          if (!contacts.isEmpty())
+            discoverNextBatch(contacts, 0);
         });
   }
 
   private void discoverNextBatch(List<String> contacts, int start) {
-    if (isClosing()) return;
+    if (isClosing())
+      return;
     if (start >= contacts.size()) {
       runOnUiThread(this::render);
       return;
@@ -126,21 +136,21 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     discoverBatch(batch)
         .whenCompleteAsync(
             (response, error) -> {
-              if (isClosing()) return;
+              if (isClosing())
+                return;
               if (error == null) {
                 BatchResult result = parseBatch(response);
                 runOnUiThread(() -> append(result));
                 prefetchProfilePhotos(result.foundContacts);
               } else {
                 runOnUiThread(
-                    () ->
-                        Toast.makeText(
-                                this,
-                                error.getMessage() == null
-                                    ? "Contact discovery failed."
-                                    : error.getMessage(),
-                                Toast.LENGTH_SHORT)
-                            .show());
+                    () -> Toast.makeText(
+                        this,
+                        error.getMessage() == null
+                            ? "Contact discovery failed."
+                            : error.getMessage(),
+                        Toast.LENGTH_SHORT)
+                        .show());
               }
               discoverNextBatch(contacts, end);
             },
@@ -156,7 +166,8 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
             new AppFunctionManager.Callback() {
               @Override
               public void onSuccess(Object o) {
-                if (o instanceof JsonObject) future.complete((JsonObject) o);
+                if (o instanceof JsonObject)
+                  future.complete((JsonObject) o);
                 else
                   future.completeExceptionally(
                       new IllegalStateException("Unable to load contacts."));
@@ -173,20 +184,21 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   private List<String> readPhoneContacts() {
     Set<String> values = new LinkedHashSet<>();
     String own = normalize(currentPhone());
-    String[] projection = {ContactsContract.CommonDataKinds.Phone.NUMBER};
-    try (Cursor cursor =
-        getContentResolver()
-            .query(
-                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                projection,
-                null,
-                null,
-                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME_PRIMARY + " ASC")) {
-      if (cursor == null) return new ArrayList<>();
+    String[] projection = { ContactsContract.CommonDataKinds.Phone.NUMBER };
+    try (Cursor cursor = getContentResolver()
+        .query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            projection,
+            null,
+            null,
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME_PRIMARY + " ASC")) {
+      if (cursor == null)
+        return new ArrayList<>();
       int index = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER);
       while (cursor.moveToNext()) {
         String number = normalize(cursor.getString(index));
-        if (!number.isEmpty() && !number.equals(own)) values.add(number);
+        if (!number.isEmpty() && !number.equals(own))
+          values.add(number);
       }
     }
     return new ArrayList<>(values);
@@ -195,27 +207,35 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   private BatchResult parseBatch(JsonObject response) {
     BatchResult result = new BatchResult();
     JsonArray contacts = response.getAsJsonArray("contacts");
-    if (contacts == null) return result;
+    if (contacts == null)
+      return result;
     String own = normalize(currentPhone());
     for (JsonElement element : contacts) {
-      if (element == null || !element.isJsonObject()) continue;
+      if (element == null || !element.isJsonObject())
+        continue;
       JsonObject contact = element.getAsJsonObject();
       String phone = normalize(string(contact, "phoneNumber"));
-      if (phone.isEmpty() || phone.equals(own)) continue;
-      if (bool(contact, "found")) result.foundContacts.add(contact);
-      else result.invitePhones.add(phone);
+      if (phone.isEmpty() || phone.equals(own))
+        continue;
+      if (bool(contact, "found"))
+        result.foundContacts.add(contact);
+      else
+        result.invitePhones.add(phone);
     }
     return result;
   }
 
   private void append(BatchResult result) {
-    if (isClosing()) return;
+    if (isClosing())
+      return;
     for (JsonObject contact : result.foundContacts) {
       String phone = normalize(string(contact, "phoneNumber"));
-      if (rendered.add(phone)) found.add(contact);
+      if (rendered.add(phone))
+        found.add(contact);
     }
     for (String phone : result.invitePhones) {
-      if (rendered.add(phone)) invites.add(phone);
+      if (rendered.add(phone))
+        invites.add(phone);
     }
     render();
   }
@@ -229,12 +249,14 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
           || url.trim().isEmpty()
           || ChatProfilePhotoStore.getLocalPath(appContext, phone) != null
           || !photoDownloads.add(phone)
-          || photoExecutor.isShutdown()) continue;
+          || photoExecutor.isShutdown())
+        continue;
       photoExecutor.execute(
           () -> {
             try {
               String path = ChatProfilePhotoStore.downloadAndStore(appContext, phone, url);
-              if (path != null && !isClosing()) runOnUiThread(this::render);
+              if (path != null && !isClosing())
+                runOnUiThread(this::render);
             } finally {
               photoDownloads.remove(phone);
             }
@@ -243,7 +265,8 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   }
 
   private void render() {
-    if (isClosing() || newChatView == null) return;
+    if (isClosing() || newChatView == null)
+      return;
     List<NewChatView.Item> items = new ArrayList<>();
     for (JsonObject contact : found)
       items.add(
@@ -253,7 +276,8 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
               string(contact, "profilePhotoUrl")));
     if (!invites.isEmpty()) {
       items.add(NewChatView.Item.divider("Invite"));
-      for (String phone : invites) items.add(NewChatView.Item.invite(phone));
+      for (String phone : invites)
+        items.add(NewChatView.Item.invite(phone));
     }
     newChatView.submitItems(items);
   }
@@ -282,7 +306,8 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
         ChatActivity.EXTRA_LOCAL_PROFILE_PHOTO_PATH,
         ChatProfilePhotoStore.getLocalPath(this, item.phoneNumber));
     startActivity(intent);
-    if (isForwarding()) finish();
+    if (isForwarding())
+      finish();
   }
 
   private boolean isForwarding() {
@@ -302,15 +327,90 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     }
   }
 
+  @Override
+  public void onGroupSelectionRequired() {
+    Toast.makeText(this, "Select at least one member.", Toast.LENGTH_SHORT).show();
+  }
+
+  @Override
+  public void onCreateGroup(List<String> memberIds) {
+    if (!createGroupMode || creatingGroup || memberIds == null || memberIds.isEmpty())
+      return;
+    EditText input = new EditText(this);
+    input.setHint("Group name");
+    input.setSingleLine(true);
+    int padding = Math.round(24 * getResources().getDisplayMetrics().density);
+    input.setPadding(padding, padding / 2, padding, padding / 2);
+    AlertDialog dialog = new AlertDialog.Builder(this)
+        .setTitle("Create group")
+        .setMessage(memberIds.size() + (memberIds.size() == 1 ? " member selected" : " members selected"))
+        .setView(input)
+        .setNegativeButton("Cancel", null)
+        .setPositiveButton("Create", null)
+        .create();
+    dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+        .setOnClickListener(view -> {
+          String name = input.getText() == null ? "" : input.getText().toString().trim();
+          if (name.isEmpty()) {
+            input.setError("Enter a group name");
+            return;
+          }
+          creatingGroup = true;
+          dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+          AppFunctionManager.getInstance().createGroup(currentPhone(), name, "", memberIds,
+              new AppFunctionManager.Callback() {
+                @Override
+                public void onSuccess(Object value) {
+                  creatingGroup = false;
+                  dialog.dismiss();
+                  if (!(value instanceof JsonObject)) {
+                    Toast.makeText(NewChatActivity.this, "Invalid group response.", Toast.LENGTH_SHORT).show();
+                    return;
+                  }
+                  JsonObject response = (JsonObject) value;
+                  JsonObject group = response.has("group") && response.get("group").isJsonObject()
+                      ? response.getAsJsonObject("group")
+                      : null;
+                  String groupId = group == null ? "" : string(group, "groupId");
+                  if (groupId.isEmpty()) {
+                    Toast.makeText(NewChatActivity.this, "Group was created but could not be opened.",
+                        Toast.LENGTH_SHORT).show();
+                    finish();
+                    return;
+                  }
+                  repository.refreshChatList(currentPhone());
+                  Intent intent = new Intent(NewChatActivity.this, ChatActivity.class);
+                  intent.putExtra(ChatActivity.EXTRA_CHAT_NAME, name);
+                  intent.putExtra(ChatActivity.EXTRA_CHAT_ID, groupId);
+                  intent.putExtra(ChatActivity.EXTRA_PROFILE_PHOTO_URL, "");
+                  startActivity(intent);
+                  finish();
+                }
+
+                @Override
+                public void onError(String error) {
+                  creatingGroup = false;
+                  dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                  Toast.makeText(NewChatActivity.this,
+                      error == null || error.trim().isEmpty() ? "Unable to create group." : error,
+                      Toast.LENGTH_SHORT).show();
+                }
+              });
+        }));
+    dialog.show();
+  }
+
   private String currentPhone() {
     String uid = LoginStateManager.getInstance().getUID(this);
     return normalize(uid);
   }
 
   private static String normalize(String v) {
-    if (v == null) return "";
+    if (v == null)
+      return "";
     String n = v.trim().replace(" ", "").replace("-", "").replace("(", "").replace(")", "");
-    if (n.startsWith("<plus>")) n = n.substring(6);
+    if (n.startsWith("<plus>"))
+      n = n.substring(6);
     return n.startsWith("+") ? n.substring(1) : n;
   }
 
@@ -333,7 +433,8 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     discoveryExecutor.shutdownNow();
     photoExecutor.shutdownNow();
     photoDownloads.clear();
-    if (newChatView != null) newChatView.release();
+    if (newChatView != null)
+      newChatView.release();
     newChatView = null;
     super.onDestroy();
   }

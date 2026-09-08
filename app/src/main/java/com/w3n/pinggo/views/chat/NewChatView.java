@@ -22,6 +22,8 @@ import com.w3n.pinggo.contacts.DeviceContactResolver;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /** AAR-native contact discovery list. */
 public final class NewChatView extends View {
@@ -42,6 +44,8 @@ public final class NewChatView extends View {
   private int topInset, bottomInset;
   private String statusMessage = "Loading contacts...";
   private String titleValue = "New Chat";
+  private boolean groupMode;
+  private final Set<String> selectedMembers = new LinkedHashSet<>();
 
   public NewChatView(Context context, Listener listener) {
     super(context);
@@ -66,6 +70,13 @@ public final class NewChatView extends View {
     titleValue = value == null || value.trim().isEmpty() ? "New Chat" : value.trim();
     if (title != null) title.setText(titleValue);
     invalidate();
+  }
+
+  public void setGroupMode(boolean enabled) {
+    groupMode = enabled;
+    titleValue = enabled ? "New group" : "New Chat";
+    selectedMembers.clear();
+    if (getWidth() > 0) build();
   }
 
   public void submitItems(List<Item> items) {
@@ -99,10 +110,19 @@ public final class NewChatView extends View {
         text(
             "title",
             titleValue,
-            new RectF(px(176f), top, w - px(55f), top + px(132f)),
+            new RectF(px(176f), top, w - (groupMode ? px(310f) : px(55f)), top + px(132f)),
             sp(24),
             PRIMARY,
             FontVariation.BOLD));
+    if (groupMode) {
+      addButton(content, "create_group", accent,
+          "Create (" + selectedMembers.size() + ")",
+          new RectF(w - px(295f), top + px(15f), w - px(33f), top + px(117f)),
+          Color.WHITE, id -> {
+            if (selectedMembers.isEmpty()) listener.onGroupSelectionRequired();
+            else listener.onCreateGroup(new ArrayList<>(selectedMembers));
+          });
+    }
     float listTop = top + px(165f);
     list =
         content.add(
@@ -117,7 +137,10 @@ public final class NewChatView extends View {
                 .setOverscrollEnabled(false)
                 .setOnItemClickListener(
                     (componentList, item, position) -> {
-                      if (item.type == Item.FOUND) listener.onOpenChat(item);
+                      if (item.type == Item.FOUND && groupMode) {
+                        if (!selectedMembers.add(item.phoneNumber)) selectedMembers.remove(item.phoneNumber);
+                        build();
+                      } else if (item.type == Item.FOUND) listener.onOpenChat(item);
                       else if (item.type == Item.INVITE) listener.onInvite(item.phoneNumber);
                     }));
     status =
@@ -265,7 +288,10 @@ public final class NewChatView extends View {
       holder.find("name", Text.class).setText(displayName);
       holder
           .find("detail", Text.class)
-          .setText(value.type == Item.FOUND ? "Tap to chat" : "Not on PingGo");
+          .setText(value.type == Item.FOUND
+              ? (groupMode && selectedMembers.contains(value.phoneNumber)
+                  ? "Selected for group" : groupMode ? "Tap to select" : "Tap to chat")
+              : "Not on PingGo");
       holder
           .find("invite", Button.class)
           .setVisible(value.type == Item.INVITE)
@@ -375,5 +401,9 @@ public final class NewChatView extends View {
     void onOpenChat(Item item);
 
     void onInvite(String phoneNumber);
+
+    void onCreateGroup(List<String> memberIds);
+
+    void onGroupSelectionRequired();
   }
 }

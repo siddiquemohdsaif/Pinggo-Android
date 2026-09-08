@@ -2,6 +2,7 @@ package com.w3n.pinggo.data.worker;
 
 import android.content.Context;
 import android.net.Uri;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.work.Data;
@@ -58,6 +59,9 @@ public class AttachmentUploadWorker extends Worker {
         String transferId = getInputData().getString(KEY_TRANSFER_ID);
         TransferEntity transfer = transferId == null ? null : transfers.find(transferId);
         if (transfer == null) return Result.failure();
+        Log.i("PingGoAttachment", "Upload started transfer=" + transfer.transferId
+                + " client=" + transfer.clientMessageId + " chat=" + transfer.chatId
+                + " attempt=" + getRunAttemptCount());
         try {
             File staged = stage(transfer);
             String token = LoginStateManager.getInstance().getUID(context) + "_"
@@ -76,13 +80,19 @@ public class AttachmentUploadWorker extends Worker {
                     JsonParserUtil.getString(attachment, "mimeType"), url,
                     JsonParserUtil.getLong(attachment, "size"));
             ChatRepository.getInstance(context).sendCompletedBackgroundAttachment(transfer, attachment);
+            Log.i("PingGoAttachment", "Upload completed transfer=" + transfer.transferId
+                    + " attachment=" + attachmentId);
             if (staged.isFile()) staged.delete();
             return Result.success();
         } catch (PermanentFailure error) {
+            Log.e("PingGoAttachment", "Upload permanently failed transfer=" + transfer.transferId,
+                    error);
             fail(transfer, error.getMessage());
             cancelSession(transfer);
             return Result.failure(new Data.Builder().putString("error", error.getMessage()).build());
         } catch (Exception error) {
+            Log.e("PingGoAttachment", "Upload attempt failed transfer=" + transfer.transferId
+                    + " attempt=" + getRunAttemptCount(), error);
             if (getRunAttemptCount() < 3) {
                 transfers.failed(transfer.transferId, "retrying", error.getMessage(), System.currentTimeMillis());
                 return Result.retry();

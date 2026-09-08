@@ -14,9 +14,10 @@ final class MessageNoticeComponent implements Component {
   private static final int TEXT_COLOR = 0xFF131D2F;
   private final String id;
   private final RectF bounds = new RectF();
-  private final Bitmap icon;
+  private Bitmap icon;
   private final Paint iconPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
   private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
+  private final Typeface typeface;
   private ComponentHost host;
   private String text = "";
   private float iconSize;
@@ -27,12 +28,22 @@ final class MessageNoticeComponent implements Component {
   MessageNoticeComponent(String id, Bitmap icon, Typeface typeface, float textSize) {
     this.id = id;
     this.icon = icon;
+    this.typeface = typeface;
     textPaint.setColor(TEXT_COLOR);
     textPaint.setTextSize(textSize);
     textPaint.setTypeface(android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P
         ? Typeface.create(typeface, 100, false)
         : Typeface.create(typeface, Typeface.NORMAL));
     textPaint.setTextSkewX(-0.22f);
+  }
+
+  MessageNoticeComponent setRegularStyle(boolean regular) {
+    textPaint.setTypeface(android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P
+        ? Typeface.create(typeface, regular ? 400 : 100, false)
+        : Typeface.create(typeface, regular ? Typeface.NORMAL : Typeface.NORMAL));
+    textPaint.setTextSkewX(regular ? 0f : -0.22f);
+    invalidate();
+    return this;
   }
 
   MessageNoticeComponent bind(
@@ -44,6 +55,13 @@ final class MessageNoticeComponent implements Component {
     visible = !text.isEmpty();
     invalidate();
     return this;
+  }
+
+  MessageNoticeComponent bind(
+      RectF region, Bitmap requestedIcon, String value,
+      float requestedIconSize, float requestedTextGap) {
+    icon = requestedIcon;
+    return bind(region, value, requestedIconSize, requestedTextGap);
   }
 
   MessageNoticeComponent hide() {

@@ -38,8 +38,8 @@ import java.util.Map;
 
 public class VideoCallActivity extends AppCompatActivity implements VideoActiveCallView.Listener,
     VideoCallController.Listener {
-  private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
-      new com.ogfa.nativeviews.component.FigmaConfig(1080f);
+  private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig = new com.ogfa.nativeviews.component.FigmaConfig(
+      1080f);
   private static final String TAG = "PingGoVideoCall";
   private VideoActiveCallView callView;
   private AudioManager audioManager;
@@ -52,15 +52,20 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
   private ToneGenerator outgoingTone;
   private boolean incomingToneActive, outgoingToneActive;
   private final Runnable incomingToneLoop = new Runnable() {
-    @Override public void run() {
-      if (!incomingToneActive) return;
-      if (incomingRingtone != null && !incomingRingtone.isPlaying()) incomingRingtone.play();
+    @Override
+    public void run() {
+      if (!incomingToneActive)
+        return;
+      if (incomingRingtone != null && !incomingRingtone.isPlaying())
+        incomingRingtone.play();
       toneHandler.postDelayed(this, 2_000L);
     }
   };
   private final Runnable outgoingToneLoop = new Runnable() {
-    @Override public void run() {
-      if (!outgoingToneActive || outgoingTone == null) return;
+    @Override
+    public void run() {
+      if (!outgoingToneActive || outgoingTone == null)
+        return;
       outgoingTone.startTone(ToneGenerator.TONE_SUP_RINGTONE, 2_500);
       toneHandler.postDelayed(this, 4_000L);
     }
@@ -68,7 +73,8 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
   private final ActivityResultLauncher<String[]> permissions = registerForActivityResult(
       new ActivityResultContracts.RequestMultiplePermissions(), this::onPermissionsResult);
 
-  @Override protected void onCreate(Bundle state) {
+  @Override
+  protected void onCreate(Bundle state) {
     super.onCreate(state);
     Log.i("PingGoCallTrace", "video_activity_created callId="
         + value(VoiceCallActivity.EXTRA_CALL_ID) + " hasOffer="
@@ -80,7 +86,8 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
     ActiveCallRegistry.getInstance().register(this, value(VoiceCallActivity.EXTRA_CALL_CHAT_ID),
         ActiveCallRegistry.TYPE_VIDEO);
     audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
-    if (audioManager != null) audioManager.setSpeakerphoneOn(true);
+    if (audioManager != null)
+      audioManager.setSpeakerphoneOn(true);
     buildCallScreen();
     controller = new VideoCallController(this, ChatRepository.getInstance(this), this,
         value(VoiceCallActivity.EXTRA_CALL_ID), value(VoiceCallActivity.EXTRA_CALL_CHAT_ID),
@@ -113,7 +120,8 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
     setContentView(root);
     ViewCompat.setOnApplyWindowInsetsListener(callView, (view, insets) -> {
       Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-      callView.setInsets(bars.top, bars.bottom); return insets;
+      callView.setInsets(bars.top, bars.bottom);
+      return insets;
     });
     ViewCompat.requestApplyInsets(callView);
     remoteSurface.getHolder().addCallback(new SurfaceCallback(false));
@@ -122,16 +130,19 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
   }
 
   private void requestPermissionsAndStart() {
-    boolean camera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-        == PackageManager.PERMISSION_GRANTED;
-    boolean microphone = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-        == PackageManager.PERMISSION_GRANTED;
+    boolean camera = ContextCompat.checkSelfPermission(this,
+        Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+    boolean microphone = ContextCompat.checkSelfPermission(this,
+        Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
     Log.i("PingGoCallTrace", "video_permission_check callId="
         + value(VoiceCallActivity.EXTRA_CALL_ID) + " camera=" + camera
         + " microphone=" + microphone);
-    if (camera && microphone) onMediaPermissionsReady();
-    else permissions.launch(new String[] { Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO });
+    if (camera && microphone)
+      onMediaPermissionsReady();
+    else
+      permissions.launch(new String[] { Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO });
   }
+
   private TextView cameraDisabledView() {
     TextView view = new TextView(this);
     view.setBackgroundColor(Color.BLACK);
@@ -141,14 +152,20 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
     view.setGravity(Gravity.CENTER);
     return view;
   }
+
   private void onPermissionsResult(Map<String, Boolean> result) {
     Log.i("PingGoCallTrace", "video_permission_result callId="
         + value(VoiceCallActivity.EXTRA_CALL_ID) + " result=" + result);
     if (Boolean.TRUE.equals(result.get(Manifest.permission.CAMERA)) &&
-        Boolean.TRUE.equals(result.get(Manifest.permission.RECORD_AUDIO))) onMediaPermissionsReady();
-    else { Toast.makeText(this, "Camera and microphone permissions are required.",
-        Toast.LENGTH_LONG).show(); finish(); }
+        Boolean.TRUE.equals(result.get(Manifest.permission.RECORD_AUDIO)))
+      onMediaPermissionsReady();
+    else {
+      Toast.makeText(this, "Camera and microphone permissions are required.",
+          Toast.LENGTH_LONG).show();
+      finish();
+    }
   }
+
   private void onMediaPermissionsReady() {
     Log.i("PingGoCallTrace", "video_media_ready callId="
         + value(VoiceCallActivity.EXTRA_CALL_ID) + " incomingUnanswered="
@@ -161,42 +178,79 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
     }
   }
 
-  @Override protected void onResume() {
-    super.onResume(); if (controller != null) {
+  @Override
+  protected void onResume() {
+    super.onResume();
+    if (controller != null) {
       controller.onResume();
       if (remoteSurface.getHolder().getSurface().isValid())
         controller.attachRemoteSurface(remoteSurface.getHolder().getSurface());
       updateRotation();
     }
   }
-  @Override protected void onPause() {
+
+  @Override
+  protected void onPause() {
     if (controller != null && !FloatingVideoCallController.getInstance().isMinimized())
       controller.onPause();
     super.onPause();
   }
-  @Override public void onBack() {
-    if (controller.isIncomingUnanswered()) controller.reject();
-    else FloatingVideoCallController.getInstance().minimizeAndReturn(this);
+
+  @Override
+  public void onBack() {
+    if (controller.isIncomingUnanswered())
+      controller.reject();
+    else
+      FloatingVideoCallController.getInstance().minimizeAndReturn(this);
   }
-  @Override public void onEnd() { controller.hangup(); }
-  @Override public void onSpeaker() {
+
+  @Override
+  public void onEnd() {
+    controller.hangup();
+  }
+
+  @Override
+  public void onSpeaker() {
     speakerOn = !speakerOn;
-    if (audioManager != null) audioManager.setSpeakerphoneOn(speakerOn);
+    if (audioManager != null)
+      audioManager.setSpeakerphoneOn(speakerOn);
     callView.setAudioState(speakerOn, controller.isMuted());
   }
-  @Override public void onMute() {
-    controller.toggleMute(); callView.setAudioState(speakerOn, controller.isMuted());
+
+  @Override
+  public void onMute() {
+    controller.toggleMute();
+    callView.setAudioState(speakerOn, controller.isMuted());
   }
-  @Override public void onFlipCamera() { controller.flipCamera(); }
-  @Override public void onCamera() { controller.toggleCamera(); }
-  @Override public void onAccept() {
+
+  @Override
+  public void onFlipCamera() {
+    controller.flipCamera();
+  }
+
+  @Override
+  public void onCamera() {
+    controller.toggleCamera();
+  }
+
+  @Override
+  public void onAccept() {
     Log.i("PingGoCallTrace", "video_answer_requested callId="
         + value(VoiceCallActivity.EXTRA_CALL_ID) + " incomingUnanswered="
         + controller.isIncomingUnanswered());
-    stopIncomingRingtone(); controller.accept(); callView.showIncomingPrompt(false);
+    stopIncomingRingtone();
+    controller.accept();
+    callView.showIncomingPrompt(false);
   }
-  @Override public void onReject() { stopCallTones(); controller.reject(); }
-  @Override public void onState(VideoCallController.CallState state,
+
+  @Override
+  public void onReject() {
+    stopCallTones();
+    controller.reject();
+  }
+
+  @Override
+  public void onState(VideoCallController.CallState state,
       VideoCallController.ChannelState signaling, VideoCallController.ChannelState audio,
       VideoCallController.ChannelState video, String status) {
     Log.i("PingGoCallTrace", "video_state callId="
@@ -204,12 +258,14 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
         + " signaling=" + signaling + " audio=" + audio + " video=" + video
         + " status=" + status);
     runOnUiThread(() -> {
-      if (callView == null) return;
+      if (callView == null)
+        return;
       callView.setCallStatus(status);
       FloatingVideoCallController.getInstance().updateStatus(status);
       callView.setCallConnected(state == VideoCallController.CallState.CONNECTED);
       if (state == VideoCallController.CallState.RINGING) {
-        callView.showIncomingPrompt(true); startIncomingRingtone();
+        callView.showIncomingPrompt(true);
+        startIncomingRingtone();
       } else if (state == VideoCallController.CallState.CALLING) {
         startOutgoingTone();
       } else if (state == VideoCallController.CallState.CONNECTING ||
@@ -224,111 +280,200 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
       }
     });
   }
-  @Override public void onElapsed(String elapsed) { runOnUiThread(() -> {
-    FloatingVideoCallController.getInstance().updateStatus(elapsed);
-    if (callView != null) callView.setCallStatus(elapsed); }); }
-  @Override public void onRemoteMuted(boolean value) { runOnUiThread(() -> {
-    if (callView != null) callView.setRemoteMuted(value); }); }
-  @Override public void onRemoteCameraEnabled(boolean enabled) {
+
+  @Override
+  public void onElapsed(String elapsed) {
     runOnUiThread(() -> {
-      remoteCameraOffView.setVisibility(enabled ? View.GONE : View.VISIBLE);
-      if (!enabled && remoteCameraOffView != null) remoteCameraOffView.bringToFront();
-      if (localSurface != null) localSurface.bringToFront();
-      if (localCameraOffView != null && localCameraOffView.getVisibility() == View.VISIBLE)
-        localCameraOffView.bringToFront();
-      if (callView != null) callView.bringToFront();
+      FloatingVideoCallController.getInstance().updateStatus(elapsed);
+      if (callView != null)
+        callView.setCallStatus(elapsed);
     });
   }
-  @Override public void onCameraEnabled(boolean enabled) { runOnUiThread(() -> {
-    localCameraOffView.setVisibility(enabled ? View.GONE : View.VISIBLE);
-    if (callView != null) callView.setCameraEnabled(enabled);
-    if (!enabled) localCameraOffView.bringToFront(); if (callView != null) callView.bringToFront();
-  }); }
-  @Override public void onFinished(VideoCallController.TerminationReason reason, String message) {
-    runOnUiThread(() -> { if (!isFinishing()) {
-      stopCallTones();
-      FloatingVideoCallController.getInstance().clear();
-      if (reason != VideoCallController.TerminationReason.LOCAL_HANGUP &&
-          reason != VideoCallController.TerminationReason.ACTIVITY_DESTROYED)
-        Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
-      finish();
-    }});
+
+  @Override
+  public void onRemoteMuted(boolean value) {
+    runOnUiThread(() -> {
+      if (callView != null)
+        callView.setRemoteMuted(value);
+    });
   }
-  @Override public void onError(String message) { runOnUiThread(() ->
-      Toast.makeText(this, message, Toast.LENGTH_SHORT).show()); }
+
+  @Override
+  public void onRemoteCameraEnabled(boolean enabled) {
+    runOnUiThread(() -> {
+      remoteCameraOffView.setVisibility(enabled ? View.GONE : View.VISIBLE);
+      if (!enabled && remoteCameraOffView != null)
+        remoteCameraOffView.bringToFront();
+      if (localSurface != null)
+        localSurface.bringToFront();
+      if (localCameraOffView != null && localCameraOffView.getVisibility() == View.VISIBLE)
+        localCameraOffView.bringToFront();
+      if (callView != null)
+        callView.bringToFront();
+    });
+  }
+
+  @Override
+  public void onCameraEnabled(boolean enabled) {
+    runOnUiThread(() -> {
+      localCameraOffView.setVisibility(enabled ? View.GONE : View.VISIBLE);
+      if (callView != null)
+        callView.setCameraEnabled(enabled);
+      if (!enabled)
+        localCameraOffView.bringToFront();
+      if (callView != null)
+        callView.bringToFront();
+    });
+  }
+
+  @Override
+  public void onFinished(VideoCallController.TerminationReason reason, String message) {
+    runOnUiThread(() -> {
+      if (!isFinishing()) {
+        stopCallTones();
+        FloatingVideoCallController.getInstance().clear();
+        if (reason != VideoCallController.TerminationReason.LOCAL_HANGUP &&
+            reason != VideoCallController.TerminationReason.ACTIVITY_DESTROYED)
+          Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+        finish();
+      }
+    });
+  }
+
+  @Override
+  public void onError(String message) {
+    runOnUiThread(() -> Toast.makeText(this, message, Toast.LENGTH_SHORT).show());
+  }
+
   private void showConnectedLayout() {
-    if (localSurface == null) return;
+    if (localSurface == null)
+      return;
     FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(px(330f), px(495f),
         Gravity.TOP | Gravity.END);
     params.topMargin = px(198f);
     params.rightMargin = px(44f);
     localSurface.setLayoutParams(params);
-    if (localCameraOffView != null) localCameraOffView.setLayoutParams(new FrameLayout.LayoutParams(params));
+    if (localCameraOffView != null)
+      localCameraOffView.setLayoutParams(new FrameLayout.LayoutParams(params));
     localSurface.bringToFront();
     if (localCameraOffView != null && localCameraOffView.getVisibility() == View.VISIBLE)
       localCameraOffView.bringToFront();
-    if (callView != null) callView.bringToFront();
+    if (callView != null)
+      callView.bringToFront();
   }
+
   private void startIncomingRingtone() {
-    if (incomingToneActive) return;
+    if (incomingToneActive)
+      return;
     stopCallTones();
     incomingRingtone = RingtoneManager.getRingtone(this,
         RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE));
-    if (incomingRingtone == null) return;
+    if (incomingRingtone == null)
+      return;
     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P)
       incomingRingtone.setLooping(true);
-    incomingToneActive = true; incomingRingtone.play();
+    incomingToneActive = true;
+    incomingRingtone.play();
     toneHandler.postDelayed(incomingToneLoop, 2_000L);
   }
+
   private void stopIncomingRingtone() {
-    incomingToneActive = false; toneHandler.removeCallbacks(incomingToneLoop);
-    if (incomingRingtone != null && incomingRingtone.isPlaying()) incomingRingtone.stop();
+    incomingToneActive = false;
+    toneHandler.removeCallbacks(incomingToneLoop);
+    if (incomingRingtone != null && incomingRingtone.isPlaying())
+      incomingRingtone.stop();
     incomingRingtone = null;
   }
+
   private void startOutgoingTone() {
-    if (outgoingToneActive) return;
+    if (outgoingToneActive)
+      return;
     stopCallTones();
     outgoingTone = new ToneGenerator(AudioManager.STREAM_RING, 100);
-    outgoingToneActive = true; outgoingToneLoop.run();
+    outgoingToneActive = true;
+    outgoingToneLoop.run();
   }
+
   private void stopOutgoingTone() {
-    outgoingToneActive = false; toneHandler.removeCallbacks(outgoingToneLoop);
+    outgoingToneActive = false;
+    toneHandler.removeCallbacks(outgoingToneLoop);
     if (outgoingTone != null) {
-      outgoingTone.stopTone(); outgoingTone.release(); outgoingTone = null;
+      outgoingTone.stopTone();
+      outgoingTone.release();
+      outgoingTone = null;
     }
   }
-  private void stopCallTones() { stopIncomingRingtone(); stopOutgoingTone(); }
-  @Override protected void onDestroy() {
+
+  private void stopCallTones() {
+    stopIncomingRingtone();
+    stopOutgoingTone();
+  }
+
+  @Override
+  protected void onDestroy() {
     stopCallTones();
     FloatingVideoCallController.getInstance().clear();
-    if (controller != null) controller.destroy(); controller = null;
-    if (audioManager != null) audioManager.setSpeakerphoneOn(false);
-    if (callView != null) callView.release(); callView = null;
-    ActiveCallRegistry.getInstance().clear(this); super.onDestroy();
+    if (controller != null)
+      controller.destroy();
+    controller = null;
+    if (audioManager != null)
+      audioManager.setSpeakerphoneOn(false);
+    if (callView != null)
+      callView.release();
+    callView = null;
+    ActiveCallRegistry.getInstance().clear(this);
+    super.onDestroy();
   }
+
   private void updateRotation() {
     if (controller != null && getDisplay() != null)
       controller.setDisplayRotation(getDisplay().getRotation() * 90);
   }
+
   private String value(String key) {
-    String result = getIntent().getStringExtra(key); return result == null ? "" : result.trim();
+    String result = getIntent().getStringExtra(key);
+    return result == null ? "" : result.trim();
   }
+
   private int px(float value) {
     return Math.round(figmaConfig.toRuntime(value, Math.max(1, getResources().getDisplayMetrics().widthPixels)));
   }
+
   private final class SurfaceCallback implements SurfaceHolder.Callback {
     private final boolean local;
-    SurfaceCallback(boolean local) { this.local = local; }
-    @Override public void surfaceCreated(@NonNull SurfaceHolder holder) { attach(holder); }
-    @Override public void surfaceChanged(@NonNull SurfaceHolder holder, int format, int w, int h) { updateRotation(); attach(holder); }
-    @Override public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
-      if (controller == null) return;
-      if (local) controller.attachLocalSurface(null); else controller.attachRemoteSurface(null);
+
+    SurfaceCallback(boolean local) {
+      this.local = local;
     }
+
+    @Override
+    public void surfaceCreated(@NonNull SurfaceHolder holder) {
+      attach(holder);
+    }
+
+    @Override
+    public void surfaceChanged(@NonNull SurfaceHolder holder, int format, int w, int h) {
+      updateRotation();
+      attach(holder);
+    }
+
+    @Override
+    public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
+      if (controller == null)
+        return;
+      if (local)
+        controller.attachLocalSurface(null);
+      else
+        controller.attachRemoteSurface(null);
+    }
+
     private void attach(SurfaceHolder holder) {
-      if (controller == null) return;
-      if (local) controller.attachLocalSurface(holder.getSurface());
-      else controller.attachRemoteSurface(holder.getSurface());
+      if (controller == null)
+        return;
+      if (local)
+        controller.attachLocalSurface(holder.getSurface());
+      else
+        controller.attachRemoteSurface(holder.getSurface());
     }
   }
 }

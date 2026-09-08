@@ -5,6 +5,7 @@ import androidx.room.Dao;
 import androidx.room.Insert;
 import androidx.room.OnConflictStrategy;
 import androidx.room.Query;
+import androidx.room.Transaction;
 
 import java.util.List;
 
@@ -28,8 +29,16 @@ public interface MessageDao {
     @Query("SELECT * FROM messages WHERE messageId = :messageId LIMIT 1")
     MessageEntity findByMessageId(String messageId);
 
+    @Query("UPDATE messages SET groupReceiptsJson = :receipts WHERE messageId = :messageId")
+    void updateGroupReceipts(String messageId, String receipts);
+
     @Query("SELECT * FROM messages WHERE messageId IN (:messageIds)")
     List<MessageEntity> findByMessageIds(List<String> messageIds);
+
+    @Query("SELECT * FROM messages WHERE chatId = :chatId AND invisible = 0 "
+            + "AND (messageTypeCode IN (1, 2, 4) OR text LIKE '%http://%' OR text LIKE '%https://%') "
+            + "AND sentTime < :before ORDER BY sentTime DESC, messageId DESC LIMIT :limit")
+    List<MessageEntity> findStoredMediaPage(String chatId, long before, int limit);
 
     @Query("SELECT * FROM messages WHERE chatId = :chatId AND "
             + "(messageId IN (:messageIds) OR clientMessageId IN (:messageIds))")
@@ -48,6 +57,34 @@ public interface MessageDao {
 
     @Query("UPDATE messages SET messageId = :serverMessageId, status = :status, sentTime = :sentTime WHERE clientMessageId = :clientMessageId")
     void applyAck(String clientMessageId, String serverMessageId, String status, long sentTime);
+
+    @Query("DELETE FROM messages WHERE clientMessageId = :clientMessageId AND messageId != :serverMessageId")
+    void deleteOptimisticAckDuplicate(String clientMessageId, String serverMessageId);
+
+    @Query("UPDATE messages SET attachmentLocalUri = COALESCE(attachmentLocalUri, "
+            + "(SELECT attachmentLocalUri FROM messages WHERE clientMessageId = :clientMessageId "
+            + "AND messageId != :serverMessageId AND attachmentLocalUri IS NOT NULL LIMIT 1)) "
+            + "WHERE messageId = :serverMessageId")
+    void preserveAckAttachmentUri(String clientMessageId, String serverMessageId);
+
+    @Query("UPDATE messages SET clientMessageId = CASE WHEN clientMessageId IS NULL OR clientMessageId = '' "
+            + "THEN :clientMessageId ELSE clientMessageId END, status = :status, sentTime = :sentTime "
+            + "WHERE messageId = :serverMessageId")
+    void updateAcknowledgedServerMessage(String clientMessageId, String serverMessageId,
+                                         String status, long sentTime);
+
+    /** Merges an optimistic row with a server row that may have arrived first over the socket. */
+    @Transaction
+    default void reconcileAck(String clientMessageId, String serverMessageId,
+                              String status, long sentTime) {
+        if (existsByMessageId(serverMessageId)) {
+            preserveAckAttachmentUri(clientMessageId, serverMessageId);
+            deleteOptimisticAckDuplicate(clientMessageId, serverMessageId);
+            updateAcknowledgedServerMessage(clientMessageId, serverMessageId, status, sentTime);
+        } else {
+            applyAck(clientMessageId, serverMessageId, status, sentTime);
+        }
+    }
 
     @Query("UPDATE messages SET status = :status WHERE clientMessageId = :clientMessageId")
     void updateStatusByClientMessageId(String clientMessageId, String status);
