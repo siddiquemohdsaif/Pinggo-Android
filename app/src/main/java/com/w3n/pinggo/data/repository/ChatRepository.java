@@ -86,6 +86,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
         default void onTotalUnread(int totalUnread) { }
         default void onBlockStatus(String chatId, boolean blocked) { }
+        default void onGroupMembershipChanged(String chatId, boolean active) { }
         default void onCallsChanged() { }
     }
 
@@ -2231,6 +2232,21 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             handleMessageFailed(event);
         } else if ("new_message".equals(type) || "new_group_message".equals(type)) {
             handleNewMessage(event, totalUnreadBeforeEvent, serverTotalUnread);
+        } else if ("group_removed".equals(type) || "group_left".equals(type)
+                || "group_added".equals(type)) {
+            String changedGroupId = JsonParserUtil.getString(event, "groupId");
+            String affectedUserId = normalizeAccountId(
+                    JsonParserUtil.getString(event, "affectedUserId"));
+            String signedInUserId = currentUserId == null || currentUserId.isEmpty()
+                    ? normalizeAccountId(LoginStateManager.getInstance().getUID(appContext))
+                    : currentUserId;
+            if (!affectedUserId.isEmpty() && !affectedUserId.equals(signedInUserId)) return;
+            boolean active = "group_added".equals(type);
+            EventListener listener = eventListener;
+            if (listener != null) mainHandler.post(() -> {
+                if (eventListener == listener)
+                    listener.onGroupMembershipChanged(changedGroupId, active);
+            });
         } else if ("calls_list_updated".equals(type)) {
             notifyCallsChanged();
         } else if ("chat_settings_updated".equals(type)) {

@@ -73,10 +73,16 @@ public final class ChatInfoActivity extends AppCompatActivity {
   private boolean group;
   private LinearLayout mediaRow;
   private LinearLayout members;
+  private TextView membersTitle;
   private TextView subtitle;
   private TextView description;
   private TextView mediaHeading;
   private TextView emptyMedia;
+  private TextView membershipNotice;
+  private LinearLayout callActions;
+  private TextView groupBlockAction;
+  private boolean groupMemberActive = true;
+  private boolean ownGroupAdmin;
   private View mediaProgressTile;
   private View mediaArrowTile;
   private int mediaTileCount;
@@ -96,14 +102,13 @@ public final class ChatInfoActivity extends AppCompatActivity {
     name = value(EXTRA_NAME, group ? "Group" : "Chat");
     phone = value(EXTRA_PHONE, "");
     profilePath = value(EXTRA_PROFILE_PATH, "");
+    ownGroupAdmin = group && "admin".equalsIgnoreCase(value(EXTRA_ROLE, ""));
     userId = LoginStateManager.getInstance().getUID(this);
     repository = ChatRepository.getInstance(this);
     setContentView(buildPage());
     repository.observeTransfers(chatId).observe(this, this::showCompletedTransfers);
     loadMedia();
-    if (group)
-      loadGroupDetails();
-    else
+    if (!group)
       loadDirectDetails();
   }
 
@@ -140,7 +145,13 @@ public final class ChatInfoActivity extends AppCompatActivity {
     description.setGravity(Gravity.CENTER);
     if (group)
       add(body, description, 8);
-    body.addView(actionRow(), margins(0, 24, 0, 22));
+    membershipNotice = text("You are not an active member", 14, false);
+    membershipNotice.setTextColor(0xFF687382);
+    membershipNotice.setGravity(Gravity.CENTER);
+    membershipNotice.setVisibility(View.GONE);
+    if (group) body.addView(membershipNotice, margins(0, 12, 0, 0));
+    callActions = actionRow();
+    body.addView(callActions, margins(0, 24, 0, 22));
 
     LinearLayout mediaSection = column();
     mediaSection.setOnClickListener(v -> openMediaLibrary());
@@ -157,13 +168,16 @@ public final class ChatInfoActivity extends AppCompatActivity {
 
     if (group) {
       members = column();
-      TextView membersTitle = text("Members", 17, true);
+      membersTitle = text("Members", 17, true);
       body.addView(membersTitle, margins(0, 18, 0, 6));
       body.addView(members, full());
     }
     body.addView(dangerAction("Clear chat", this::confirmClear), margins(0, 24, 0, 0));
-    body.addView(dangerAction(group ? "Block group" : "Block " + name,
-        group ? this::confirmBlockGroup : this::confirmBlockContact), full());
+    if (group) {
+      groupBlockAction = dangerAction("Block group", this::confirmBlockGroup);
+      body.addView(groupBlockAction, full());
+    } else
+      body.addView(dangerAction("Block " + name, this::confirmBlockContact), full());
     body.addView(dangerAction(group ? "Report group" : "Report " + name, this::confirmReport), full());
     scroll.addView(body);
     page.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
@@ -196,7 +210,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
         .putExtra(ChatMediaActivity.EXTRA_CHAT_NAME, name));
   }
 
-  private View actionRow() {
+  private LinearLayout actionRow() {
     LinearLayout actions = row();
     actions.setGravity(Gravity.CENTER);
     actions.setWeightSum(3);
@@ -224,6 +238,10 @@ public final class ChatInfoActivity extends AppCompatActivity {
   }
 
   private void openCall(boolean video) {
+    if (group && !groupMemberActive) {
+      toast("You are not an active member.");
+      return;
+    }
     if (group) {
       toast("Group call implementation pending.");
       return;
@@ -251,8 +269,22 @@ public final class ChatInfoActivity extends AppCompatActivity {
       JsonArray list = data.has("members") && data.get("members").isJsonArray()
           ? data.getAsJsonArray("members")
           : new JsonArray();
+      JsonObject ownMembership = object(data, "ownMembership");
+      groupMemberActive = ownMembership != null
+          && "active".equalsIgnoreCase(string(ownMembership, "status"));
+      ownGroupAdmin = groupMemberActive
+          && "admin".equalsIgnoreCase(string(ownMembership, "role"));
+      membershipNotice.setVisibility(groupMemberActive ? View.GONE : View.VISIBLE);
+      callActions.setAlpha(groupMemberActive ? 1f : 0.42f);
+      if (groupBlockAction != null)
+        groupBlockAction.setVisibility(groupMemberActive ? View.VISIBLE : View.GONE);
       subtitle.setText(memberCountText(list.size()));
-      renderMembers(list);
+      membersTitle.setVisibility(groupMemberActive ? View.VISIBLE : View.GONE);
+      members.setVisibility(groupMemberActive ? View.VISIBLE : View.GONE);
+      if (groupMemberActive)
+        renderMembers(list);
+      else
+        members.removeAllViews();
     }));
   }
 
@@ -296,8 +328,19 @@ public final class ChatInfoActivity extends AppCompatActivity {
       preview.setTextColor(0xFF687382);
       labels.addView(preview);
       item.addView(labels, new LinearLayout.LayoutParams(0, -2, 1f));
-      if (!role.isEmpty() && !"member".equals(role))
-        item.addView(text("Group " + role, 12, false));
+      if (!role.isEmpty() && !"member".equals(role)) {
+        TextView roleLabel = text("Group " + role, 12, false);
+        roleLabel.setTextColor(0xFF687382);
+        item.addView(roleLabel);
+      }
+      if (ownGroupAdmin && groupMemberActive && !id.equals(userId)) {
+        TextView remove = text("Remove", 13, false);
+        remove.setTextColor(0xFFD9304F);
+        remove.setGravity(Gravity.CENTER);
+        remove.setPadding(dp(12), dp(10), dp(4), dp(10));
+        remove.setOnClickListener(v -> confirmRemoveMember(id, display));
+        item.addView(remove);
+      }
       members.addView(item, full());
       View divider = new View(this);
       divider.setBackgroundColor(0xFFE5EAF0);
@@ -305,6 +348,28 @@ public final class ChatInfoActivity extends AppCompatActivity {
       dividerParams.leftMargin = dp(80);
       members.addView(divider, dividerParams);
     }
+    if (ownGroupAdmin && groupMemberActive) {
+      LinearLayout addMembers = row();
+      addMembers.setGravity(Gravity.CENTER_VERTICAL);
+      addMembers.setPadding(dp(12), dp(14), dp(12), dp(14));
+      addMembers.setBackgroundColor(Color.WHITE);
+      ImageView icon = new ImageView(this);
+      icon.setImageResource(android.R.drawable.ic_input_add);
+      addMembers.addView(icon, new LinearLayout.LayoutParams(dp(54), dp(54)));
+      TextView label = text("Add members", 16, true);
+      label.setTextColor(0xFF019BC5);
+      label.setPadding(dp(14), 0, 0, 0);
+      addMembers.addView(label, new LinearLayout.LayoutParams(0, -2, 1f));
+      addMembers.setOnClickListener(v -> startActivity(new Intent(this, NewChatActivity.class)
+          .putExtra(NewChatActivity.EXTRA_ADD_TO_GROUP_ID, chatId)));
+      members.addView(addMembers, full());
+    }
+  }
+
+  @Override
+  protected void onResume() {
+    super.onResume();
+    if (group && members != null) loadGroupDetails();
   }
 
   private void loadMedia() {
@@ -566,11 +631,31 @@ public final class ChatInfoActivity extends AppCompatActivity {
   }
 
   private void confirmBlockGroup() {
+    if (!groupMemberActive) return;
     confirm("Block group?", "Blocking exits this group and removes future access.",
         () -> api.leaveGroup(userId, chatId, callback(result -> {
+          groupMemberActive = false;
+          membershipNotice.setVisibility(View.VISIBLE);
+          callActions.setAlpha(0.42f);
+          groupBlockAction.setVisibility(View.GONE);
+          membersTitle.setVisibility(View.GONE);
+          members.setVisibility(View.GONE);
+          members.removeAllViews();
+          loadGroupDetails();
           toast("Group blocked.");
-          finish();
         })));
+  }
+
+  private void confirmRemoveMember(String memberId, String memberName) {
+    if (!ownGroupAdmin || !groupMemberActive || memberId == null || memberId.equals(userId)) return;
+    String label = memberName == null || memberName.trim().isEmpty() ? memberId : memberName;
+    confirm("Remove " + label + "?", "They will no longer be able to send messages in this group.",
+        () -> api.updateGroupMembers(userId, chatId,
+            java.util.Collections.singletonList(memberId), false,
+            callback(result -> {
+              toast(label + " removed.");
+              loadGroupDetails();
+            })));
   }
 
   private void confirmReport() {

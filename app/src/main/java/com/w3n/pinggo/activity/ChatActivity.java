@@ -54,6 +54,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
+import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
 import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.local.ChatEntity;
 import com.w3n.pinggo.data.local.PresenceEntity;
@@ -120,6 +121,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private final Handler typingHandler = new Handler(Looper.getMainLooper());
   private long lastSocketErrorToastAt;
   private ChatView chatView;
+  private boolean groupMemberActive = true;
   private ImagePreviewView imagePreviewView;
   private VideoPreviewView videoPreviewView;
   private SelectedMediaPreviewView selectedMediaPreviewView;
@@ -368,6 +370,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         this,
         this::handleConversationMenuOption);
     conversationMenuDialog.setBlocked(contactBlocked);
+    conversationMenuDialog.setGroupConversation(groupChat);
     if (groupChat)
       conversationMenuDialog.setContactExists(true);
     chatView.setContactBlocked(contactBlocked);
@@ -436,6 +439,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         });
     ViewCompat.requestApplyInsets(chatView);
     repository = ChatRepository.getInstance(this);
+    if (groupChat)
+      refreshGroupMembership();
     repository.observeChat(chatId).observe(this, chat -> {
       currentChatDetails = chat;
       long mutedUntil = chat == null ? 0L : chat.notificationMuted;
@@ -488,6 +493,16 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
           public void onBlockStatus(String eventChatId, boolean blocked) {
             if (chatId != null && chatId.equals(eventChatId))
               applyBlockState(blocked);
+          }
+
+          @Override
+          public void onGroupMembershipChanged(String eventChatId, boolean active) {
+            if (!groupChat || chatId == null || !chatId.equals(eventChatId)) return;
+            groupMemberActive = active;
+            chatView.setGroupMemberActive(active);
+            conversationMenuDialog.setGroupMemberActive(active);
+            // Confirm the targeted event against the authoritative member record as well.
+            refreshGroupMembership();
           }
         });
     if (!groupChat)
@@ -1198,7 +1213,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onSend() {
-    if (contactBlocked)
+    if (contactBlocked || !requireActiveGroupMember())
       return;
     String text = chatView.getDraft();
     if (chatId == null || chatId.isEmpty() || (!groupChat && receiverId.isEmpty())) {
@@ -1259,7 +1274,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void sendSelectedAttachments(List<Uri> uris, List<String> types, String caption) {
-    if (uris == null || uris.isEmpty() || attachmentSending)
+    if (uris == null || uris.isEmpty() || attachmentSending || !requireActiveGroupMember())
       return;
     if (chatId == null || chatId.isEmpty() || (!groupChat && receiverId.isEmpty())) {
       Toast.makeText(this, "Chat information missing.", Toast.LENGTH_SHORT).show();
@@ -1632,6 +1647,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onVideoCall() {
+    if (!requireActiveGroupMember()) return;
     if (isGroupChat()) {
       Toast.makeText(this, "Group call implementation pending.", Toast.LENGTH_SHORT).show();
       return;
@@ -1645,6 +1661,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onVoiceCall() {
+    if (!requireActiveGroupMember()) return;
     if (isGroupChat()) {
       Toast.makeText(this, "Group call implementation pending.", Toast.LENGTH_SHORT).show();
       return;
@@ -2427,6 +2444,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onPinSelected(List<MessageEntity> messages) {
+    if (!requireActiveGroupMember()) {
+      chatView.clearMessageSelection();
+      return;
+    }
     ArrayList<String> messageIds = serverMessageIds(messages);
     if (messageIds.isEmpty()) {
       Toast.makeText(this, "Wait until the selected messages are sent.", Toast.LENGTH_SHORT).show();
@@ -2440,6 +2461,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onUnpinSelected(List<MessageEntity> messages) {
+    if (!requireActiveGroupMember()) {
+      chatView.clearMessageSelection();
+      return;
+    }
     ArrayList<String> messageIds = serverMessageIds(messages);
     if (messageIds.isEmpty()) {
       Toast.makeText(this, "Wait until the selected messages are sent.", Toast.LENGTH_SHORT).show();
@@ -3314,6 +3339,31 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     } else if ("Mute notifications".equals(option)
         || "Unmute notifications".equals(option)) {
       updateMuteSetting();
+    } else if ("Block group".equals(option)) {
+      if (!requireActiveGroupMember()) return;
+      showPrompt(NativePromptDialogView.actions(this,
+          java.util.Arrays.asList("Block group", "Cancel"), index -> {
+            if (index != 0) return;
+            AppFunctionManager.getInstance().leaveGroup(currentUser, chatId,
+                new AppFunctionManager.Callback() {
+                  @Override public void onSuccess(Object object) {
+                    runOnUiThread(() -> {
+                      groupMemberActive = false;
+                      chatView.setGroupMemberActive(false);
+                      conversationMenuDialog.setGroupMemberActive(false);
+                      removePrompt();
+                    });
+                  }
+                  @Override public void onError(String error) {
+                    runOnUiThread(() -> {
+                      removePrompt();
+                      Toast.makeText(ChatActivity.this,
+                          error == null ? "Unable to block group." : error,
+                          Toast.LENGTH_SHORT).show();
+                    });
+                  }
+                });
+          }, this::removePrompt));
     } else if ("Block".equals(option) || "Unblock".equals(option)) {
       if (groupChat) {
         Toast.makeText(this, "Members cannot be blocked from the group menu.", Toast.LENGTH_SHORT).show();
@@ -3619,12 +3669,44 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   @Override
   protected void onResume() {
     super.onResume();
+    if (groupChat && repository != null)
+      refreshGroupMembership();
     if (videoPreviewView != null)
       videoPreviewView.onHostResume();
     if (selectedMediaPreviewView != null)
       selectedMediaPreviewView.onHostResume();
     if (cameraCaptureView != null)
       cameraCaptureView.onHostResume();
+  }
+
+  private boolean requireActiveGroupMember() {
+    if (!groupChat || groupMemberActive) return true;
+    Toast.makeText(this, "You are not an active member.", Toast.LENGTH_SHORT).show();
+    return false;
+  }
+
+  private void refreshGroupMembership() {
+    AppFunctionManager manager = AppFunctionManager.getInstance();
+    manager.applyAuth(this);
+    manager.getGroupDetails(currentUser, chatId, new AppFunctionManager.Callback() {
+      @Override public void onSuccess(Object object) {
+        JsonObject root = object instanceof JsonObject ? (JsonObject) object : null;
+        JsonObject group = root != null && root.has("group") && root.get("group").isJsonObject()
+            ? root.getAsJsonObject("group") : null;
+        JsonObject membership = group != null && group.has("ownMembership")
+            && group.get("ownMembership").isJsonObject()
+            ? group.getAsJsonObject("ownMembership") : null;
+        boolean active = membership != null && "active".equalsIgnoreCase(
+            JsonParserUtil.getString(membership, "status"));
+        runOnUiThread(() -> {
+          groupMemberActive = active;
+          if (chatView != null) chatView.setGroupMemberActive(active);
+          if (conversationMenuDialog != null)
+            conversationMenuDialog.setGroupMemberActive(active);
+        });
+      }
+      @Override public void onError(String error) { }
+    });
   }
 
   @Override

@@ -65,6 +65,8 @@ public final class ConversationMenuDialogView extends View {
   private boolean muted;
   private boolean blocked;
   private boolean contactExists;
+  private boolean groupConversation;
+  private boolean groupMemberActive = true;
 
   public ConversationMenuDialogView(@NonNull Context context, @NonNull Listener listener) {
     this(context, CONVERSATION_OPTIONS, true, listener);
@@ -120,6 +122,20 @@ public final class ConversationMenuDialogView extends View {
     invalidate();
   }
 
+  public void setGroupConversation(boolean groupConversation) {
+    if (this.groupConversation == groupConversation) return;
+    this.groupConversation = groupConversation;
+    if (getWidth() > 0) buildMenu(getWidth());
+    invalidate();
+  }
+
+  public void setGroupMemberActive(boolean active) {
+    if (groupMemberActive == active) return;
+    groupMemberActive = active;
+    if (getWidth() > 0) buildMenu(getWidth());
+    invalidate();
+  }
+
   public boolean dismissIfShowing() {
     if (getVisibility() != VISIBLE) return false;
     setVisibility(INVISIBLE);
@@ -157,6 +173,11 @@ public final class ConversationMenuDialogView extends View {
   private List<String> visibleOptions() {
     List<String> visible = new ArrayList<>(options.length);
     for (String option : options) {
+      if (conversationOptions && groupConversation && "Add to contacts".equals(option)) continue;
+      if (conversationOptions && groupConversation && "Block".equals(option)) {
+        if (!groupMemberActive) continue;
+        option = "Block group";
+      }
       if (conversationOptions && contactExists && "Add to contacts".equals(option)) continue;
       if (conversationOptions && muted && "Mute notifications".equals(option)) {
         option = "Unmute notifications";

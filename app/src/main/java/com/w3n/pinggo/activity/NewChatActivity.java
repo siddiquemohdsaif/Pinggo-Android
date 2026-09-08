@@ -40,6 +40,7 @@ import java.util.concurrent.Executors;
 
 public class NewChatActivity extends AppCompatActivity implements NewChatView.Listener {
   public static final String EXTRA_CREATE_GROUP = "com.w3n.pinggo.EXTRA_CREATE_GROUP";
+  public static final String EXTRA_ADD_TO_GROUP_ID = "com.w3n.pinggo.EXTRA_ADD_TO_GROUP_ID";
   public static final String EXTRA_FORWARD_SOURCE_CHAT_ID = "com.w3n.pinggo.EXTRA_FORWARD_SOURCE_CHAT_ID";
   public static final String EXTRA_FORWARD_MESSAGE_IDS = "com.w3n.pinggo.EXTRA_FORWARD_MESSAGE_IDS";
   private static final int CONTACTS_PERMISSION_REQUEST = 42, DISCOVER_BATCH_SIZE = 50;
@@ -55,6 +56,7 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   private ArrayList<String> forwardMessageIds;
   private boolean createGroupMode;
   private boolean creatingGroup;
+  private String addToGroupId;
 
   @Override
   protected void onCreate(Bundle state) {
@@ -65,9 +67,14 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     forwardMessageIds = getIntent().getStringArrayListExtra(EXTRA_FORWARD_MESSAGE_IDS);
     repository = ChatRepository.getInstance(this);
     createGroupMode = getIntent().getBooleanExtra(EXTRA_CREATE_GROUP, false);
+    addToGroupId = getIntent().getStringExtra(EXTRA_ADD_TO_GROUP_ID);
+    if (addToGroupId != null && !addToGroupId.trim().isEmpty()) createGroupMode = true;
     if (createGroupMode)
       newChatView.setGroupMode(true);
-    else if (isForwarding())
+    if (addToGroupId != null && !addToGroupId.trim().isEmpty()) {
+      newChatView.setTitle("Add members");
+      newChatView.setGroupActionLabel("Add");
+    } else if (isForwarding())
       newChatView.setTitle("Forward to");
     setContentView(newChatView);
     ViewCompat.setOnApplyWindowInsetsListener(
@@ -336,6 +343,25 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   public void onCreateGroup(List<String> memberIds) {
     if (!createGroupMode || creatingGroup || memberIds == null || memberIds.isEmpty())
       return;
+    if (addToGroupId != null && !addToGroupId.trim().isEmpty()) {
+      creatingGroup = true;
+      AppFunctionManager.getInstance().updateGroupMembers(
+          currentPhone(), addToGroupId, memberIds, true, new AppFunctionManager.Callback() {
+            @Override public void onSuccess(Object value) {
+              creatingGroup = false;
+              Toast.makeText(NewChatActivity.this, "Members added.", Toast.LENGTH_SHORT).show();
+              setResult(RESULT_OK);
+              finish();
+            }
+            @Override public void onError(String error) {
+              creatingGroup = false;
+              Toast.makeText(NewChatActivity.this,
+                  error == null || error.trim().isEmpty() ? "Unable to add members." : error,
+                  Toast.LENGTH_SHORT).show();
+            }
+          });
+      return;
+    }
     EditText input = new EditText(this);
     input.setHint("Group name");
     input.setSingleLine(true);

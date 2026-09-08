@@ -113,6 +113,7 @@ public final class ChatView extends View {
       callVideoOutgoingIcon = resourceBitmap(R.drawable.chat_video_outgoing),
       callVideoMissedIcon = resourceBitmap(R.drawable.chat_video_missed);
   private final String chatName, currentUser;
+  private final boolean groupChat;
   private final ChatSelectionController selection = new ChatSelectionController();
   private final Bitmap profile;
   private ComponentList<MessageEntity> list;
@@ -133,6 +134,7 @@ public final class ChatView extends View {
   private boolean imeVisible;
   private boolean searchVisible;
   private boolean contactBlocked;
+  private boolean groupMemberActive = true;
   private boolean keepKeyboardAfterSend;
   private boolean forceBottomOnNextMessageSubmission;
   private boolean directComposerSendGesture;
@@ -190,6 +192,7 @@ public final class ChatView extends View {
     super(c);
     chatName = name;
     this.currentUser = normalize(currentUser);
+    this.groupChat = groupChat;
     listener = l;
     this.profiler = profiler;
     composerMeasurePaint.setTextSize(sp(16));
@@ -829,7 +832,7 @@ public final class ChatView extends View {
       refreshSearchMatches(false);
       headerBottom = searchBottom;
     }
-    float pinnedHeight = pinnedTabHeight();
+    float pinnedHeight = groupMemberActive ? pinnedTabHeight() : 0f;
     if (pinnedHeight > 0f) {
       pinnedMessageTab.build(
           content, headerBottom, w, pinnedMessageIndex, pinnedMessages.size());
@@ -853,14 +856,14 @@ public final class ChatView extends View {
                 .setOverscrollEnabled(false)
                 .setOnItemLongClickListener(
                     (componentList, message, position) -> {
-                      toggleMessageSelection(message);
+                      if (groupMemberActive) toggleMessageSelection(message);
                       return true;
                     })
                 .setOnItemClickListener(
                     (componentList, message, position) -> {
                       // The row-wide fallback exists only for multi-selection. Normal media/file
                       // actions must remain scoped to the bubble or its inner preview bounds.
-                      if (isSelectingMessages()) toggleMessageSelection(message);
+                      if (groupMemberActive && isSelectingMessages()) toggleMessageSelection(message);
                     });
     list = messageListBuilder.build(this);
     content.add(new TimedMessageListComponent(list));
@@ -1137,6 +1140,20 @@ public final class ChatView extends View {
           new RectF(blockedSide + blockedWidth + blockedGap, composerTop,
               w - blockedSide, composerBottom),
           Color.WHITE, id -> listener.onBlockedUnblock());
+    }
+    if (groupChat && !groupMemberActive) {
+      overlay.add(new Image.Builder(getContext(), "inactive_group_composer_background", white,
+          new RectF(0f, composerTop - px(12f), w, screenBottom))
+          .setScaleType(Image.ScaleType.FIT_XY));
+      text(overlay, "inactive_group_message", "You are not an active member",
+          new RectF(px(44f), composerTop, w - px(44f), composerBottom),
+          sp(14), SECONDARY, FontVariation.REGULAR, Text.Alignment.CENTER);
+      overlay.add(new Button.Builder(
+              getContext(), "inactive_group_touch_interceptor", transparent, "",
+              new RectF(0f, composerTop - px(12f), w, screenBottom))
+          .setImageScaleType(Image.ScaleType.FIT_XY)
+          .setRippleEnabled(false)
+          .setOnClickListener(id -> { }));
     }
     if (isSelectingMessages()) {
       selectionHeader.build(selectionOverlay, selectedMessages(), w, top, scale);
@@ -1500,6 +1517,19 @@ public final class ChatView extends View {
     if (contactBlocked == blocked) return;
     contactBlocked = blocked;
     if (blocked) {
+      composer.draft = "";
+      composer.clearReply();
+      composer.clearAttachment();
+      composer.attachmentPanelVisible = false;
+    }
+    if (getWidth() > 0 && getHeight() > 0) build();
+  }
+
+  public void setGroupMemberActive(boolean active) {
+    if (groupMemberActive == active) return;
+    groupMemberActive = active;
+    if (!active) {
+      clearMessageSelection();
       composer.draft = "";
       composer.clearReply();
       composer.clearAttachment();

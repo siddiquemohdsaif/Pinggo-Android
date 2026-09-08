@@ -45,6 +45,7 @@ public final class NewChatView extends View {
   private String statusMessage = "Loading contacts...";
   private String titleValue = "New Chat";
   private boolean groupMode;
+  private String groupActionLabel = "Create";
   private final Set<String> selectedMembers = new LinkedHashSet<>();
 
   public NewChatView(Context context, Listener listener) {
@@ -76,6 +77,11 @@ public final class NewChatView extends View {
     groupMode = enabled;
     titleValue = enabled ? "New group" : "New Chat";
     selectedMembers.clear();
+    if (getWidth() > 0) build();
+  }
+
+  public void setGroupActionLabel(String value) {
+    groupActionLabel = value == null || value.trim().isEmpty() ? "Create" : value.trim();
     if (getWidth() > 0) build();
   }
 
@@ -116,7 +122,7 @@ public final class NewChatView extends View {
             FontVariation.BOLD));
     if (groupMode) {
       addButton(content, "create_group", accent,
-          "Create (" + selectedMembers.size() + ")",
+          groupActionLabel + " (" + selectedMembers.size() + ")",
           new RectF(w - px(295f), top + px(15f), w - px(33f), top + px(117f)),
           Color.WHITE, id -> {
             if (selectedMembers.isEmpty()) listener.onGroupSelectionRequired();
