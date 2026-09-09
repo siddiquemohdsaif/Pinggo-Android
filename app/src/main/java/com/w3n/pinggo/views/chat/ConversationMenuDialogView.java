@@ -176,7 +176,7 @@ public final class ConversationMenuDialogView extends View {
       if (conversationOptions && groupConversation && "Add to contacts".equals(option)) continue;
       if (conversationOptions && groupConversation && "Block".equals(option)) {
         if (!groupMemberActive) continue;
-        option = "Block group";
+        option = "Exit group";
       }
       if (conversationOptions && contactExists && "Add to contacts".equals(option)) continue;
       if (conversationOptions && muted && "Mute notifications".equals(option)) {

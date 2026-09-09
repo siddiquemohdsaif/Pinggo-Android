@@ -14,19 +14,26 @@ public final class ChatListState {
 
     private final Status status;
     private final int cachedChatCount;
+    private final int confirmedChatCount;
+    private final boolean firstPageLoaded;
     private final String errorMessage;
 
-    private ChatListState(Status status, int cachedChatCount, String errorMessage) {
+    private ChatListState(Status status, int cachedChatCount, int confirmedChatCount,
+                          boolean firstPageLoaded,
+                          String errorMessage) {
         this.status = status;
         this.cachedChatCount = Math.max(0, cachedChatCount);
+        this.confirmedChatCount = Math.max(0, confirmedChatCount);
+        this.firstPageLoaded = firstPageLoaded;
         this.errorMessage = errorMessage == null ? "" : errorMessage;
     }
 
     public static ChatListState initial() {
-        return new ChatListState(Status.INITIAL_CACHE_LOADING, 0, "");
+        return new ChatListState(Status.INITIAL_CACHE_LOADING, 0, 0, false, "");
     }
 
-    static ChatListState create(boolean cacheLoaded, int cachedChatCount,
+    static ChatListState create(boolean cacheLoaded, int cachedChatCount, int confirmedChatCount,
+                                boolean firstPageLoaded,
                                 boolean refreshing, boolean paginating,
                                 String errorMessage) {
         boolean hasCache = cachedChatCount > 0;
@@ -43,10 +50,13 @@ public final class ChatListState {
         } else {
             status = hasCache ? Status.CONTENT : Status.EMPTY;
         }
-        return new ChatListState(status, cachedChatCount, error);
+        return new ChatListState(status, cachedChatCount, confirmedChatCount,
+                firstPageLoaded, error);
     }
 
     public Status getStatus() { return status; }
     public int getCachedChatCount() { return cachedChatCount; }
+    public int getConfirmedChatCount() { return confirmedChatCount; }
+    public boolean isFirstPageLoaded() { return firstPageLoaded; }
     public String getErrorMessage() { return errorMessage; }
 }

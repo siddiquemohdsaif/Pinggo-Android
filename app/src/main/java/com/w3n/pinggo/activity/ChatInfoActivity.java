@@ -20,7 +20,6 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -38,10 +37,13 @@ import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.local.TransferEntity;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.views.chat.ChatHeaderComponent;
+import com.w3n.pinggo.views.common.NativePromptDialogView;
+import com.w3n.pinggo.views.home.HomeMenuDialogView;
 
 import java.io.InputStream;
 import java.util.HashMap;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -49,6 +51,8 @@ import java.util.concurrent.Executors;
 
 /** WhatsApp-style details page shared by direct chats and groups. */
 public final class ChatInfoActivity extends AppCompatActivity {
+  private NativePromptDialogView promptDialog;
+  private HomeMenuDialogView detailsMenu;
   public static final String EXTRA_CHAT_ID = "pinggo.details.CHAT_ID";
   public static final String EXTRA_IS_GROUP = "pinggo.details.IS_GROUP";
   public static final String EXTRA_NAME = "pinggo.details.NAME";
@@ -81,8 +85,15 @@ public final class ChatInfoActivity extends AppCompatActivity {
   private TextView membershipNotice;
   private LinearLayout callActions;
   private TextView groupBlockAction;
+  private TextView adminOnlyAction;
   private boolean groupMemberActive = true;
   private boolean ownGroupAdmin;
+  private boolean ownGroupOwner;
+  private String groupOwnerId = "";
+  private int activeGroupAdminCount;
+  private final List<String> successorIds = new ArrayList<>();
+  private final List<String> successorLabels = new ArrayList<>();
+  private boolean adminOnlyMode;
   private View mediaProgressTile;
   private View mediaArrowTile;
   private int mediaTileCount;
@@ -106,6 +117,12 @@ public final class ChatInfoActivity extends AppCompatActivity {
     userId = LoginStateManager.getInstance().getUID(this);
     repository = ChatRepository.getInstance(this);
     setContentView(buildPage());
+    detailsMenu = new HomeMenuDialogView(this,
+        java.util.Arrays.asList("Clear chat", group ? "Report group" : "Report " + name),
+        index -> { if (index == 0) confirmClear(); else confirmReport(); });
+    ((ViewGroup) findViewById(android.R.id.content)).addView(detailsMenu,
+        new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT));
     repository.observeTransfers(chatId).observe(this, this::showCompletedTransfers);
     loadMedia();
     if (!group)
@@ -167,6 +184,12 @@ public final class ChatInfoActivity extends AppCompatActivity {
     body.addView(mediaSection, full());
 
     if (group) {
+      adminOnlyAction = text("Only admins can message and call: Off", 16, false);
+      adminOnlyAction.setTextColor(0xFF019BC5);
+      adminOnlyAction.setPadding(dp(16), dp(18), dp(16), dp(18));
+      adminOnlyAction.setVisibility(View.GONE);
+      adminOnlyAction.setOnClickListener(v -> toggleAdminOnlyMode());
+      body.addView(adminOnlyAction, margins(0, 8, 0, 0));
       members = column();
       membersTitle = text("Members", 17, true);
       body.addView(membersTitle, margins(0, 18, 0, 6));
@@ -174,7 +197,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
     }
     body.addView(dangerAction("Clear chat", this::confirmClear), margins(0, 24, 0, 0));
     if (group) {
-      groupBlockAction = dangerAction("Block group", this::confirmBlockGroup);
+      groupBlockAction = dangerAction("Exit group", this::confirmBlockGroup);
       body.addView(groupBlockAction, full());
     } else
       body.addView(dangerAction("Block " + name, this::confirmBlockContact), full());
@@ -191,17 +214,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
   }
 
   private void showDetailsMenu(View anchor) {
-    android.widget.PopupMenu menu = new android.widget.PopupMenu(this, anchor);
-    menu.getMenu().add("Clear chat");
-    menu.getMenu().add(group ? "Report group" : "Report " + name);
-    menu.setOnMenuItemClickListener(item -> {
-      if (item.getTitle().toString().startsWith("Clear"))
-        confirmClear();
-      else
-        confirmReport();
-      return true;
-    });
-    menu.show();
+    if (detailsMenu != null) detailsMenu.show();
   }
 
   private void openMediaLibrary() {
@@ -242,6 +255,10 @@ public final class ChatInfoActivity extends AppCompatActivity {
       toast("You are not an active member.");
       return;
     }
+    if (group && adminOnlyMode && !ownGroupAdmin) {
+      toast("Only group admins can message or call.");
+      return;
+    }
     if (group) {
       toast("Group call implementation pending.");
       return;
@@ -274,8 +291,15 @@ public final class ChatInfoActivity extends AppCompatActivity {
           && "active".equalsIgnoreCase(string(ownMembership, "status"));
       ownGroupAdmin = groupMemberActive
           && "admin".equalsIgnoreCase(string(ownMembership, "role"));
+      groupOwnerId = string(data, "ownerId");
+      if (groupOwnerId.isEmpty()) groupOwnerId = string(data, "createdBy");
+      ownGroupOwner = groupMemberActive && userId.equals(groupOwnerId);
+      JsonObject permissions = object(data, "permissions");
+      adminOnlyMode = permissions != null
+          && "admins".equalsIgnoreCase(string(permissions, "sendMessages"));
+      updateAdminOnlyAction();
       membershipNotice.setVisibility(groupMemberActive ? View.GONE : View.VISIBLE);
-      callActions.setAlpha(groupMemberActive ? 1f : 0.42f);
+      callActions.setAlpha(groupMemberActive && (!adminOnlyMode || ownGroupAdmin) ? 1f : 0.42f);
       if (groupBlockAction != null)
         groupBlockAction.setVisibility(groupMemberActive ? View.VISIBLE : View.GONE);
       subtitle.setText(memberCountText(list.size()));
@@ -285,6 +309,24 @@ public final class ChatInfoActivity extends AppCompatActivity {
         renderMembers(list);
       else
         members.removeAllViews();
+    }));
+  }
+
+  private void updateAdminOnlyAction() {
+    if (adminOnlyAction == null) return;
+    adminOnlyAction.setVisibility(ownGroupAdmin && groupMemberActive ? View.VISIBLE : View.GONE);
+    adminOnlyAction.setText("Only admins can message and call: "
+        + (adminOnlyMode ? "On" : "Off"));
+  }
+
+  private void toggleAdminOnlyMode() {
+    if (!ownGroupAdmin || !groupMemberActive) return;
+    boolean enabled = !adminOnlyMode;
+    api.updateGroupAdminOnly(userId, chatId, enabled, callback(result -> {
+      adminOnlyMode = enabled;
+      updateAdminOnlyAction();
+      toast(enabled ? "Only admins can now message and call."
+          : "All members can now message and call.");
     }));
   }
 
@@ -302,16 +344,26 @@ public final class ChatInfoActivity extends AppCompatActivity {
 
   private void renderMembers(JsonArray list) {
     members.removeAllViews();
+    activeGroupAdminCount = 0;
+    successorIds.clear();
+    successorLabels.clear();
     for (JsonElement element : list) {
       if (!element.isJsonObject())
         continue;
       JsonObject member = element.getAsJsonObject();
+      if (!"active".equalsIgnoreCase(string(member, "status")))
+        continue;
       String id = string(member, "userId");
       String contact = DeviceContactResolver.cachedNameOrPhone(id);
       String serverName = string(member, "serverProfileName");
       String display = contact.equals(DeviceContactResolver.fallback(id)) && !serverName.isEmpty() ? serverName
           : contact;
       String role = string(member, "role");
+      if ("admin".equalsIgnoreCase(role)) activeGroupAdminCount++;
+      if (!id.equals(userId)) {
+        successorIds.add(id);
+        successorLabels.add(display);
+      }
       LinearLayout item = row();
       item.setGravity(Gravity.CENTER_VERTICAL);
       item.setPadding(dp(12), dp(10), dp(12), dp(10));
@@ -329,11 +381,29 @@ public final class ChatInfoActivity extends AppCompatActivity {
       labels.addView(preview);
       item.addView(labels, new LinearLayout.LayoutParams(0, -2, 1f));
       if (!role.isEmpty() && !"member".equals(role)) {
-        TextView roleLabel = text("Group " + role, 12, false);
+        TextView roleLabel = text(id.equals(groupOwnerId) ? "Group owner" : "Group " + role, 12, false);
         roleLabel.setTextColor(0xFF687382);
         item.addView(roleLabel);
       }
-      if (ownGroupAdmin && groupMemberActive && !id.equals(userId)) {
+      if (ownGroupOwner && groupMemberActive && !id.equals(userId)
+          && !"admin".equalsIgnoreCase(role)) {
+        TextView makeAdmin = text("Make admin", 13, false);
+        makeAdmin.setTextColor(0xFF019BC5);
+        makeAdmin.setGravity(Gravity.CENTER);
+        makeAdmin.setPadding(dp(8), dp(10), dp(8), dp(10));
+        makeAdmin.setOnClickListener(v -> confirmMakeAdmin(id, display));
+        item.addView(makeAdmin);
+      } else if (ownGroupOwner && groupMemberActive && !id.equals(userId)
+          && "admin".equalsIgnoreCase(role) && !id.equals(groupOwnerId)) {
+        TextView makeMember = text("Make member", 13, false);
+        makeMember.setTextColor(0xFF019BC5);
+        makeMember.setGravity(Gravity.CENTER);
+        makeMember.setPadding(dp(8), dp(10), dp(8), dp(10));
+        makeMember.setOnClickListener(v -> confirmMakeMember(id, display));
+        item.addView(makeMember);
+      }
+      if (ownGroupAdmin && groupMemberActive && !id.equals(userId)
+          && !"admin".equalsIgnoreCase(role)) {
         TextView remove = text("Remove", 13, false);
         remove.setTextColor(0xFFD9304F);
         remove.setGravity(Gravity.CENTER);
@@ -632,8 +702,30 @@ public final class ChatInfoActivity extends AppCompatActivity {
 
   private void confirmBlockGroup() {
     if (!groupMemberActive) return;
-    confirm("Block group?", "Blocking exits this group and removes future access.",
-        () -> api.leaveGroup(userId, chatId, callback(result -> {
+    if (ownGroupAdmin && activeGroupAdminCount <= 1) {
+      showSuccessorDialog();
+      return;
+    }
+    confirm("Exit group?", "You will stop receiving new messages and calls from this group.",
+        () -> exitGroup(null));
+  }
+
+  private void showSuccessorDialog() {
+    if (successorIds.isEmpty()) {
+      toast("Add another member before exiting this group.");
+      return;
+    }
+    List<String> actions = new ArrayList<>();
+    for (String label : successorLabels) actions.add("Make " + label + " admin and exit");
+    actions.add("Cancel");
+    showPrompt(NativePromptDialogView.actions(this, actions, index -> {
+      if (index < 0 || index >= successorIds.size()) return;
+      exitGroup(successorIds.get(index));
+    }, this::removePrompt));
+  }
+
+  private void exitGroup(String successorAdminId) {
+    api.leaveGroup(userId, chatId, successorAdminId, callback(result -> {
           groupMemberActive = false;
           membershipNotice.setVisibility(View.VISIBLE);
           callActions.setAlpha(0.42f);
@@ -642,8 +734,8 @@ public final class ChatInfoActivity extends AppCompatActivity {
           members.setVisibility(View.GONE);
           members.removeAllViews();
           loadGroupDetails();
-          toast("Group blocked.");
-        })));
+          toast("You left the group.");
+        }));
   }
 
   private void confirmRemoveMember(String memberId, String memberName) {
@@ -654,6 +746,29 @@ public final class ChatInfoActivity extends AppCompatActivity {
             java.util.Collections.singletonList(memberId), false,
             callback(result -> {
               toast(label + " removed.");
+              loadGroupDetails();
+            })));
+  }
+
+  private void confirmMakeAdmin(String memberId, String memberName) {
+    if (!ownGroupOwner || !groupMemberActive || memberId == null || memberId.equals(userId)) return;
+    String label = memberName == null || memberName.trim().isEmpty() ? memberId : memberName;
+    confirm("Make " + label + " an admin?", "They will be able to manage members and group settings.",
+        () -> api.updateGroupMemberRole(userId, chatId, memberId, "admin",
+            callback(result -> {
+              toast(label + " is now a group admin.");
+              loadGroupDetails();
+            })));
+  }
+
+  private void confirmMakeMember(String memberId, String memberName) {
+    if (!ownGroupOwner || !groupMemberActive || memberId == null
+        || memberId.equals(userId) || memberId.equals(groupOwnerId)) return;
+    String label = memberName == null || memberName.trim().isEmpty() ? memberId : memberName;
+    confirm("Make " + label + " a member?", "They will no longer have group admin permissions.",
+        () -> api.updateGroupMemberRole(userId, chatId, memberId, "member",
+            callback(result -> {
+              toast(label + " is now a group member.");
               loadGroupDetails();
             })));
   }
@@ -683,8 +798,25 @@ public final class ChatInfoActivity extends AppCompatActivity {
   }
 
   private void confirm(String title, String message, Runnable yes) {
-    new AlertDialog.Builder(this).setTitle(title).setMessage(message).setNegativeButton("Cancel", null)
-        .setPositiveButton("Continue", (d, w) -> yes.run()).show();
+    showPrompt(NativePromptDialogView.confirm(this, title, message, "Continue", yes,
+        this::removePrompt));
+  }
+
+  private void showPrompt(NativePromptDialogView prompt) {
+    removePrompt();
+    promptDialog = prompt;
+    ((ViewGroup) findViewById(android.R.id.content)).addView(prompt,
+        new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT));
+  }
+
+  private void removePrompt() {
+    NativePromptDialogView current = promptDialog;
+    promptDialog = null;
+    if (current == null) return;
+    if (current.getParent() instanceof ViewGroup)
+      ((ViewGroup) current.getParent()).removeView(current);
+    current.release();
   }
 
   private TextView dangerAction(String label, Runnable action) {
@@ -793,6 +925,9 @@ public final class ChatInfoActivity extends AppCompatActivity {
 
   @Override
   protected void onDestroy() {
+    removePrompt();
+    if (detailsMenu != null) detailsMenu.release();
+    detailsMenu = null;
     thumbnailExecutor.shutdownNow();
     super.onDestroy();
   }

@@ -2,7 +2,6 @@ package com.w3n.pinggo.views;
 
 import android.content.Context;
 import android.graphics.Color;
-import android.graphics.drawable.GradientDrawable;
 import android.media.MediaPlayer;
 import android.media.PlaybackParams;
 import android.net.Uri;
@@ -11,12 +10,7 @@ import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.inputmethod.EditorInfo;
-import android.widget.EditText;
 import android.widget.FrameLayout;
-import android.widget.ImageButton;
-import android.widget.ImageView;
-import android.widget.PopupMenu;
 import android.widget.SeekBar;
 import android.widget.Toast;
 import android.widget.VideoView;
@@ -40,8 +34,8 @@ public final class VideoPreviewView extends NativeMediaScreenView {
   private final SeekBar seek;
   private final NativeMediaTopBarView header;
   private final NativeVideoControlsView controls;
-  private final FrameLayout composer;
-  private final EditText replyInput;
+  private final NativeReplyComposerView composer;
+  private final ConversationMenuDialogView speedMenu;
   private final ConversationMenuDialogView menu;
   private final Handler handler = new Handler(Looper.getMainLooper());
   private MediaPlayer player;
@@ -81,6 +75,11 @@ public final class VideoPreviewView extends NativeMediaScreenView {
       @Override public void onPlayPause() { toggle(); }
       @Override public void onSpeed(View anchor) { showSpeed(anchor); }
     });
+    speedMenu = new ConversationMenuDialogView(context, Arrays.asList(LABELS), option -> {
+      int index = Arrays.asList(LABELS).indexOf(option);
+      if (index < 0) return;
+      speed = SPEEDS[index]; controls.setSpeedLabel(LABELS[index]); applySpeed();
+    });
     FrameLayout.LayoutParams controlsParams = new FrameLayout.LayoutParams(
         LayoutParams.MATCH_PARENT, dp(78), Gravity.BOTTOM);
     controlsParams.bottomMargin = dp(84);
@@ -94,42 +93,12 @@ public final class VideoPreviewView extends NativeMediaScreenView {
     header.setBackgroundColor(0xB34B565E);
     addView(header, new FrameLayout.LayoutParams(
         LayoutParams.MATCH_PARENT, NativeMediaTopBarView.contentHeightPx(context), Gravity.TOP));
-    composer = new FrameLayout(context);
-    composer.setBackgroundColor(0x66000000);
-    replyInput = new EditText(context);
-    replyInput.setSingleLine(false);
-    replyInput.setHorizontallyScrolling(false);
-    replyInput.setMaxLines(4);
-    replyInput.setHint("Reply");
-    replyInput.setHintTextColor(0xFF9EA8AE);
-    replyInput.setTextColor(Color.WHITE);
-    replyInput.setTextSize(17f);
-    replyInput.setPadding(dp(18), 0, dp(58), 0);
-    replyInput.setBackground(rounded(0xFF1D2A31, dp(28)));
-    replyInput.setImeOptions(EditorInfo.IME_ACTION_SEND);
-    replyInput.setOnEditorActionListener((view, actionId, event) -> {
-      if (actionId != EditorInfo.IME_ACTION_SEND) return false;
-      sendReply();
-      return true;
-    });
-    FrameLayout.LayoutParams inputParams = new FrameLayout.LayoutParams(
-        LayoutParams.MATCH_PARENT, dp(56), Gravity.TOP);
-    inputParams.setMargins(dp(12), dp(8), dp(12), 0);
-    composer.addView(replyInput, inputParams);
-    ImageButton send = new ImageButton(context);
-    send.setImageResource(R.drawable.conversation_send);
-    send.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-    send.setPadding(dp(13), dp(13), dp(13), dp(13));
-    send.setBackground(rounded(0xFF019CC4, dp(26)));
-    send.setContentDescription("Send reply");
-    send.setOnClickListener(view -> sendReply());
-    FrameLayout.LayoutParams sendParams = new FrameLayout.LayoutParams(
-        dp(48), dp(48), Gravity.TOP | Gravity.END);
-    sendParams.setMargins(0, dp(12), dp(16), 0);
-    composer.addView(send, sendParams);
+    composer = new NativeReplyComposerView(context, listener::onReply);
     addView(composer, new FrameLayout.LayoutParams(
         LayoutParams.MATCH_PARENT, dp(72), Gravity.BOTTOM));
     addView(menu, new FrameLayout.LayoutParams(
+        LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+    addView(speedMenu, new FrameLayout.LayoutParams(
         LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
     ViewCompat.setOnApplyWindowInsetsListener(this, (view, insets) -> {
       Insets status = insets.getInsets(WindowInsetsCompat.Type.statusBars());
@@ -143,7 +112,7 @@ public final class VideoPreviewView extends NativeMediaScreenView {
       FrameLayout.LayoutParams composerParams =
           (FrameLayout.LayoutParams) composer.getLayoutParams();
       composerParams.height = dp(72) + bottomInset;
-      composer.setPadding(0, 0, 0, bottomInset);
+      composer.setBottomInset(bottomInset);
       composer.setLayoutParams(composerParams);
       FrameLayout.LayoutParams updatedControls =
           (FrameLayout.LayoutParams) controls.getLayoutParams();
@@ -201,13 +170,6 @@ public final class VideoPreviewView extends NativeMediaScreenView {
 
   public boolean dismissMenu() { return menu.dismissIfShowing(); }
 
-  private void sendReply() {
-    String reply = replyInput.getText().toString().trim();
-    if (reply.isEmpty()) return;
-    listener.onReply(reply);
-    replyInput.setText("");
-  }
-
   private void setControlsVisible(boolean visible) {
     int visibility = visible ? VISIBLE : GONE;
     header.setVisibility(visibility);
@@ -231,19 +193,7 @@ public final class VideoPreviewView extends NativeMediaScreenView {
   }
 
   private void showSpeed(View anchor) {
-    PopupMenu menu = new PopupMenu(getContext(), anchor);
-    for (int index = 0; index < LABELS.length; index++) {
-      menu.getMenu().add(0, index, index, LABELS[index]);
-    }
-    menu.setOnMenuItemClickListener(item -> {
-      int index = item.getItemId();
-      if (index < 0 || index >= SPEEDS.length) return false;
-      speed = SPEEDS[index];
-      controls.setSpeedLabel(LABELS[index]);
-      applySpeed();
-      return true;
-    });
-    menu.show();
+    speedMenu.show();
   }
 
   private void applySpeed() {
@@ -276,21 +226,15 @@ public final class VideoPreviewView extends NativeMediaScreenView {
   @Override public void release() {
     if (released) return;
     released = true;
-    replyInput.clearFocus();
+    composer.release();
     menu.release();
+    speedMenu.release();
     handler.removeCallbacks(update);
     video.stopPlayback();
     player = null;
     header.release();
     controls.release();
     super.release();
-  }
-
-  private GradientDrawable rounded(int color, float radius) {
-    GradientDrawable drawable = new GradientDrawable();
-    drawable.setColor(color);
-    drawable.setCornerRadius(radius);
-    return drawable;
   }
 
   private int dp(int value) {

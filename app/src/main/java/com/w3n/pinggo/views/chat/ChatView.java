@@ -117,7 +117,7 @@ public final class ChatView extends View {
   private final ChatSelectionController selection = new ChatSelectionController();
   private final Bitmap profile;
   private ComponentList<MessageEntity> list;
-  private Text status, olderStatus, replyText, searchMatchCount;
+  private Text status, replyText, searchMatchCount;
   private ComposerReplyPreviewComponent composerReplyPreview;
   private Image olderLoadingBackground, attachmentPreviewBackground;
   private Progress olderProgress;
@@ -135,6 +135,7 @@ public final class ChatView extends View {
   private boolean searchVisible;
   private boolean contactBlocked;
   private boolean groupMemberActive = true;
+  private boolean groupSendingAllowed = true;
   private boolean keepKeyboardAfterSend;
   private boolean forceBottomOnNextMessageSubmission;
   private boolean directComposerSendGesture;
@@ -886,15 +887,14 @@ public final class ChatView extends View {
                     new RectF(0, olderLoadingTop, w, olderLoadingTop + olderLoadingHeight))
                 .setScaleType(Image.ScaleType.FIT_XY));
     float olderProgressSize = px(49.5f);
-    float olderGroupWidth = px(599.5f);
-    float olderGroupLeft = (w - olderGroupWidth) / 2f;
+    float olderProgressLeft = (w - olderProgressSize) / 2f;
     float olderProgressTop = olderLoadingTop + (olderLoadingHeight - olderProgressSize) / 2f;
     olderProgress =
         overlay.add(
             new Progress.Builder(
                     getContext(), "older_message_progress",
-                    new RectF(olderGroupLeft, olderProgressTop,
-                        olderGroupLeft + olderProgressSize,
+                    new RectF(olderProgressLeft, olderProgressTop,
+                        olderProgressLeft + olderProgressSize,
                         olderProgressTop + olderProgressSize))
                 .setStyle(Progress.Style.CIRCULAR)
                 .setMode(Progress.Mode.INDETERMINATE)
@@ -902,17 +902,6 @@ public final class ChatView extends View {
                 .setTrackColor(0x22019CC4)
                 .setThickness(px(5.5f))
                 .setIndeterminateDuration(850L));
-    olderStatus =
-        text(
-            overlay,
-            "older_status",
-            loadingOlderMessages ? "Loading older messages..." : "",
-            new RectF(olderGroupLeft + olderProgressSize + px(27.5f), olderLoadingTop,
-                olderGroupLeft + olderGroupWidth, olderLoadingTop + olderLoadingHeight),
-            sp(13),
-            SECONDARY,
-            FontVariation.MEDIUM,
-            Text.Alignment.START);
     updateOlderLoadingChrome();
     float replyTop = !composer.hasReply()
         ? composerTop - previewHeight
@@ -1141,11 +1130,12 @@ public final class ChatView extends View {
               w - blockedSide, composerBottom),
           Color.WHITE, id -> listener.onBlockedUnblock());
     }
-    if (groupChat && !groupMemberActive) {
+    if (groupChat && (!groupMemberActive || !groupSendingAllowed)) {
       overlay.add(new Image.Builder(getContext(), "inactive_group_composer_background", white,
           new RectF(0f, composerTop - px(12f), w, screenBottom))
           .setScaleType(Image.ScaleType.FIT_XY));
-      text(overlay, "inactive_group_message", "You are not an active member",
+      text(overlay, "inactive_group_message", groupMemberActive
+              ? "Only admins can message and call" : "You are not an active member",
           new RectF(px(44f), composerTop, w - px(44f), composerBottom),
           sp(14), SECONDARY, FontVariation.REGULAR, Text.Alignment.CENTER);
       overlay.add(new Button.Builder(
@@ -1398,9 +1388,6 @@ public final class ChatView extends View {
     if (visible && list != null) list.stopScroll();
     if (olderLoadingBackground != null) olderLoadingBackground.setVisible(visible);
     if (olderProgress != null) olderProgress.setVisible(visible);
-    if (olderStatus != null) {
-      olderStatus.setText(visible ? "Loading older messages..." : "").setVisible(visible);
-    }
     if (list != null) applyKeyboardInsets();
     else invalidate();
   }
@@ -1528,8 +1515,22 @@ public final class ChatView extends View {
   public void setGroupMemberActive(boolean active) {
     if (groupMemberActive == active) return;
     groupMemberActive = active;
+    chatHeader.setCallActionsVisible(active && groupSendingAllowed);
     if (!active) {
       clearMessageSelection();
+      composer.draft = "";
+      composer.clearReply();
+      composer.clearAttachment();
+      composer.attachmentPanelVisible = false;
+    }
+    if (getWidth() > 0 && getHeight() > 0) build();
+  }
+
+  public void setGroupSendingAllowed(boolean allowed) {
+    if (groupSendingAllowed == allowed) return;
+    groupSendingAllowed = allowed;
+    chatHeader.setCallActionsVisible(groupMemberActive && allowed);
+    if (!allowed) {
       composer.draft = "";
       composer.clearReply();
       composer.clearAttachment();

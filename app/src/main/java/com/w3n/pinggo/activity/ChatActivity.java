@@ -122,6 +122,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private long lastSocketErrorToastAt;
   private ChatView chatView;
   private boolean groupMemberActive = true;
+  private boolean groupSendingAllowed = true;
   private ImagePreviewView imagePreviewView;
   private VideoPreviewView videoPreviewView;
   private SelectedMediaPreviewView selectedMediaPreviewView;
@@ -283,11 +284,9 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private boolean localPageLoading;
   private boolean localHasMore = true;
   private boolean messagePageLoading;
+  private boolean olderPageRevealPending;
   private boolean messageNetworkHasMore = true;
   private boolean firstMessagePageLoaded;
-  private boolean localExpansionRequested;
-  private int localExpansionPreviousCount;
-  private String localExpansionPreviousOldestId;
   private String nextMessageCursor;
   private long messagePageRequestGeneration;
   private String inFlightMessageCursor;
@@ -504,6 +503,11 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
             // Confirm the targeted event against the authoritative member record as well.
             refreshGroupMembership();
           }
+
+          @Override public void onGroupUpdated(String eventChatId) {
+            if (groupChat && chatId != null && chatId.equals(eventChatId))
+              refreshGroupMembership();
+          }
         });
     if (!groupChat)
       repository.getBlockStatus(chatId, new AppFunctionManager.Callback() {
@@ -588,15 +592,14 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     });
     if (!groupChat && !receiverId.isEmpty())
       repository.observePresence(receiverId).observe(this, this::renderPresence);
-    if (!firstMessagePageLoaded) {
-      loadMessagePage(null);
-    } else {
-      Log.d(TESTING_TAG, "message_list source=session phase=route_skipped chatId=" + chatId
-          + " limit=" + messageLimit
-          + " hasMore=" + messageNetworkHasMore
-          + " hasNextCursor=" + (nextMessageCursor != null
-              && !nextMessageCursor.isEmpty()));
-    }
+    // Room is rendered immediately, but every open must reconcile its newest
+    // cached rows with the server. A persisted pagination session only describes
+    // older-page progress; it must never suppress the latest-page refresh.
+    messageNetworkHasMore = true;
+    nextMessageCursor = null;
+    Log.d(TESTING_TAG, "message_list source=session phase=latest_refresh chatId=" + chatId
+        + " hadFirstPage=" + firstMessagePageLoaded);
+    loadMessagePage(null);
     if (!groupChat && !receiverId.isEmpty())
       repository.syncPresence(Collections.singletonList(receiverId));
   }
@@ -625,6 +628,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         : stableMessageKey(availableMessages.get(0));
     inFlightMessageCursor = requestedCursor;
     messagePageLoading = true;
+    olderPageRevealPending = !requestedCursor.isEmpty();
     Log.d(TESTING_TAG, "message_list source=routes phase=activity_request chatId=" + chatId
         + " requestId=" + requestGeneration
         + " page=" + (cursor == null || cursor.isEmpty() ? "initial" : "pagination")
@@ -654,6 +658,14 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
             messageNetworkHasMore = !stalled && hasMore && !returnedCursor.isEmpty();
             messagePageLoading = false;
             inFlightMessageCursor = null;
+            if (!requestedCursor.isEmpty() && loadedCount > 0) {
+              // Reveal the next Room window only after the corresponding server
+              // page has returned and been merged into Room.
+              messageLimit += MESSAGE_WINDOW_INCREMENT;
+              observeMessageWindow();
+            } else if (!requestedCursor.isEmpty()) {
+              olderPageRevealPending = false;
+            }
             if (!availableMessages.isEmpty()) {
               oldestSynchronizedMessageId = stableMessageKey(availableMessages.get(0));
             }
@@ -682,6 +694,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
             if (requestGeneration != messagePageRequestGeneration)
               return;
             messagePageLoading = false;
+            olderPageRevealPending = false;
             inFlightMessageCursor = null;
             Log.e(TESTING_TAG, "message_list source=routes phase=activity_error chatId="
                 + chatId + " requestId=" + requestGeneration
@@ -897,22 +910,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     }
     localPageLoading = false;
     localHasMore = hasOlderLocally;
-    boolean completedLocalExpansion = localExpansionRequested;
-    boolean revealedOlderCachedMessages = completedLocalExpansion
-        && availableMessages.size() > localExpansionPreviousCount
-        && !sameMessageId(localExpansionPreviousOldestId,
-            availableMessages.isEmpty() ? null : availableMessages.get(0).messageId);
-    localExpansionRequested = false;
-    if (completedLocalExpansion) {
-      Log.d(TESTING_TAG, "message_list source=pagination phase=local_expansion_complete chatId="
-          + chatId + " previousCount=" + localExpansionPreviousCount
-          + " currentCount=" + availableMessages.size()
-          + " uniqueAdded=" + Math.max(
-              0, availableMessages.size() - localExpansionPreviousCount)
-          + " revealedOlder=" + revealedOlderCachedMessages
-          + " localHasMore=" + localHasMore
-          + " networkHasMore=" + messageNetworkHasMore);
-    }
+    if (olderPageRevealPending && !messagePageLoading)
+      olderPageRevealPending = false;
     long oldestTime = availableMessages.isEmpty() ? 0L : availableMessages.get(0).sentTime;
     long newestTime = availableMessages.isEmpty()
         ? 0L
@@ -931,16 +930,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       renderedMessageCount = Math.min(renderedMessageCount, availableMessages.size());
     }
     prepareAndRenderAvailableMessages("room");
-    if (completedLocalExpansion && !revealedOlderCachedMessages
-        && !messagePageLoading && messageNetworkHasMore
-        && (!firstMessagePageLoaded
-            || (nextMessageCursor != null && !nextMessageCursor.isEmpty()))) {
-      loadMessagePage(firstMessagePageLoaded ? nextMessageCursor : null);
-    } else {
-      if (revealedOlderCachedMessages)
-        saveMessageSessionState();
-      updateOlderMessagesState();
-    }
+    updateOlderMessagesState();
   }
 
   private void renderAvailableMessages(String phase) {
@@ -1123,8 +1113,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     if (chatView == null)
       return;
     chatView.setOlderMessagesState(
-        localPageLoading || messagePageLoading,
-        !isProgressiveRendering() && (localHasMore || messageNetworkHasMore));
+        olderPageRevealPending,
+        !isProgressiveRendering() && messageNetworkHasMore);
     Log.d(TESTING_TAG, "message_list source=pagination phase=state chatId=" + chatId
         + " localLoading=" + localPageLoading
         + " networkLoading=" + messagePageLoading
@@ -1142,19 +1132,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         + " routeHasMore=" + messageNetworkHasMore
         + " hasNextCursor=" + (nextMessageCursor != null && !nextMessageCursor.isEmpty()));
     if (isProgressiveRendering() || localPageLoading || messagePageLoading
-        || (!localHasMore && !messageNetworkHasMore))
+        || !messageNetworkHasMore || nextMessageCursor == null
+        || nextMessageCursor.isEmpty())
       return;
-    localExpansionRequested = true;
-    localExpansionPreviousCount = availableMessages.size();
-    localExpansionPreviousOldestId = availableMessages.isEmpty()
-        ? null
-        : availableMessages.get(0).messageId;
-    messageLimit += MESSAGE_WINDOW_INCREMENT;
-    observeMessageWindow();
-  }
-
-  private boolean sameMessageId(String first, String second) {
-    return first == null ? second == null : first.equals(second);
+    loadMessagePage(nextMessageCursor);
   }
 
   private void restoreMessageSessionState() {
@@ -1213,7 +1194,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onSend() {
-    if (contactBlocked || !requireActiveGroupMember())
+    if (contactBlocked || !requireGroupSendPermission())
       return;
     String text = chatView.getDraft();
     if (chatId == null || chatId.isEmpty() || (!groupChat && receiverId.isEmpty())) {
@@ -1274,7 +1255,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void sendSelectedAttachments(List<Uri> uris, List<String> types, String caption) {
-    if (uris == null || uris.isEmpty() || attachmentSending || !requireActiveGroupMember())
+    if (uris == null || uris.isEmpty() || attachmentSending || !requireGroupSendPermission())
       return;
     if (chatId == null || chatId.isEmpty() || (!groupChat && receiverId.isEmpty())) {
       Toast.makeText(this, "Chat information missing.", Toast.LENGTH_SHORT).show();
@@ -1647,7 +1628,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onVideoCall() {
-    if (!requireActiveGroupMember()) return;
+    if (!requireGroupSendPermission()) return;
     if (isGroupChat()) {
       Toast.makeText(this, "Group call implementation pending.", Toast.LENGTH_SHORT).show();
       return;
@@ -1661,7 +1642,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onVoiceCall() {
-    if (!requireActiveGroupMember()) return;
+    if (!requireGroupSendPermission()) return;
     if (isGroupChat()) {
       Toast.makeText(this, "Group call implementation pending.", Toast.LENGTH_SHORT).show();
       return;
@@ -2315,7 +2296,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       repository.resendMessage(message);
       return;
     }
-    String type = message.messageType == null ? "text" : message.messageType;
+    String type = message.messageType;
     // Audio playback is intentionally handled only by AudioMessageComponent's
     // play/stop
     // control. A generic message-bubble click must never toggle the player.
@@ -2500,68 +2481,32 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   @Override
   public void onMessageInfoSelected(MessageEntity message) {
     if (message == null || !currentUser.equals(normalize(message.senderId))) return;
-    final android.app.Dialog sheet = new android.app.Dialog(this);
-    android.widget.LinearLayout content = new android.widget.LinearLayout(this);
-    content.setOrientation(android.widget.LinearLayout.VERTICAL);
-    int pad = Math.round(getResources().getDisplayMetrics().density * 20f);
-    content.setPadding(pad, pad, pad, pad);
-    content.setBackgroundColor(0xFFFFFFFF);
-    android.widget.TextView title = infoText("Message info", 20, true);
-    content.addView(title);
-    android.widget.ProgressBar progress = new android.widget.ProgressBar(this);
-    content.addView(progress, new android.widget.LinearLayout.LayoutParams(-1, pad * 2));
-    sheet.setContentView(content);
-    android.view.Window window = sheet.getWindow();
-    if (window != null) {
-      window.setBackgroundDrawableResource(android.R.color.transparent);
-      window.setLayout(-1, -2);
-      window.setGravity(android.view.Gravity.BOTTOM);
-    }
-    sheet.setOnShowListener(ignored -> {
-      android.view.Window shown = sheet.getWindow();
-      if (shown != null) shown.setLayout(-1, -2);
-    });
-    sheet.show();
+    NativePromptDialogView info = NativePromptDialogView.info(this, "Message info",
+        groupChat ? "Loading…" : directMessageInfo(message), this::removePrompt);
+    showPrompt(info);
     if (!groupChat) {
-      content.removeView(progress);
-      if (message.readTime != null) addInfoSection(content, "Seen", receiverId);
-      else if (message.deliveredTime != null) addInfoSection(content, "Delivered", receiverId);
-      else addInfoSection(content, "Not delivered", receiverId);
       return;
     }
     AppFunctionManager manager = AppFunctionManager.getInstance();
     manager.applyAuth(this);
     manager.getGroupDetails(currentUser, chatId, new AppFunctionManager.Callback() {
       @Override public void onSuccess(Object object) {
-        runOnUiThread(() -> renderGroupMessageInfo(content, progress, message, object));
+        runOnUiThread(() -> info.updateMessage(groupMessageInfo(message, object)));
       }
       @Override public void onError(String error) {
-        runOnUiThread(() -> { content.removeView(progress); addInfoSection(content,
-            "Unable to load", error == null ? "Please try again" : error); });
+        runOnUiThread(() -> info.updateMessage("Unable to load\n"
+            + (error == null ? "Please try again" : error)));
       }
     });
   }
 
-  private android.widget.TextView infoText(String value, int sp, boolean heading) {
-    android.widget.TextView view = new android.widget.TextView(this);
-    view.setText(value);
-    view.setTextSize(sp);
-    view.setTextColor(heading ? 0xFF131D2F : 0xFF687382);
-    view.setPadding(0, 12, 0, 12);
-    if (heading) view.setTypeface(android.graphics.Typeface.DEFAULT,
-        android.graphics.Typeface.BOLD);
-    return view;
+  private String directMessageInfo(MessageEntity message) {
+    if (message.readTime != null) return "Seen\n" + receiverId;
+    if (message.deliveredTime != null) return "Delivered\n" + receiverId;
+    return "Not delivered\n" + receiverId;
   }
 
-  private void addInfoSection(android.widget.LinearLayout parent, String heading, String values) {
-    if (values == null || values.trim().isEmpty()) return;
-    parent.addView(infoText(heading, 16, true));
-    parent.addView(infoText(values, 15, false));
-  }
-
-  private void renderGroupMessageInfo(android.widget.LinearLayout parent,
-      android.widget.ProgressBar progress, MessageEntity message, Object object) {
-    parent.removeView(progress);
+  private String groupMessageInfo(MessageEntity message, Object object) {
     JsonObject root = object instanceof JsonObject ? (JsonObject) object : null;
     JsonObject group = root != null && root.has("group") && root.get("group").isJsonObject()
         ? root.getAsJsonObject("group") : null;
@@ -2586,9 +2531,17 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       if (target.length() > 0) target.append('\n');
       target.append(label);
     }
-    addInfoSection(parent, "Not delivered", missing.toString());
-    addInfoSection(parent, "Delivered", delivered.toString());
-    addInfoSection(parent, "Seen", seen.toString());
+    StringBuilder result = new StringBuilder();
+    appendInfoSection(result, "Not delivered", missing);
+    appendInfoSection(result, "Delivered", delivered);
+    appendInfoSection(result, "Seen", seen);
+    return result.length() == 0 ? "No receipt information" : result.toString();
+  }
+
+  private static void appendInfoSection(StringBuilder result, String title, CharSequence values) {
+    if (values == null || values.length() == 0) return;
+    if (result.length() > 0) result.append("\n\n");
+    result.append(title).append('\n').append(values);
   }
 
   @Override
@@ -2619,8 +2572,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private static boolean isDeleted(MessageEntity message) {
-    return message != null && (message.deletedText != null
-        || "This Message was deleted".equals(message.text));
+    return message != null && message.deletedText != null;
   }
 
   private static String copyValue(MessageEntity message) {
@@ -2629,7 +2581,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     String text = message.text == null ? "" : message.text.trim();
     if (!text.isEmpty())
       return text;
-    String type = message.messageType == null ? "text" : message.messageType;
+    String type = message.messageType;
     if (message.attachmentName != null && !message.attachmentName.trim().isEmpty()) {
       return message.attachmentName.trim();
     }
@@ -3339,31 +3291,9 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     } else if ("Mute notifications".equals(option)
         || "Unmute notifications".equals(option)) {
       updateMuteSetting();
-    } else if ("Block group".equals(option)) {
+    } else if ("Exit group".equals(option)) {
       if (!requireActiveGroupMember()) return;
-      showPrompt(NativePromptDialogView.actions(this,
-          java.util.Arrays.asList("Block group", "Cancel"), index -> {
-            if (index != 0) return;
-            AppFunctionManager.getInstance().leaveGroup(currentUser, chatId,
-                new AppFunctionManager.Callback() {
-                  @Override public void onSuccess(Object object) {
-                    runOnUiThread(() -> {
-                      groupMemberActive = false;
-                      chatView.setGroupMemberActive(false);
-                      conversationMenuDialog.setGroupMemberActive(false);
-                      removePrompt();
-                    });
-                  }
-                  @Override public void onError(String error) {
-                    runOnUiThread(() -> {
-                      removePrompt();
-                      Toast.makeText(ChatActivity.this,
-                          error == null ? "Unable to block group." : error,
-                          Toast.LENGTH_SHORT).show();
-                    });
-                  }
-                });
-          }, this::removePrompt));
+      beginExitGroup();
     } else if ("Block".equals(option) || "Unblock".equals(option)) {
       if (groupChat) {
         Toast.makeText(this, "Members cannot be blocked from the group menu.", Toast.LENGTH_SHORT).show();
@@ -3685,6 +3615,94 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     return false;
   }
 
+  private void beginExitGroup() {
+    AppFunctionManager manager = AppFunctionManager.getInstance();
+    manager.getGroupDetails(currentUser, chatId, new AppFunctionManager.Callback() {
+      @Override public void onSuccess(Object object) {
+        JsonObject root = object instanceof JsonObject ? (JsonObject) object : null;
+        JsonObject group = root != null && root.has("group") && root.get("group").isJsonObject()
+            ? root.getAsJsonObject("group") : null;
+        JsonObject own = group != null && group.has("ownMembership")
+            && group.get("ownMembership").isJsonObject()
+            ? group.getAsJsonObject("ownMembership") : null;
+        JsonArray members = group != null && group.has("members") && group.get("members").isJsonArray()
+            ? group.getAsJsonArray("members") : new JsonArray();
+        boolean ownAdmin = own != null && "admin".equalsIgnoreCase(
+            JsonParserUtil.getString(own, "role"));
+        int adminCount = 0;
+        ArrayList<String> ids = new ArrayList<>();
+        ArrayList<String> labels = new ArrayList<>();
+        for (JsonElement element : members) {
+          if (element == null || !element.isJsonObject()) continue;
+          JsonObject member = element.getAsJsonObject();
+          if (!"active".equalsIgnoreCase(JsonParserUtil.getString(member, "status"))) continue;
+          String id = normalize(JsonParserUtil.getString(member, "userId"));
+          if ("admin".equalsIgnoreCase(JsonParserUtil.getString(member, "role"))) adminCount++;
+          if (!id.isEmpty() && !id.equals(currentUser)) {
+            ids.add(id);
+            labels.add(DeviceContactResolver.cachedNameOrPhone(id));
+          }
+        }
+        final int admins = adminCount;
+        runOnUiThread(() -> showExitGroupDialog(ownAdmin, admins, ids, labels));
+      }
+      @Override public void onError(String error) {
+        runOnUiThread(() -> Toast.makeText(ChatActivity.this,
+            error == null ? "Unable to load group members." : error, Toast.LENGTH_SHORT).show());
+      }
+    });
+  }
+
+  private void showExitGroupDialog(boolean ownAdmin, int adminCount,
+      List<String> successorIds, List<String> successorLabels) {
+    if (ownAdmin && adminCount <= 1) {
+      if (successorIds.isEmpty()) {
+        Toast.makeText(this, "Add another member before exiting this group.",
+            Toast.LENGTH_SHORT).show();
+        return;
+      }
+      ArrayList<String> actions = new ArrayList<>();
+      for (String label : successorLabels) actions.add("Make " + label + " admin and exit");
+      actions.add("Cancel");
+      showPrompt(NativePromptDialogView.actions(this, actions, index -> {
+        if (index >= 0 && index < successorIds.size()) exitGroup(successorIds.get(index));
+      }, this::removePrompt));
+      return;
+    }
+    showPrompt(NativePromptDialogView.actions(this,
+        java.util.Arrays.asList("Exit group", "Cancel"), index -> {
+          if (index == 0) exitGroup(null);
+        }, this::removePrompt));
+  }
+
+  private void exitGroup(String successorAdminId) {
+    AppFunctionManager.getInstance().leaveGroup(currentUser, chatId, successorAdminId,
+        new AppFunctionManager.Callback() {
+          @Override public void onSuccess(Object object) {
+            runOnUiThread(() -> {
+              groupMemberActive = false;
+              chatView.setGroupMemberActive(false);
+              conversationMenuDialog.setGroupMemberActive(false);
+              removePrompt();
+            });
+          }
+          @Override public void onError(String error) {
+            runOnUiThread(() -> {
+              removePrompt();
+              Toast.makeText(ChatActivity.this,
+                  error == null ? "Unable to exit group." : error, Toast.LENGTH_SHORT).show();
+            });
+          }
+        });
+  }
+
+  private boolean requireGroupSendPermission() {
+    if (!requireActiveGroupMember()) return false;
+    if (!groupChat || groupSendingAllowed) return true;
+    Toast.makeText(this, "Only group admins can message or call.", Toast.LENGTH_SHORT).show();
+    return false;
+  }
+
   private void refreshGroupMembership() {
     AppFunctionManager manager = AppFunctionManager.getInstance();
     manager.applyAuth(this);
@@ -3698,9 +3716,18 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
             ? group.getAsJsonObject("ownMembership") : null;
         boolean active = membership != null && "active".equalsIgnoreCase(
             JsonParserUtil.getString(membership, "status"));
+        boolean admin = active && "admin".equalsIgnoreCase(
+            JsonParserUtil.getString(membership, "role"));
+        JsonObject permissions = group != null && group.has("permissions")
+            && group.get("permissions").isJsonObject()
+            ? group.getAsJsonObject("permissions") : null;
+        boolean adminOnly = permissions != null && "admins".equalsIgnoreCase(
+            JsonParserUtil.getString(permissions, "sendMessages"));
         runOnUiThread(() -> {
           groupMemberActive = active;
+          groupSendingAllowed = !adminOnly || admin;
           if (chatView != null) chatView.setGroupMemberActive(active);
+          if (chatView != null) chatView.setGroupSendingAllowed(groupSendingAllowed);
           if (conversationMenuDialog != null)
             conversationMenuDialog.setGroupMemberActive(active);
         });

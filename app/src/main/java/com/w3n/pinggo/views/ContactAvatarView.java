@@ -1,25 +1,48 @@
 package com.w3n.pinggo.views;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
-import android.view.Gravity;
+import android.graphics.RectF;
+import android.view.View;
 
-import androidx.appcompat.widget.AppCompatTextView;
+import com.ogfa.nativeviews.font.NativeFonts;
+import com.ogfa.nativeviews.text.FontVariation;
+import com.ogfa.nativeviews.text.Text;
+import com.ogfa.nativeviews.zlayer.ZLayer;
+import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 
-public class ContactAvatarView extends AppCompatTextView {
+public class ContactAvatarView extends View {
+    private final ZLayerGroup layers = new ZLayerGroup(this);
+    private final ZLayer content = layers.addLayer("contact_avatar");
+    private final String initial;
+    private final int backgroundColor;
+
     public ContactAvatarView(Context context, String contactName) {
         super(context);
-        setText(String.valueOf(contactName.charAt(0)));
-        setGravity(Gravity.CENTER);
-        setTextColor(Color.WHITE);
-        setTextSize(18);
-        setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        setBackground(createProfileBackground(contactName));
+        String safeName = contactName == null || contactName.trim().isEmpty() ? "?" : contactName.trim();
+        initial = safeName.substring(0, 1).toUpperCase(java.util.Locale.getDefault());
+        backgroundColor = profileColor(safeName);
     }
 
-    private GradientDrawable createProfileBackground(String contactName) {
+    @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
+        content.clear();
+        Bitmap background = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
+        background.eraseColor(backgroundColor);
+        content.add(new com.ogfa.nativeviews.image.Image.Builder(getContext(), "background", background,
+                new RectF(0, 0, width, height)).setScaleType(
+                com.ogfa.nativeviews.image.Image.ScaleType.FIT_XY));
+        content.add(new Text.Builder(getContext(), "initial", initial, new RectF(0, 0, width, height))
+                .setFont(NativeFonts.INTER).setFontVariations(FontVariation.BOLD)
+                .setTextSizePx(Math.min(width, height) * .42f).setTextColor(Color.WHITE)
+                .setAlignment(Text.Alignment.CENTER).setVerticalAlignment(Text.VerticalAlignment.CENTER)
+                .setMaxLines(1));
+    }
+
+    @Override protected void onDraw(Canvas canvas) { super.onDraw(canvas); layers.draw(canvas); }
+
+    private int profileColor(String contactName) {
         int[] colors = {
                 Color.rgb(29, 103, 210),
                 Color.rgb(21, 128, 112),
@@ -28,9 +51,6 @@ public class ContactAvatarView extends AppCompatTextView {
                 Color.rgb(201, 63, 83),
                 Color.rgb(67, 111, 86)
         };
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setShape(GradientDrawable.OVAL);
-        drawable.setColor(colors[Math.abs(contactName.hashCode()) % colors.length]);
-        return drawable;
+        return colors[Math.floorMod(contactName.hashCode(), colors.length)];
     }
 }

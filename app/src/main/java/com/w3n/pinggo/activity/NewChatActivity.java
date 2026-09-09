@@ -8,10 +8,12 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.ContactsContract;
+import android.text.InputType;
+import android.view.ViewGroup;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
+import com.w3n.pinggo.Util.PhoneNumberFormatter;
+import com.w3n.pinggo.Util.login.CountryDetector;
 import android.widget.Toast;
-import android.widget.EditText;
-import androidx.appcompat.app.AlertDialog;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
@@ -28,6 +30,7 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.views.chat.NewChatView;
+import com.w3n.pinggo.views.common.NativePromptDialogView;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -52,6 +55,7 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   private final Set<String> photoDownloads = Collections.newSetFromMap(new ConcurrentHashMap<>());
   private NewChatView newChatView;
   private ChatRepository repository;
+  private NativePromptDialogView promptDialog;
   private String forwardSourceChatId;
   private ArrayList<String> forwardMessageIds;
   private boolean createGroupMode;
@@ -191,6 +195,7 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   private List<String> readPhoneContacts() {
     Set<String> values = new LinkedHashSet<>();
     String own = normalize(currentPhone());
+    String defaultRegion = CountryDetector.detectCountryIso(this);
     String[] projection = { ContactsContract.CommonDataKinds.Phone.NUMBER };
     try (Cursor cursor = getContentResolver()
         .query(
@@ -203,7 +208,8 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
         return new ArrayList<>();
       int index = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER);
       while (cursor.moveToNext()) {
-        String number = normalize(cursor.getString(index));
+        String number = PhoneNumberFormatter.toE164Digits(
+            this, cursor.getString(index), defaultRegion);
         if (!number.isEmpty() && !number.equals(own))
           values.add(number);
       }
@@ -362,33 +368,20 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
           });
       return;
     }
-    EditText input = new EditText(this);
-    input.setHint("Group name");
-    input.setSingleLine(true);
-    int padding = Math.round(24 * getResources().getDisplayMetrics().density);
-    input.setPadding(padding, padding / 2, padding, padding / 2);
-    AlertDialog dialog = new AlertDialog.Builder(this)
-        .setTitle("Create group")
-        .setMessage(memberIds.size() + (memberIds.size() == 1 ? " member selected" : " members selected"))
-        .setView(input)
-        .setNegativeButton("Cancel", null)
-        .setPositiveButton("Create", null)
-        .create();
-    dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-        .setOnClickListener(view -> {
-          String name = input.getText() == null ? "" : input.getText().toString().trim();
+    showPrompt(NativePromptDialogView.input(this, "Create group", "",
+        InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES, name -> {
+          if (creatingGroup) return false;
           if (name.isEmpty()) {
-            input.setError("Enter a group name");
-            return;
+            Toast.makeText(this, "Enter a group name", Toast.LENGTH_SHORT).show();
+            return false;
           }
           creatingGroup = true;
-          dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
           AppFunctionManager.getInstance().createGroup(currentPhone(), name, "", memberIds,
               new AppFunctionManager.Callback() {
                 @Override
                 public void onSuccess(Object value) {
                   creatingGroup = false;
-                  dialog.dismiss();
+                  runOnUiThread(NewChatActivity.this::removePrompt);
                   if (!(value instanceof JsonObject)) {
                     Toast.makeText(NewChatActivity.this, "Invalid group response.", Toast.LENGTH_SHORT).show();
                     return;
@@ -416,14 +409,30 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
                 @Override
                 public void onError(String error) {
                   creatingGroup = false;
-                  dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
-                  Toast.makeText(NewChatActivity.this,
-                      error == null || error.trim().isEmpty() ? "Unable to create group." : error,
-                      Toast.LENGTH_SHORT).show();
+                  runOnUiThread(() -> Toast.makeText(NewChatActivity.this,
+                        error == null || error.trim().isEmpty() ? "Unable to create group." : error,
+                        Toast.LENGTH_SHORT).show());
                 }
               });
-        }));
-    dialog.show();
+          return false;
+        }, this::removePrompt));
+  }
+
+  private void showPrompt(NativePromptDialogView prompt) {
+    removePrompt();
+    promptDialog = prompt;
+    ((ViewGroup) findViewById(android.R.id.content)).addView(prompt,
+        new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT));
+  }
+
+  private void removePrompt() {
+    NativePromptDialogView current = promptDialog;
+    promptDialog = null;
+    if (current == null) return;
+    if (current.getParent() instanceof ViewGroup)
+      ((ViewGroup) current.getParent()).removeView(current);
+    current.release();
   }
 
   private String currentPhone() {
@@ -456,6 +465,7 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
 
   @Override
   protected void onDestroy() {
+    removePrompt();
     discoveryExecutor.shutdownNow();
     photoExecutor.shutdownNow();
     photoDownloads.clear();

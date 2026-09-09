@@ -69,6 +69,8 @@ public final class ChatsView extends View {
     private static final int SECONDARY = 0xFF687382;
     private static final int UNREAD_PREVIEW = 0xFF855C5C;
     private static final int ACCENT = 0xFF019CC4;
+    private static final int PAGE_SIZE = 20;
+    private int visibleChatCount = PAGE_SIZE;
 
     private final ZLayerGroup layers = new ZLayerGroup(this);
     private final FigmaConfig figmaConfig = new FigmaConfig(FIGMA_WIDTH);
@@ -83,7 +85,6 @@ public final class ChatsView extends View {
     private Runnable newGroupListener;
     private final Bitmap dividerBitmap = colorBitmap(0xFFE5EAF0);
     private final Bitmap actionBitmap = colorBitmap(ACCENT);
-    private final Bitmap whiteBitmap = colorBitmap(Color.WHITE);
     private final Bitmap emptyTransparentBitmap = colorBitmap(Color.TRANSPARENT);
     private final Bitmap floatingActionBitmap = BitmapFactory.decodeResource(
             getResources(), R.drawable.chat_floating_action);
@@ -112,9 +113,18 @@ public final class ChatsView extends View {
     private final Bitmap videoIncomingBitmap = resourceBitmap(R.drawable.chat_video_incoming);
     private final Bitmap videoOutgoingBitmap = resourceBitmap(R.drawable.chat_video_outgoing);
     private final Bitmap videoMissedBitmap = resourceBitmap(R.drawable.chat_video_missed);
+    private ChatListState chatListState = ChatListState.initial();
     private final Observer<List<ChatEntity>> observer = entities -> post(() -> submit(toChats(entities)));
     private final Observer<ChatListState> listStateObserver = state -> post(() -> {
         chatListState = state == null ? ChatListState.initial() : state;
+        visibleChatCount = chatListState.isFirstPageLoaded()
+                ? chatListState.getConfirmedChatCount() : PAGE_SIZE;
+        if (isDebugBuild()) {
+            Log.d(PERF_TAG, "paginationState status=" + chatListState.getStatus()
+                    + " confirmed=" + chatListState.getConfirmedChatCount()
+                    + " visible=" + visibleChatCount);
+        }
+        adapter.applyVisibleDiff(adapter.filteredChats());
         updateVisibility();
         loadAllPagesForSearch();
     });
@@ -129,12 +139,8 @@ public final class ChatsView extends View {
     private Button emptyCreateGroup;
     private Button floatingAction;
     private Text refreshErrorText;
-    private Image paginationBackground;
     private Progress initialProgress;
     private Text initialLoadingText;
-    private Progress paginationProgress;
-    private Text paginationLoadingText;
-    private ChatListState chatListState = ChatListState.initial();
     private boolean loaded;
     private boolean observing;
     private String statusMessage = "Loading chats...";
@@ -156,6 +162,9 @@ public final class ChatsView extends View {
     private boolean frameProfilerRunning;
     private float loadingGestureStartY;
     private boolean loadingGestureBlocked;
+    private boolean paginationRequestedForGesture;
+    private boolean paginationGestureMovedUp;
+    private final Runnable paginationAfterFling = this::loadNextPageIfNeeded;
     private long previousFrameNanos;
     private final Choreographer.FrameCallback frameProfiler =
             new Choreographer.FrameCallback() {
@@ -199,7 +208,6 @@ public final class ChatsView extends View {
         adapter.submit(chats, adapter.query);
         showStatus(adapter.getItemCount() == 0 ? getResources().getString(
                 R.string.start_new_conversation) : "");
-        post(this::loadNextPageIfNeeded);
         post(this::loadAllPagesForSearch);
     }
 
@@ -264,10 +272,15 @@ public final class ChatsView extends View {
             previousFrameNanos = 0L;
             Choreographer.getInstance().postFrameCallback(frameProfiler);
         }
-        if (loaded && !currentPhoneNumber().isEmpty()) startObserving();
+        // HomeActivity owns the initial chat-list request and may feed Room rows
+        // through submit() without calling this view's legacy loadChats() method.
+        // The pagination state must therefore be observed whenever the view is
+        // attached, otherwise visibleChatCount remains permanently capped at 20.
+        startObserving();
     }
 
     @Override protected void onDetachedFromWindow() {
+        removeCallbacks(paginationAfterFling);
         frameProfilerRunning = false;
         Choreographer.getInstance().removeFrameCallback(frameProfiler);
         if (observing) {
@@ -286,14 +299,16 @@ public final class ChatsView extends View {
         list = listLayer.add(new ComponentList.Builder<Chat>(getContext(), "chat_component_list",
                 new RectF(0, 0, width, height)).setOrientation(ComponentList.Orientation.VERTICAL)
                 .setItemSize(185f * figmaConfig.getScale(width))
-                .setPaddingPx(0, 0, 0, 155f * figmaConfig.getScale(width))
+                .setPaddingPx(0, 0, 0, 0)
                 .setAdapter(adapter).setClipToBounds(true).setScrollEnabled(true)
                 .setOverscrollEnabled(false)
                 .setOnItemLongClickListener((componentList, chat, position) -> {
+                    if (position >= adapter.chatCount()) return true;
                     toggleSelection(chat);
                     return true;
                 })
                 .setOnItemClickListener((componentList, chat, position) -> {
+                    if (position >= adapter.chatCount()) return;
                     if (isSelecting()) toggleSelection(chat);
                     else clickListener.onChatClick(chat);
                 }));
@@ -397,38 +412,6 @@ public final class ChatsView extends View {
                 .setVerticalAlignment(Text.VerticalAlignment.CENTER)
                 .setMaxLines(1));
         initialLoadingText.setVisible(false);
-        float footerHeight = paginationFooterHeight();
-        float footerTop = height - footerHeight;
-        paginationBackground = stateLayer.add(new Image.Builder(getContext(),
-                "chat_page_background", whiteBitmap,
-                new RectF(0, footerTop, width, height))
-                .setScaleType(Image.ScaleType.FIT_XY));
-        paginationBackground.setVisible(false);
-        float progressSize = 44f * scale;
-        float loadingGroupWidth = 330f * scale;
-        float loadingGroupLeft = (width - loadingGroupWidth) / 2f;
-        float progressTop = footerTop + (footerHeight - progressSize) / 2f;
-        paginationProgress = stateLayer.add(new Progress.Builder(getContext(),
-                "chat_page_progress",
-                new RectF(loadingGroupLeft, progressTop,
-                        loadingGroupLeft + progressSize, progressTop + progressSize))
-                .setStyle(Progress.Style.CIRCULAR)
-                .setMode(Progress.Mode.INDETERMINATE)
-                .setProgressColor(ACCENT)
-                .setTrackColor(0x22019CC4)
-                .setThickness(6f)
-                .setIndeterminateDuration(850L)
-                .setVisible(false));
-        paginationLoadingText = stateLayer.add(new Text.Builder(getContext(),
-                "chat_page_loading_text", "Loading chats...",
-                new RectF(loadingGroupLeft + progressSize + 24f * scale, footerTop,
-                        loadingGroupLeft + loadingGroupWidth, height))
-                .setFont(NativeFonts.INTER).setFontVariations(FontVariation.MEDIUM)
-                .setTextSizePx(sp(14)).setTextColor(SECONDARY)
-                .setAlignment(Text.Alignment.START)
-                .setVerticalAlignment(Text.VerticalAlignment.CENTER)
-                .setMaxLines(1));
-        paginationLoadingText.setVisible(false);
         refreshErrorText = stateLayer.add(new Text.Builder(getContext(),
                 "chat_refresh_error", "Couldn't refresh chats. Showing saved chats.",
                 new RectF(px(55f), height - px(176f), width - px(55f), height - px(33f)))
@@ -448,8 +431,10 @@ public final class ChatsView extends View {
 
     private void updateVisibility() {
         if (list == null || status == null) return;
-        boolean hasChats = adapter.getItemCount() > 0;
         ChatListState.Status state = chatListState.getStatus();
+        boolean paginationStarted = adapter.setPaginationLoading(
+                state == ChatListState.Status.PAGINATING);
+        boolean hasChats = adapter.chatCount() > 0;
         boolean awaitingCachedRows = !adapter.hasChats()
                 && chatListState.getCachedChatCount() > 0;
         boolean initialLoading = !hasChats
@@ -461,13 +446,18 @@ public final class ChatsView extends View {
                 && state == ChatListState.Status.ERROR_WITHOUT_CACHE;
         boolean errorWithCache = adapter.hasChats()
                 && state == ChatListState.Status.ERROR_WITH_CACHE;
-        boolean showingProgress = state == ChatListState.Status.REFRESHING
-                || state == ChatListState.Status.PAGINATING;
-        float listBottom = getHeight() - (hasChats && showingProgress
-                ? paginationFooterHeight() : 0f);
-        if (hasChats && showingProgress) list.stopScroll();
-        list.setRegion(new RectF(0, 0, getWidth(), Math.max(0, listBottom)));
+        list.setRegion(new RectF(0, 0, getWidth(), getHeight()));
         list.setVisible(hasChats).setEnabled(hasChats);
+        if (paginationStarted && hasChats) {
+            // The footer is inserted just beyond the old content extent. Reveal
+            // it inside ComponentList's viewport, which already ends above the
+            // HomeView bottom navigation bar.
+            post(() -> {
+                if (list != null && adapter.isPaginationLoading()) {
+                    list.scrollToPosition(adapter.getItemCount() - 1);
+                }
+            });
+        }
         status.setText(errorWithoutCache
                         ? "Couldn't refresh chats. Check your connection and try again."
                         : statusMessage)
@@ -485,15 +475,6 @@ public final class ChatsView extends View {
         }
         if (initialLoadingText != null) {
             initialLoadingText.setVisible(initialLoading);
-        }
-        if (paginationBackground != null) {
-            paginationBackground.setVisible(hasChats && showingProgress);
-        }
-        if (paginationProgress != null) {
-            paginationProgress.setVisible(hasChats && showingProgress);
-        }
-        if (paginationLoadingText != null) {
-            paginationLoadingText.setVisible(hasChats && showingProgress);
         }
         if (refreshErrorText != null) {
             refreshErrorText.setVisible(errorWithCache);
@@ -526,8 +507,11 @@ public final class ChatsView extends View {
     @Override protected void onDraw(Canvas canvas) { super.onDraw(canvas); layers.draw(canvas); }
     @Override public boolean onTouchEvent(MotionEvent event) {
         if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            removeCallbacks(paginationAfterFling);
             loadingGestureStartY = event.getY();
             loadingGestureBlocked = false;
+            paginationRequestedForGesture = false;
+            paginationGestureMovedUp = false;
         } else if (event.getActionMasked() == MotionEvent.ACTION_MOVE
                 && !loadingGestureBlocked && isChatPageLoading()
                 && event.getY() - loadingGestureStartY
@@ -546,7 +530,22 @@ public final class ChatsView extends View {
             return true;
         }
         boolean handled = layers.onTouchEvent(event);
-        if (handled) post(this::loadNextPageIfNeeded);
+        if (handled && event.getActionMasked() == MotionEvent.ACTION_MOVE) {
+            if (event.getY() - loadingGestureStartY
+                    < -ViewConfiguration.get(getContext()).getScaledTouchSlop()) {
+                paginationGestureMovedUp = true;
+                if (!paginationRequestedForGesture) post(this::loadNextPageIfNeeded);
+            }
+        } else if (handled && event.getActionMasked() == MotionEvent.ACTION_UP
+                && paginationGestureMovedUp && !paginationRequestedForGesture) {
+            // ComponentList continues moving after ACTION_UP. Check after the
+            // fling has advanced so the gesture that reaches the bottom also
+            // starts pagination; a second swipe must not be required.
+            postDelayed(paginationAfterFling, 120L);
+            postDelayed(paginationAfterFling, 450L);
+            postDelayed(paginationAfterFling, 900L);
+            postDelayed(paginationAfterFling, 1_500L);
+        }
         return handled || super.onTouchEvent(event);
     }
 
@@ -557,13 +556,10 @@ public final class ChatsView extends View {
                 || state == ChatListState.Status.PAGINATING);
     }
 
-    private float paginationFooterHeight() {
-        return 112f * figmaConfig.getScale(Math.max(1, getWidth()));
-    }
-
     private void loadNextPageIfNeeded() {
-        if (list == null || adapter.getItemCount() == 0) return;
-        if (list.getLastVisiblePosition() >= adapter.getItemCount() - 3) {
+        if (paginationRequestedForGesture || list == null || adapter.chatCount() == 0) return;
+        if (list.getLastVisiblePosition() >= adapter.chatCount() - 3) {
+            paginationRequestedForGesture = true;
             if (isDebugBuild()) {
                 Log.d(PERF_TAG, "paginationCheck lastVisible=" + list.getLastVisiblePosition()
                         + " items=" + adapter.getItemCount());
@@ -585,7 +581,7 @@ public final class ChatsView extends View {
         avatarLoads.clear();
         avatarCache.evictAll();
         layers.release();
-        recycle(dividerBitmap, actionBitmap, whiteBitmap, emptyTransparentBitmap,
+        recycle(dividerBitmap, actionBitmap, emptyTransparentBitmap,
                 floatingActionBitmap,
                 emptyIllustrationBitmap,
                 emptyStartChatIconBitmap,
@@ -598,9 +594,24 @@ public final class ChatsView extends View {
     }
 
     private final class ChatAdapter extends ComponentList.Adapter<Chat> {
+        private static final int TYPE_CHAT = 0;
+        private static final int TYPE_PAGINATION = 1;
         private final List<Chat> all = new ArrayList<>();
         private final List<Chat> chats = new ArrayList<>();
         private String query = "";
+        private boolean paginationLoading;
+
+        boolean setPaginationLoading(boolean loading) {
+            if (paginationLoading == loading) return false;
+            int footerPosition = chats.size();
+            paginationLoading = loading;
+            if (loading) notifyItemInserted(footerPosition);
+            else notifyItemRemoved(footerPosition);
+            return loading;
+        }
+
+        int chatCount() { return chats.size(); }
+        boolean isPaginationLoading() { return paginationLoading; }
         void submit(List<Chat> values, String currentQuery) {
             if (values != null) {
                 for (Chat chat : values) {
@@ -626,7 +637,9 @@ public final class ChatsView extends View {
         }
         private List<Chat> filteredChats() {
             List<Chat> filtered = new ArrayList<>();
-            for (Chat chat : all) {
+            int count = Math.min(visibleChatCount, all.size());
+            for (int index = 0; index < count; index++) {
+                Chat chat = all.get(index);
                 String name = chat.getContactName() == null ? "" : chat.getContactName();
                 if (query.isEmpty() || name.toLowerCase(Locale.US).contains(query)) {
                     filtered.add(chat);
@@ -718,9 +731,17 @@ public final class ChatsView extends View {
             int position = indexOfChat(chatId);
             if (position >= 0) notifyItemChanged(position);
         }
-        @Override public int getItemCount() { return chats.size(); }
-        @Override public Chat getItem(int position) { return chats.get(position); }
+        @Override public int getItemCount() { return chats.size() + (paginationLoading ? 1 : 0); }
+        @Override public Chat getItem(int position) {
+            // ComponentList requires a typed item even for a different row type.
+            // The pagination row never binds or dispatches clicks with this value.
+            return position < chats.size() ? chats.get(position) : chats.get(chats.size() - 1);
+        }
+        @Override public int getItemViewType(int position) {
+            return position < chats.size() ? TYPE_CHAT : TYPE_PAGINATION;
+        }
         @Override public long getItemId(int position) {
+            if (position >= chats.size()) return Long.MIN_VALUE;
             String id = chats.get(position).getChatId();
             return id == null || id.isEmpty() ? position : id.hashCode();
         }
@@ -729,6 +750,22 @@ public final class ChatsView extends View {
             float width = scope.width();
             float height = scope.height();
             float scale = figmaConfig.getScale(getWidth());
+            if (type == TYPE_PAGINATION) {
+                float progressSize = 44f * scale;
+                ZLayer footer = item.addLayer("pagination_footer");
+                footer.add(new Progress.Builder(getContext(), scope.id("progress"),
+                        new RectF((width - progressSize) / 2f,
+                                (height - progressSize) / 2f,
+                                (width + progressSize) / 2f,
+                                (height + progressSize) / 2f))
+                        .setStyle(Progress.Style.CIRCULAR)
+                        .setMode(Progress.Mode.INDETERMINATE)
+                        .setProgressColor(ACCENT)
+                        .setTrackColor(0x22019CC4)
+                        .setThickness(6f)
+                        .setIndeterminateDuration(850L));
+                return;
+            }
             ZLayer row = item.addLayer("row");
             row.add(new Image.Builder(getContext(), scope.id("selection_background"),
                     selectionBackgroundBitmap, new RectF(0, 0, width, height))
@@ -830,6 +867,7 @@ public final class ChatsView extends View {
                     .setScaleType(Image.ScaleType.FIT_XY));
         }
         @Override public void onBindItem(ComponentList.Item item, Chat chat, int position) {
+            if (getItemViewType(position) == TYPE_PAGINATION) return;
             long bindStarted = SystemClock.elapsedRealtimeNanos();
             Trace.beginSection("ChatsView.bindRow");
             bindAvatar(item, chat);

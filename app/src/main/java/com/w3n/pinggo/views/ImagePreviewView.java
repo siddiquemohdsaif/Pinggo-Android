@@ -3,14 +3,10 @@ package com.w3n.pinggo.views;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Color;
-import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.inputmethod.EditorInfo;
-import android.widget.EditText;
 import android.widget.FrameLayout;
-import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.Toast;
 import androidx.annotation.NonNull;
@@ -28,8 +24,7 @@ public final class ImagePreviewView extends NativeMediaScreenView {
   private static final int HEADER_COLOR = 0xFF4B565E;
   private final ImageView image;
   private final NativeMediaTopBarView header;
-  private final FrameLayout composer;
-  private final EditText replyInput;
+  private final NativeReplyComposerView composer;
   private final ConversationMenuDialogView menu;
   private final NativeProgressOverlay loading;
   private final Listener listener;
@@ -57,40 +52,7 @@ public final class ImagePreviewView extends NativeMediaScreenView {
     addView(header, new FrameLayout.LayoutParams(
         LayoutParams.MATCH_PARENT, NativeMediaTopBarView.contentHeightPx(context), Gravity.TOP));
 
-    composer = new FrameLayout(context);
-    composer.setBackgroundColor(0x66000000);
-    replyInput = new EditText(context);
-    replyInput.setSingleLine(false);
-    replyInput.setHorizontallyScrolling(false);
-    replyInput.setMaxLines(4);
-    replyInput.setHint("Reply");
-    replyInput.setHintTextColor(0xFF9EA8AE);
-    replyInput.setTextColor(Color.WHITE);
-    replyInput.setTextSize(17f);
-    replyInput.setPadding(dp(18), 0, dp(58), 0);
-    replyInput.setBackground(rounded(0xFF1D2A31, dp(28)));
-    replyInput.setImeOptions(EditorInfo.IME_ACTION_SEND);
-    replyInput.setOnEditorActionListener((view, actionId, event) -> {
-      if (actionId != EditorInfo.IME_ACTION_SEND) return false;
-      sendReply();
-      return true;
-    });
-    FrameLayout.LayoutParams inputParams = new FrameLayout.LayoutParams(
-        LayoutParams.MATCH_PARENT, dp(56), Gravity.TOP);
-    inputParams.setMargins(dp(12), dp(8), dp(12), 0);
-    composer.addView(replyInput, inputParams);
-
-    ImageButton send = new ImageButton(context);
-    send.setImageResource(R.drawable.conversation_send);
-    send.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-    send.setPadding(dp(13), dp(13), dp(13), dp(13));
-    send.setBackground(rounded(0xFF019CC4, dp(26)));
-    send.setContentDescription("Send reply");
-    send.setOnClickListener(view -> sendReply());
-    FrameLayout.LayoutParams sendParams = new FrameLayout.LayoutParams(
-        dp(48), dp(48), Gravity.TOP | Gravity.END);
-    sendParams.setMargins(0, dp(12), dp(16), 0);
-    composer.addView(send, sendParams);
+    composer = new NativeReplyComposerView(context, listener::onReply);
     addView(composer, new FrameLayout.LayoutParams(
         LayoutParams.MATCH_PARENT, dp(72), Gravity.BOTTOM));
 
@@ -108,7 +70,7 @@ public final class ImagePreviewView extends NativeMediaScreenView {
       FrameLayout.LayoutParams composerParams =
           (FrameLayout.LayoutParams) composer.getLayoutParams();
       composerParams.height = dp(72) + bottomInset;
-      composer.setPadding(0, 0, 0, bottomInset);
+      composer.setBottomInset(bottomInset);
       composer.setLayoutParams(composerParams);
       return insets;
     });
@@ -125,13 +87,6 @@ public final class ImagePreviewView extends NativeMediaScreenView {
   }
 
   public boolean dismissMenu() { return menu.dismissIfShowing(); }
-
-  private void sendReply() {
-    String reply = replyInput.getText().toString().trim();
-    if (reply.isEmpty()) return;
-    listener.onReply(reply);
-    replyInput.setText("");
-  }
 
   private void setControlsVisible(boolean visible) {
     header.setVisibility(visible ? View.VISIBLE : View.GONE);
@@ -158,7 +113,7 @@ public final class ImagePreviewView extends NativeMediaScreenView {
   }
 
   @Override public void release() {
-    replyInput.clearFocus();
+    composer.release();
     menu.release();
     header.release();
     loading.release();
@@ -167,13 +122,6 @@ public final class ImagePreviewView extends NativeMediaScreenView {
 
   private FrameLayout.LayoutParams match() {
     return new FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
-  }
-
-  private GradientDrawable rounded(int color, float radius) {
-    GradientDrawable drawable = new GradientDrawable();
-    drawable.setColor(color);
-    drawable.setCornerRadius(radius);
-    return drawable;
   }
 
   private int dp(int value) {

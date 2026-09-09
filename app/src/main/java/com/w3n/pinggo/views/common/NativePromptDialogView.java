@@ -34,7 +34,7 @@ public final class NativePromptDialogView extends View {
   public interface InputChangedHandler { void onChanged(String value); }
   public interface ActionHandler { void onAction(int index); }
 
-  private enum Mode { MESSAGE, INPUT, ACTIONS, CONFIRM }
+  private enum Mode { MESSAGE, INFO, INPUT, ACTIONS, CONFIRM }
 
   private final ZLayerGroup layers = new ZLayerGroup(this);
   private final ZLayer dialogLayer = layers.addLayer("prompt_dialog_layer");
@@ -43,7 +43,7 @@ public final class NativePromptDialogView extends View {
   private final Bitmap destructive = colorBitmap(0xFFD92D20);
   private final Mode mode;
   private final String title;
-  private final String message;
+  private String message;
   private final String initialValue;
   private final int inputType;
   private final List<String> actions;
@@ -55,6 +55,7 @@ public final class NativePromptDialogView extends View {
   private final Runnable dismissHandler;
   private Dialog dialog;
   private TextField field;
+  private Text messageText;
   private boolean built;
 
   private NativePromptDialogView(Context context, Mode mode, String title, String message,
@@ -83,6 +84,17 @@ public final class NativePromptDialogView extends View {
       Runnable onDismiss) {
     return new NativePromptDialogView(context, Mode.MESSAGE, title, message, "", 0,
         null, null, null, null, null, null, onDismiss);
+  }
+
+  public static NativePromptDialogView info(Context context, String title, String message,
+      Runnable onDismiss) {
+    return new NativePromptDialogView(context, Mode.INFO, title, message, "", 0,
+        null, null, null, null, null, null, onDismiss);
+  }
+
+  public void updateMessage(String value) {
+    message = value == null ? "" : value;
+    post(() -> { if (messageText != null) messageText.setText(message); });
   }
 
   public static NativePromptDialogView input(Context context, String title, String initialValue,
@@ -116,6 +128,7 @@ public final class NativePromptDialogView extends View {
     float dialogWidth = Math.min(width - px(110f), px(1072.5f));
     float dialogHeight = mode == Mode.ACTIONS
         ? px(88f + actions.size() * 159.5f)
+        : mode == Mode.INFO ? Math.min(height - px(160f), px(1100f))
         : mode == Mode.INPUT ? px(687.5f) : px(632.5f);
     dialog = dialogLayer.add(new Dialog.Builder(getContext(), "native_prompt",
         new RectF(0, 0, dialogWidth, dialogHeight))
@@ -146,13 +159,15 @@ public final class NativePromptDialogView extends View {
         .setTextSizePx(px(57.75f)).setTextColor(0xFF000E1A)
         .setAlignment(Text.Alignment.CENTER).setVerticalAlignment(Text.VerticalAlignment.CENTER)
         .setMaxLines(1));
-    if (mode == Mode.MESSAGE || mode == Mode.CONFIRM) {
-      content.add(new Text.Builder(getContext(), scope.id("message"), message,
-          scope.rect(px(60.5f), px(187f), width - px(121f), px(192.5f)))
+    if (mode == Mode.MESSAGE || mode == Mode.INFO || mode == Mode.CONFIRM) {
+      float messageHeight = mode == Mode.INFO ? scope.height() - px(390f) : px(192.5f);
+      messageText = content.add(new Text.Builder(getContext(), scope.id("message"), message,
+          scope.rect(px(60.5f), px(187f), width - px(121f), messageHeight))
           .setFont(NativeFonts.INTER).setFontVariations(FontVariation.REGULAR)
           .setTextSizePx(px(44f)).setTextColor(0xFF656565)
-          .setAlignment(Text.Alignment.CENTER).setVerticalAlignment(Text.VerticalAlignment.CENTER)
-          .setMaxLines(3));
+          .setAlignment(mode == Mode.INFO ? Text.Alignment.START : Text.Alignment.CENTER)
+          .setVerticalAlignment(Text.VerticalAlignment.CENTER)
+          .setMaxLines(mode == Mode.INFO ? 14 : 3));
     } else {
       field = content.add(new TextField.Builder(getContext(), scope.id("field"),
           scope.rect(px(60.5f), px(214.5f), width - px(121f), px(159.5f)))

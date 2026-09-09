@@ -39,10 +39,10 @@ public final class GroupHandler {
     }
 
     public static void messages(AppRestAPI api, String userId, String groupId, int pageSize,
-                                Long before, AppFunctionManager.Callback callback) {
+                                String cursor, AppFunctionManager.Callback callback) {
         JsonObject body = identity(userId, groupId);
         body.addProperty("pageSize", pageSize);
-        if (before != null) body.addProperty("before", before);
+        if (cursor != null && !cursor.trim().isEmpty()) body.addProperty("cursor", cursor);
         enqueue(api.getGroupMessages(request(body)), callback);
     }
 
@@ -51,6 +51,17 @@ public final class GroupHandler {
         JsonObject body = identity(userId, groupId);
         if (name != null) body.addProperty("name", name);
         if (description != null) body.addProperty("description", description);
+        enqueue(api.updateGroup(request(body)), callback);
+    }
+
+    public static void updateAdminOnly(AppRestAPI api, String userId, String groupId,
+                                       boolean enabled, AppFunctionManager.Callback callback) {
+        JsonObject body = identity(userId, groupId);
+        JsonObject permissions = new JsonObject();
+        String mode = enabled ? "admins" : "members";
+        permissions.addProperty("sendMessages", mode);
+        permissions.addProperty("startCalls", mode);
+        body.add("permissions", permissions);
         enqueue(api.updateGroup(request(body)), callback);
     }
 
@@ -72,7 +83,16 @@ public final class GroupHandler {
 
     public static void leave(AppRestAPI api, String userId, String groupId,
                              AppFunctionManager.Callback callback) {
-        enqueue(api.leaveGroup(request(identity(userId, groupId))), callback);
+        leave(api, userId, groupId, null, callback);
+    }
+
+    public static void leave(AppRestAPI api, String userId, String groupId,
+                             String successorAdminId, AppFunctionManager.Callback callback) {
+        JsonObject body = identity(userId, groupId);
+        if (successorAdminId != null && !successorAdminId.trim().isEmpty()) {
+            body.addProperty("successorAdminId", normalize(successorAdminId));
+        }
+        enqueue(api.leaveGroup(request(body)), callback);
     }
 
     public static void report(AppRestAPI api, String userId, String groupId, String reason,

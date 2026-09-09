@@ -58,12 +58,26 @@ final class SelectedImageEditorView extends View {
   }
 
   void bind(String key, Bitmap bitmap) {
+    setBackgroundColor(Color.BLACK);
     State saved = states.get(key);
     if (saved == null) {
       saved = new State(bitmap);
       states.put(key, saved);
     } else if (saved.bitmap == null) {
       saved.bitmap = bitmap;
+    }
+    state = saved;
+    rebuildMatrix();
+    invalidate();
+  }
+
+  void bindTransparentOverlay(String key, int width, int height) {
+    setBackgroundColor(Color.TRANSPARENT);
+    State saved = states.get(key);
+    if (saved == null) {
+      saved = new State(Bitmap.createBitmap(
+          Math.max(1, width), Math.max(1, height), Bitmap.Config.ARGB_8888));
+      states.put(key, saved);
     }
     state = saved;
     rebuildMatrix();

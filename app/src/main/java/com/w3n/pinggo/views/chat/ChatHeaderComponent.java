@@ -2,15 +2,11 @@ package com.w3n.pinggo.views.chat;
 
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.RectF;
-import android.graphics.Color;
-import android.graphics.Typeface;
-import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
-import android.widget.FrameLayout;
-import android.widget.ImageButton;
-import android.widget.ImageView;
-import android.widget.TextView;
 import com.w3n.pinggo.R;
 import com.ogfa.nativeviews.button.Button;
 import com.ogfa.nativeviews.font.NativeFonts;
@@ -36,56 +32,46 @@ public final class ChatHeaderComponent {
   private final Bitmap more;
   private Text presence;
   private String presenceValue = "connecting...";
+  private boolean callActionsVisible = true;
 
   /** Simplified details header using the conversation header's exact geometry and assets. */
   public static View detailsHeader(
       Context context, String titleValue, Runnable onBack, java.util.function.Consumer<View> onMore) {
-    return new FrameLayout(context) {
-      final ImageView background = image(R.drawable.conversation_header_background, ImageView.ScaleType.FIT_XY);
-      final ImageView backIcon = image(R.drawable.conversation_back, ImageView.ScaleType.FIT_CENTER);
-      final ImageButton backButton = button(0, "Back", onBack);
-      final ImageView moreIcon = image(R.drawable.home_overflow_dots, ImageView.ScaleType.FIT_CENTER);
-      final ImageButton moreButton = button(0, "More options", null);
-      final TextView title = title();
-      {
-        moreButton.setOnClickListener(v -> { if (onMore != null) onMore.accept(moreButton); });
-        addView(background); addView(backIcon); addView(backButton); addView(title);
-        addView(moreIcon); addView(moreButton);
-      }
-      ImageView image(int resource, ImageView.ScaleType scaleType) {
-        ImageView view = new ImageView(context); view.setImageResource(resource); view.setScaleType(scaleType); return view;
-      }
-      ImageButton button(int resource, String description, Runnable action) {
-        ImageButton view = new ImageButton(context); view.setImageResource(resource);
-        view.setScaleType(ImageView.ScaleType.CENTER); view.setBackgroundColor(Color.TRANSPARENT);
-        view.setContentDescription(description); view.setPadding(0, 0, 0, 0);
-        view.setOnClickListener(v -> { if (action != null) action.run(); }); return view;
-      }
-      TextView title() {
-        TextView view = new TextView(context); view.setText(titleValue == null ? "" : titleValue);
-        view.setTextColor(PRIMARY); view.setTextSize(18); view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        view.setGravity(Gravity.CENTER_VERTICAL); view.setSingleLine(true); return view;
-      }
+    return new View(context) {
+      final com.ogfa.nativeviews.zlayer.ZLayerGroup layers =
+          new com.ogfa.nativeviews.zlayer.ZLayerGroup(this);
+      final ZLayer layer = layers.addLayer("details_header");
+      final Bitmap background = BitmapFactory.decodeResource(getResources(),
+          R.drawable.conversation_header_background);
+      final Bitmap backIcon = BitmapFactory.decodeResource(getResources(), R.drawable.conversation_back);
+      final Bitmap moreIcon = BitmapFactory.decodeResource(getResources(), R.drawable.home_overflow_dots);
+      final Bitmap clear = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
       @Override protected void onMeasure(int widthSpec, int heightSpec) {
-        int width = MeasureSpec.getSize(widthSpec); int height = Math.max(1, Math.round(width * 170f / 1080f));
-        setMeasuredDimension(width, height); int exact = MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY);
-        background.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY), exact);
-        backIcon.measure(exact, exact); backButton.measure(exact, exact);
-        moreIcon.measure(exact, exact); moreButton.measure(exact, exact);
-        title.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.AT_MOST), exact);
+        int width = MeasureSpec.getSize(widthSpec);
+        setMeasuredDimension(width, Math.max(1, Math.round(width * 170f / 1080f)));
       }
-      @Override protected void onLayout(boolean changed, int l, int t, int r, int b) {
-        int width = r - l; int height = b - t; float scale = width / 1080f;
-        background.layout(0, 0, width, height);
-        backIcon.layout(Math.round(51f * scale), Math.round(60f * scale),
-            Math.round(102f * scale), Math.round(111f * scale));
-        backButton.layout(Math.round(25f * scale), Math.round(34f * scale),
-            Math.round(128f * scale), Math.round(137f * scale));
-        title.layout(Math.round(152f * scale), 0, Math.round(950f * scale), height);
-        moreIcon.layout(Math.round(1000f * scale), Math.round(55f * scale),
-            Math.round(1032f * scale), Math.round(112f * scale));
-        moreButton.layout(Math.round(972f * scale), Math.round(27f * scale),
-            Math.round(1060f * scale), Math.round(140f * scale));
+      @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
+        layer.clear(); float scale = width / 1080f;
+        layer.add(new Image.Builder(context, "background", background, new RectF(0, 0, width, height))
+            .setScaleType(Image.ScaleType.FIT_XY));
+        layer.add(new Image.Builder(context, "back_icon", backIcon, new RectF(51f * scale,
+            60f * scale, 102f * scale, 111f * scale)).setScaleType(Image.ScaleType.FIT_CENTER));
+        layer.add(new Button.Builder(context, "back_touch", clear, "", new RectF(25f * scale,
+            34f * scale, 128f * scale, 137f * scale)).setRippleEnabled(true)
+            .setOnClickListener(id -> onBack.run()));
+        layer.add(new Text.Builder(context, "title", titleValue == null ? "" : titleValue,
+            new RectF(152f * scale, 0, 950f * scale, height)).setFont(NativeFonts.INTER)
+            .setFontVariations(FontVariation.BOLD).setTextSizePx(50f * scale).setTextColor(PRIMARY)
+            .setVerticalAlignment(Text.VerticalAlignment.CENTER).setMaxLines(1));
+        layer.add(new Image.Builder(context, "more_icon", moreIcon, new RectF(1000f * scale,
+            55f * scale, 1032f * scale, 112f * scale)).setScaleType(Image.ScaleType.FIT_CENTER));
+        layer.add(new Button.Builder(context, "more_touch", clear, "", new RectF(972f * scale,
+            27f * scale, 1060f * scale, 140f * scale)).setRippleEnabled(true)
+            .setOnClickListener(id -> { if (onMore != null) onMore.accept(this); }));
+      }
+      @Override protected void onDraw(Canvas canvas) { super.onDraw(canvas); layers.draw(canvas); }
+      @Override public boolean onTouchEvent(MotionEvent event) {
+        return layers.onTouchEvent(event) || super.onTouchEvent(event);
       }
     };
   }
@@ -140,14 +126,16 @@ public final class ChatHeaderComponent {
         .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
         .setRippleColor(0x10019CC4)
         .setOnClickListener(id -> listener.onChatDetails()));
-    iconButton(content, "video_call", videoCall,
-        new RectF(869f * scale, top + 55f * scale, 926f * scale, top + 112f * scale),
-        new RectF(844f * scale, top + 30f * scale, 951f * scale, top + 137f * scale),
-        id -> listener.onVideoCall());
-    iconButton(content, "voice_call", voiceCall,
-        new RectF(750f * scale, top + 55f * scale, 807f * scale, top + 112f * scale),
-        new RectF(725f * scale, top + 30f * scale, 832f * scale, top + 137f * scale),
-        id -> listener.onVoiceCall());
+    if (callActionsVisible) {
+      iconButton(content, "video_call", videoCall,
+          new RectF(869f * scale, top + 55f * scale, 926f * scale, top + 112f * scale),
+          new RectF(844f * scale, top + 30f * scale, 951f * scale, top + 137f * scale),
+          id -> listener.onVideoCall());
+      iconButton(content, "voice_call", voiceCall,
+          new RectF(750f * scale, top + 55f * scale, 807f * scale, top + 112f * scale),
+          new RectF(725f * scale, top + 30f * scale, 832f * scale, top + 137f * scale),
+          id -> listener.onVoiceCall());
+    }
     iconButton(content, "more", more,
         new RectF(1000f * scale, top + 55f * scale, 1032f * scale, top + 112f * scale),
         new RectF(972f * scale, top + 27f * scale, 1060f * scale, top + 140f * scale),
@@ -159,6 +147,8 @@ public final class ChatHeaderComponent {
     presenceValue = value == null ? "" : value;
     if (presence != null) presence.setText(presenceValue).setVisible(!presenceValue.isEmpty());
   }
+
+  void setCallActionsVisible(boolean visible) { callActionsVisible = visible; }
 
   private Text text(
       ZLayer layer, String id, String value, RectF region, float size, int color,

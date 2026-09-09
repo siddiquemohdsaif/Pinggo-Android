@@ -65,6 +65,8 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
     private boolean callListHasMore;
     private boolean callListLoading;
     private int callListGeneration;
+    private int callListVisibleLimit = 20;
+    private boolean callPaginationRevealPending;
     private final ActivityResultLauncher<String> notificationPermission = registerForActivityResult(
             new ActivityResultContracts.RequestPermission(), granted -> {
             });
@@ -190,6 +192,10 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
             callRepository.observeLatestCalls(uid).observe(this, calls -> {
                 latestCallEntities = calls == null ? new ArrayList<>() : calls;
                 submitCachedCalls(latestCallEntities);
+                if (callPaginationRevealPending) {
+                    callPaginationRevealPending = false;
+                    homeView.setCallsPaginationLoading(false);
+                }
             });
         }
     }
@@ -246,11 +252,17 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         callListLoading = false;
         nextCallCursor = null;
         callListHasMore = true;
+        callListVisibleLimit = 20;
+        callPaginationRevealPending = false;
+        if (homeView != null) {
+            homeView.setCallsPaginationLoading(false);
+            submitCachedCalls(latestCallEntities);
+        }
         loadServerCalls();
     }
 
     private void loadServerCalls() {
-        if (callListLoading || !callListHasMore)
+        if (callListLoading || callPaginationRevealPending || !callListHasMore)
             return;
         String uid = LoginStateManager.getInstance().getUID(this);
         if (uid == null || uid.trim().isEmpty())
@@ -258,6 +270,9 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         callListLoading = true;
         final int requestGeneration = callListGeneration;
         final String requestedCursor = nextCallCursor;
+        final boolean pagination = requestedCursor != null && !requestedCursor.isEmpty();
+        if (pagination && homeView != null)
+            homeView.setCallsPaginationLoading(true);
         AppFunctionManager.getInstance().getCallList(uid, 20, requestedCursor,
                 new AppFunctionManager.Callback() {
                     @Override
@@ -265,24 +280,35 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                         if (requestGeneration != callListGeneration)
                             return;
                         callListLoading = false;
-                        if (!(object instanceof JsonObject))
+                        if (!(object instanceof JsonObject)) {
+                            callPaginationRevealPending = false;
+                            if (homeView != null) homeView.setCallsPaginationLoading(false);
                             return;
+                        }
                         JsonObject response = (JsonObject) object;
                         JsonArray values = response.getAsJsonArray("calls");
                         if (values == null)
                             values = new JsonArray();
+                        if (pagination && values.size() > 0) {
+                            callListVisibleLimit += values.size();
+                            callPaginationRevealPending = true;
+                        }
                         if (callRepository != null)
                             callRepository.cachePage(uid, values);
                         nextCallCursor = jsonString(response, "nextCursor");
                         callListHasMore = response.has("hasMore")
                                 && response.get("hasMore").getAsBoolean()
                                 && !nextCallCursor.isEmpty();
+                        if (pagination && values.size() == 0 && homeView != null)
+                            homeView.setCallsPaginationLoading(false);
                     }
 
                     @Override
                     public void onError(String error) {
                         if (requestGeneration == callListGeneration)
                             callListLoading = false;
+                        callPaginationRevealPending = false;
+                        if (homeView != null) homeView.setCallsPaginationLoading(false);
                     }
                 });
     }
@@ -303,7 +329,9 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                 DateFormat.LONG, DateFormat.SHORT, Locale.getDefault());
         if (values == null)
             values = new ArrayList<>();
-        for (CallEntity call : values) {
+        int visibleCount = Math.min(callListVisibleLimit, values.size());
+        for (int index = 0; index < visibleCount; index++) {
+            CallEntity call = values.get(index);
             String chatId = call.chatId == null ? "" : call.chatId;
             String callerId = call.callerId == null ? "" : call.callerId;
             String receiverId = call.receiverId == null ? "" : call.receiverId;

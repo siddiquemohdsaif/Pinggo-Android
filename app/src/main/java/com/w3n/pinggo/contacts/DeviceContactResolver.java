@@ -7,6 +7,8 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.provider.ContactsContract;
 import androidx.core.content.ContextCompat;
+import com.w3n.pinggo.AppContextProvider;
+import com.w3n.pinggo.Util.PhoneNumberFormatter;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -30,7 +32,10 @@ public final class DeviceContactResolver {
 
     public static String fallback(String phoneNumber) {
         String normalized = normalize(phoneNumber);
-        return normalized.isEmpty() ? "Unknown" : "+" + normalized;
+        Context context = AppContextProvider.getAppContext();
+        return normalized.isEmpty() ? "Unknown" : context == null
+                ? "+" + normalized
+                : PhoneNumberFormatter.formatInternational(context, normalized);
     }
 
     /** Fast UI-safe lookup. Call warmUp after READ_CONTACTS is granted. */

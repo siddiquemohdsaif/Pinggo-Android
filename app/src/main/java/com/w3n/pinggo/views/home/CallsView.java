@@ -15,6 +15,7 @@ import androidx.core.content.ContextCompat;
 import com.ogfa.nativeviews.font.NativeFonts;
 import com.ogfa.nativeviews.image.Image;
 import com.ogfa.nativeviews.list.ComponentList;
+import com.ogfa.nativeviews.progress.Progress;
 import com.ogfa.nativeviews.text.FontVariation;
 import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.zlayer.ZLayer;
@@ -53,6 +54,8 @@ public final class CallsView extends View {
     private final Map<String, Bitmap> avatarCache = new HashMap<>();
     private ComponentList<CallLog> list;
     private Text emptyText;
+    private Progress paginationProgress;
+    private boolean paginationLoading;
 
     public CallsView(Context context, OnCallClickListener clickListener,
                      OnCallStartListener callStartListener, Runnable loadMoreListener) {
@@ -73,6 +76,11 @@ public final class CallsView extends View {
         adapter.filter(query);
         updateVisibility();
         post(this::loadAllPagesForSearch);
+    }
+
+    public void setPaginationLoading(boolean loading) {
+        paginationLoading = loading;
+        updateVisibility();
     }
 
     private void loadAllPagesForSearch() {
@@ -97,6 +105,19 @@ public final class CallsView extends View {
                 .setFont(NativeFonts.INTER).setFontVariations(FontVariation.REGULAR)
                 .setTextSizePx(sp(16)).setTextColor(SECONDARY).setAlignment(Text.Alignment.CENTER)
                 .setVerticalAlignment(Text.VerticalAlignment.CENTER));
+        float progressSize = 44f * figmaConfig.getScale(width);
+        float progressBottom = height - px(34f);
+        paginationProgress = stateLayer.add(new Progress.Builder(getContext(),
+                "call_page_progress",
+                new RectF((width - progressSize) / 2f, progressBottom - progressSize,
+                        (width + progressSize) / 2f, progressBottom))
+                .setStyle(Progress.Style.CIRCULAR)
+                .setMode(Progress.Mode.INDETERMINATE)
+                .setProgressColor(ACCENT)
+                .setTrackColor(0x22019CC4)
+                .setThickness(px(6f))
+                .setIndeterminateDuration(850L)
+                .setVisible(false));
         updateVisibility();
     }
 
@@ -105,6 +126,8 @@ public final class CallsView extends View {
         boolean empty = adapter.getItemCount() == 0;
         list.setVisible(!empty).setEnabled(!empty);
         emptyText.setVisible(empty);
+        if (paginationProgress != null)
+            paginationProgress.setVisible(!empty && paginationLoading);
         invalidate();
     }
 

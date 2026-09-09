@@ -2,12 +2,19 @@ package com.w3n.pinggo.views;
 
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
-import android.view.Gravity;
+import android.graphics.RectF;
+import android.view.MotionEvent;
 import android.view.View;
-import android.widget.Button;
 import android.widget.FrameLayout;
-import android.widget.TextView;
+
+import com.ogfa.nativeviews.button.Button;
+import com.ogfa.nativeviews.component.FigmaConfig;
+import com.ogfa.nativeviews.font.NativeFonts;
+import com.ogfa.nativeviews.text.FontVariation;
+import com.ogfa.nativeviews.zlayer.ZLayer;
+import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 
 /** Full-screen crop/rotate surface used by selected image preview. */
 final class SelectedMediaCropRotateView extends FrameLayout {
@@ -28,39 +35,50 @@ final class SelectedMediaCropRotateView extends FrameLayout {
     cropParams.setMargins(0, dp(90), 0, dp(110));
     addView(cropView, cropParams);
 
-    TextView cancel = action("Cancel");
-    cancel.setOnClickListener(view -> listener.onCancel());
-    LayoutParams cancelParams = new LayoutParams(dp(110), dp(72), Gravity.BOTTOM | Gravity.START);
-    cancelParams.leftMargin = dp(20); cancelParams.bottomMargin = dp(18);
-    addView(cancel, cancelParams);
-
-    Button rotate = new Button(context);
-    rotate.setText("↻"); rotate.setTextSize(34f); rotate.setTextColor(Color.WHITE);
-    rotate.setBackgroundColor(Color.TRANSPARENT);
-    rotate.setOnClickListener(view -> cropView.rotateClockwise());
-    LayoutParams rotateParams = new LayoutParams(dp(90), dp(80), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-    rotateParams.bottomMargin = dp(14);
-    addView(rotate, rotateParams);
-
-    TextView done = action("Done");
-    done.setGravity(Gravity.CENTER);
-    done.setOnClickListener(view -> {
-      Bitmap result = cropView.getCroppedBitmap();
-      if (result != null) listener.onDone(result);
-    });
-    LayoutParams doneParams = new LayoutParams(dp(110), dp(72), Gravity.BOTTOM | Gravity.END);
-    doneParams.rightMargin = dp(20); doneParams.bottomMargin = dp(18);
-    addView(done, doneParams);
+    addView(new ControlsView(context, listener), new LayoutParams(
+        LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
   }
 
-  private TextView action(String label) {
-    TextView view = new TextView(getContext());
-    view.setText(label); view.setTextColor(0xFF22C56E); view.setTextSize(18f);
-    view.setGravity(Gravity.CENTER); view.setClickable(true);
-    return view;
+  private final class ControlsView extends View {
+    private final FigmaConfig config = new FigmaConfig(1080f);
+    private final ZLayerGroup layers = new ZLayerGroup(this);
+    private final ZLayer controls = layers.addLayer("crop_controls");
+    private final Bitmap transparent = colorBitmap(Color.TRANSPARENT);
+    private final Listener listener;
+    ControlsView(Context context, Listener listener) {
+      super(context); this.listener = listener; setClickable(true);
+    }
+    @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
+      controls.clear();
+      float scale = config.getScale(width);
+      add("cancel", "Cancel", new RectF(20f * scale, height - 100f * scale,
+          250f * scale, height - 18f * scale), id -> listener.onCancel());
+      add("rotate", "↻", new RectF(width / 2f - 100f * scale, height - 110f * scale,
+          width / 2f + 100f * scale, height - 14f * scale), id -> cropView.rotateClockwise());
+      add("done", "Done", new RectF(width - 250f * scale, height - 100f * scale,
+          width - 20f * scale, height - 18f * scale), id -> {
+        Bitmap result = cropView.getCroppedBitmap();
+        if (result != null) listener.onDone(result);
+      });
+    }
+    private void add(String id, String label, RectF bounds, Button.OnClickListener click) {
+      controls.add(new Button.Builder(getContext(), id, transparent, label, bounds)
+          .setFont(NativeFonts.INTER).setFontVariations(FontVariation.MEDIUM)
+          .setTextSizePx("↻".equals(label) ? dp(34) : dp(18)).setTextColor(
+              "↻".equals(label) ? Color.WHITE : 0xFF22C56E)
+          .setRippleEnabled(true).setRippleColor(0x22FFFFFF).setOnClickListener(click));
+    }
+    @Override protected void onDraw(Canvas canvas) { super.onDraw(canvas); layers.draw(canvas); }
+    @Override public boolean onTouchEvent(MotionEvent event) {
+      return layers.onTouchEvent(event) || super.onTouchEvent(event);
+    }
   }
 
   private int dp(int value) {
     return Math.round(value * getResources().getDisplayMetrics().density);
+  }
+  private static Bitmap colorBitmap(int color) {
+    Bitmap bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
+    bitmap.eraseColor(color); return bitmap;
   }
 }

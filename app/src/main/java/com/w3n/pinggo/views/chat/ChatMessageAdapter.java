@@ -19,6 +19,7 @@ import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.w3n.pinggo.data.cache.MediaPreviewCache;
 import com.w3n.pinggo.data.local.MessageEntity;
+import com.w3n.pinggo.data.local.MessageTypeCodec;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import java.text.SimpleDateFormat;
@@ -1350,7 +1351,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   }
 
   private int visualAttachmentState(MessageEntity message) {
-    String type = message.messageType == null ? "text" : message.messageType;
+    String type = requireMessageType(message);
     if (!("image".equals(type) || "video".equals(type)
         || "audio".equals(type) || "file".equals(type))) return -1;
     return attachmentStateProvider.attachmentState(message);
@@ -1385,7 +1386,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   }
 
   private String displayMessage(MessageEntity message, int attachmentState) {
-    String type = message.messageType == null ? "text" : message.messageType;
+    String type = requireMessageType(message);
     String displayed;
     if ("location".equals(type) && message.latitude != null && message.longitude != null) {
       displayed =
@@ -1481,6 +1482,8 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       case "admin_promoted": return actor + " made " + targetLabels(targets) + " an admin";
       case "admin_demoted": return actor + " removed " + targetLabels(targets) + " as admin";
       case "group_info_updated": return actor + " updated the group info";
+      case "admin_only_enabled": return actor + " allowed only admins to message and call";
+      case "admin_only_disabled": return actor + " allowed all members to message and call";
       default: return "Group updated";
     }
   }
@@ -1629,6 +1632,14 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     return "voice_call".equals(type) || "video_call".equals(type);
   }
 
+  private static String requireMessageType(MessageEntity message) {
+    if (message == null || message.messageType == null) {
+      throw new IllegalArgumentException("messageType is required for rendering");
+    }
+    MessageTypeCodec.encode(message.messageType);
+    return message.messageType;
+  }
+
   private static String mediaType(MessageEntity message) {
     if (message == null || isDeletedMessage(message)) return null;
     String type = message.messageType;
@@ -1699,8 +1710,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   }
 
   private static boolean isDeletedMessage(MessageEntity message) {
-    return message != null && (message.deletedText != null
-        || "This Message was deleted".equals(message.text));
+    return message != null && message.deletedText != null;
   }
 
   private int indexOfMessageKeyFrom(String key, int startIndex) {

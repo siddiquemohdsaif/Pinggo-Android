@@ -125,6 +125,9 @@ public interface MessageDao {
     @Query("DELETE FROM messages WHERE messageId IN (:messageIds)")
     void deleteByMessageIds(List<String> messageIds);
 
+    @Query("DELETE FROM messages WHERE chatId = :chatId")
+    void deleteByChatId(String chatId);
+
     @Query("SELECT MAX(sentTime) FROM messages")
     Long getLastSyncTime();
 }

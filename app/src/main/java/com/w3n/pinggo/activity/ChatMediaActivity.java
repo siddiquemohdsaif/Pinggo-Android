@@ -36,6 +36,7 @@ import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.local.TransferEntity;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.views.chat.ChatHeaderComponent;
+import com.w3n.pinggo.views.home.HomeMenuDialogView;
 
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -73,6 +74,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
   private TextView linksTab;
   private ChatRepository repository;
   private ProgressBar pageProgress;
+  private HomeMenuDialogView mediaMenu;
 
   @Override
   protected void onCreate(Bundle state) {
@@ -84,6 +86,15 @@ public final class ChatMediaActivity extends AppCompatActivity {
     userId = LoginStateManager.getInstance().getUID(this);
     repository = ChatRepository.getInstance(this);
     setContentView(build());
+    mediaMenu = new HomeMenuDialogView(this,
+        java.util.Arrays.asList("Media", "Docs", "Links"), index -> {
+          selected = index == 0 ? "media" : index == 1 ? "docs" : "links";
+          updateTabs();
+          render();
+        });
+    ((ViewGroup) findViewById(android.R.id.content)).addView(mediaMenu,
+        new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT));
     repository.observeTransfers(chatId).observe(this, this::completedTransfers);
     loadNext();
   }
@@ -127,17 +138,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
   }
 
   private void showMediaMenu(View anchor) {
-    android.widget.PopupMenu menu = new android.widget.PopupMenu(this, anchor);
-    menu.getMenu().add("Media");
-    menu.getMenu().add("Docs");
-    menu.getMenu().add("Links");
-    menu.setOnMenuItemClickListener(item -> {
-      selected = item.getTitle().toString().toLowerCase(java.util.Locale.US);
-      updateTabs();
-      render();
-      return true;
-    });
-    menu.show();
+    if (mediaMenu != null) mediaMenu.show();
   }
 
   private TextView tab(String caption, String value) {
@@ -464,6 +465,8 @@ public final class ChatMediaActivity extends AppCompatActivity {
 
   @Override
   protected void onDestroy() {
+    if (mediaMenu != null) mediaMenu.release();
+    mediaMenu = null;
     thumbnails.shutdownNow();
     super.onDestroy();
   }

@@ -204,14 +204,19 @@ public class AppFunctionManager {
     ChatHandler.getMedia(appApi, chatId, userId, pageSize, before, callback);
   }
 
-  public void getGroupMessages(String userId, String groupId, int pageSize, Long before,
+  public void getGroupMessages(String userId, String groupId, int pageSize, String cursor,
                                Callback callback) {
-    GroupHandler.messages(appApi, userId, groupId, pageSize, before, callback);
+    GroupHandler.messages(appApi, userId, groupId, pageSize, cursor, callback);
   }
 
   public void updateGroup(String userId, String groupId, String name, String description,
                           Callback callback) {
     GroupHandler.update(appApi, userId, groupId, name, description, callback);
+  }
+
+  public void updateGroupAdminOnly(String userId, String groupId, boolean enabled,
+                                   Callback callback) {
+    GroupHandler.updateAdminOnly(appApi, userId, groupId, enabled, callback);
   }
 
   public void updateGroupMembers(String userId, String groupId, List<String> memberIds,
@@ -226,6 +231,11 @@ public class AppFunctionManager {
 
   public void leaveGroup(String userId, String groupId, Callback callback) {
     GroupHandler.leave(appApi, userId, groupId, callback);
+  }
+
+  public void leaveGroup(String userId, String groupId, String successorAdminId,
+                         Callback callback) {
+    GroupHandler.leave(appApi, userId, groupId, successorAdminId, callback);
   }
 
   public void reportGroup(String userId, String groupId, String reason, Callback callback) {

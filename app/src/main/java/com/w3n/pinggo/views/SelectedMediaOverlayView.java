@@ -516,12 +516,19 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
       retriever.setDataSource(getContext(), item.uri);
       long duration = parseLong(retriever.extractMetadata(
           MediaMetadataRetriever.METADATA_KEY_DURATION));
+      int videoWidth = (int) parseLong(retriever.extractMetadata(
+          MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH));
+      int videoHeight = (int) parseLong(retriever.extractMetadata(
+          MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT));
       long size = selectedFileSize(item.uri);
       post(() -> {
         if (generation == videoFrameGeneration && activeItem == item) {
           VideoEditState edit = videoEdit(item);
           edit.durationMs = duration;
           edit.originalSize = size;
+          imageEditor.bindTransparentOverlay(item.uri.toString(), videoWidth, videoHeight);
+          imageEditor.setVisibility(View.VISIBLE);
+          restoreVideoEditorLayerOrder();
           updateVideoMetadata(item, edit);
         }
       });
@@ -630,7 +637,7 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
   }
 
   private void beginEditorText() {
-    if (activeItem == null || !activeItem.isImage()) return;
+    if (activeItem == null || (!activeItem.isImage() && !activeItem.isVideo())) return;
     imageEditor.setDrawing(false);
     setEditorMode(NativeSelectedMediaChromeView.EDITOR_TEXT);
     textInput.setText("");
@@ -669,7 +676,7 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
   }
 
   private void beginExistingTextEdit(String value, int color) {
-    if (activeItem == null || !activeItem.isImage()) return;
+    if (activeItem == null || (!activeItem.isImage() && !activeItem.isVideo())) return;
     editorTextColor = color;
     imageEditor.setDrawing(false);
     imageEditor.setTextColor(color);
@@ -738,7 +745,7 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
   }
 
   private void beginDrawing() {
-    if (activeItem == null || !activeItem.isImage()) return;
+    if (activeItem == null || (!activeItem.isImage() && !activeItem.isVideo())) return;
     imageEditor.setDrawing(true);
     chrome.setUndoAvailable(imageEditor.canUndoStroke());
     setEditorMode(NativeSelectedMediaChromeView.EDITOR_DRAW);
@@ -764,6 +771,18 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
     selectionStrip.setVisibility(normal && items.size() > 1 ? View.VISIBLE : View.GONE);
     captionBar.setVisibility(normal ? View.VISIBLE : View.GONE);
     colorPalette.setVisibility(draw || text ? View.VISIBLE : View.GONE);
+    if (activeItem != null && activeItem.isVideo()) restoreVideoEditorLayerOrder();
+  }
+
+  private void restoreVideoEditorLayerOrder() {
+    imageEditor.bringToFront();
+    videoTools.bringToFront();
+    selectionStrip.bringToFront();
+    captionBar.bringToFront();
+    editorScrim.bringToFront();
+    textInput.bringToFront();
+    chrome.bringToFront();
+    colorPalette.bringToFront();
   }
 
   private void updateEditorTextColors(int foreground) {

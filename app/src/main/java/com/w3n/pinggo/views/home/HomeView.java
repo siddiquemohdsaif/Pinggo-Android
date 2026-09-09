@@ -147,6 +147,9 @@ public final class HomeView extends ZLayerViewGroup {
     public void submitCalls(List<CallLog> calls) {
         callsView.submitCalls(calls);
     }
+    public void setCallsPaginationLoading(boolean loading) {
+        callsView.setPaginationLoading(loading);
+    }
     public void setChatTyping(String chatId, boolean typing) {
         chatsView.setTyping(chatId, typing);
     }

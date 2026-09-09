@@ -59,6 +59,7 @@ import java.util.List;
 
 import io.michaelrocks.libphonenumber.android.PhoneNumberUtil;
 import io.michaelrocks.libphonenumber.android.Phonenumber;
+import io.michaelrocks.libphonenumber.android.AsYouTypeFormatter;
 
 public class PhoneNumberLoginView extends View {
     private static final float REFERENCE_WIDTH = 1080f;
@@ -76,6 +77,7 @@ public class PhoneNumberLoginView extends View {
     private static final float COUNTRY_SHADOW_OFFSET_Y = 4f;
     private static final float COUNTRY_SHADOW_BLUR = 28f;
     private static final float COUNTRY_SHADOW_SPREAD = 4f;
+    private static final int PHONE_INPUT_BUFFER_LENGTH = 32;
 
     private final FigmaConfig figmaConfig = new FigmaConfig(REFERENCE_WIDTH);
     private final ZLayerGroup layerGroup = new ZLayerGroup(this);
@@ -123,6 +125,7 @@ public class PhoneNumberLoginView extends View {
     private int selectedPhoneMaxLength = 10;
     private String savedPhoneNumber = "";
     private boolean settingCountryText;
+    private boolean formattingPhoneNumber;
     private float contentTranslationY;
     private OnNextListener nextListener;
     private int statusBarInset;
@@ -179,7 +182,7 @@ public class PhoneNumberLoginView extends View {
 
     public String getFullPhoneNumber() {
         return selectedCountryCode.replace("+", "")
-                + getPhoneNumber().replaceAll("\\s+", "");
+                + digitsOnly(getPhoneNumber());
     }
 
     public String getSelectedRegionCode() {
@@ -382,8 +385,8 @@ public class PhoneNumberLoginView extends View {
         phoneNumberField = new TextField.Builder(getContext(), "phone_number_field",
                 cardPosition(card, 63.380f, 524.789f), new Size(813.803f, 147.042f))
                 .setHint(selectedPhoneHint)
-                .setText(savedPhoneNumber)
-                .setMaxLength(selectedPhoneMaxLength)
+                .setText(formatNationalInput(savedPhoneNumber))
+                .setMaxLength(PHONE_INPUT_BUFFER_LENGTH)
                 .setInputType(InputType.TYPE_CLASS_PHONE)
                 .setImeOptions(EditorInfo.IME_ACTION_DONE)
                 .setFont(NativeFonts.INTER)
@@ -403,7 +406,10 @@ public class PhoneNumberLoginView extends View {
                     updateFocusedFieldAppearance();
                     post(this::updateKeyboardTranslation);
                 })
-                .setOnTextChangedListener((id, text) -> clearPhoneError())
+                .setOnTextChangedListener((id, text) -> {
+                    clearPhoneError();
+                    formatPhoneField(text);
+                })
                 .build(this);
         loginCardContent.add(phoneNumberField);
         phoneCountryCodeText = new Text.Builder(getContext(), "phone_country_code", selectedCountryCode,
@@ -678,7 +684,9 @@ public class PhoneNumberLoginView extends View {
         if (phoneCountryCodeText != null) phoneCountryCodeText.setText(selectedCountryCode);
         if (phoneNumberField != null) {
             phoneNumberField.setHint(selectedPhoneHint);
-            phoneNumberField.setMaxLength(selectedPhoneMaxLength);
+            String formatted = formatNationalInput(phoneNumberField.getText());
+            phoneNumberField.setText(formatted);
+            phoneNumberField.setSelection(formatted.length());
         }
         if (countryPopupWindow != null) countryPopupWindow.dismiss();
         hideKeyboard();
@@ -712,6 +720,52 @@ public class PhoneNumberLoginView extends View {
         selectedPhoneHint = internationalExample.startsWith(callingCode)
                 ? internationalExample.substring(callingCode.length()).trim()
                 : nationalDigits;
+    }
+
+    private void formatPhoneField(String rawValue) {
+        if (formattingPhoneNumber || phoneNumberField == null) return;
+        String formatted = formatNationalInput(rawValue);
+        if (formatted.equals(rawValue)) return;
+        formattingPhoneNumber = true;
+        phoneNumberField.setText(formatted);
+        phoneNumberField.setSelection(formatted.length());
+        formattingPhoneNumber = false;
+    }
+
+    private String formatNationalInput(String rawValue) {
+        String source = rawValue == null ? "" : rawValue.trim().replace("<plus>", "+");
+        String digits;
+        if (source.startsWith("+")) {
+            try {
+                Phonenumber.PhoneNumber parsed = phoneNumberUtil.parse(source, selectedRegionCode);
+                digits = phoneNumberUtil.getNationalSignificantNumber(parsed);
+            } catch (Exception ignored) {
+                digits = digitsOnly(source);
+                String callingCode = digitsOnly(selectedCountryCode);
+                if (digits.startsWith(callingCode)) digits = digits.substring(callingCode.length());
+            }
+        } else {
+            digits = digitsOnly(source);
+        }
+        if (digits.length() > selectedPhoneMaxLength) {
+            digits = digits.substring(0, selectedPhoneMaxLength);
+        }
+        AsYouTypeFormatter formatter = phoneNumberUtil.getAsYouTypeFormatter(selectedRegionCode);
+        String formatted = "";
+        for (int i = 0; i < digits.length(); i++) {
+            formatted = formatter.inputDigit(digits.charAt(i));
+        }
+        return formatted;
+    }
+
+    private static String digitsOnly(String value) {
+        String source = value == null ? "" : value;
+        StringBuilder digits = new StringBuilder(source.length());
+        for (int i = 0; i < source.length(); i++) {
+            char c = source.charAt(i);
+            if (Character.isDigit(c)) digits.append(c);
+        }
+        return digits.toString();
     }
 
     private String selectedCountryDisplayName() {

@@ -25,6 +25,9 @@ import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.R;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /** Overflow menu shown from the three-dot action on the home screen. */
 public final class HomeMenuDialogView extends View {
     private static final float FIGMA_WIDTH = 1080f;
@@ -36,6 +39,7 @@ public final class HomeMenuDialogView extends View {
         void onLinkedDevices();
         void onSettings();
     }
+    public interface ActionHandler { void onAction(int index); }
 
     private final FigmaConfig figmaConfig = new FigmaConfig(FIGMA_WIDTH);
     private final ZLayerGroup layers = new ZLayerGroup(this);
@@ -47,11 +51,28 @@ public final class HomeMenuDialogView extends View {
     private final Bitmap linkedDevices = resourceBitmap(R.drawable.home_menu_linked_devices);
     private final Bitmap settings = resourceBitmap(R.drawable.home_menu_settings);
     private final Listener listener;
+    private final List<String> customActions;
+    private final ActionHandler actionHandler;
     private RectF menuBounds = new RectF();
 
     public HomeMenuDialogView(@NonNull Context context, @NonNull Listener listener) {
         super(context);
         this.listener = listener;
+        this.customActions = null;
+        this.actionHandler = null;
+        initialize();
+    }
+
+    public HomeMenuDialogView(@NonNull Context context, @NonNull List<String> actions,
+                              @NonNull ActionHandler handler) {
+        super(context);
+        this.listener = null;
+        this.customActions = new ArrayList<>(actions);
+        this.actionHandler = handler;
+        initialize();
+    }
+
+    private void initialize() {
         setClickable(true);
         setFocusableInTouchMode(true);
         setLayerType(LAYER_TYPE_SOFTWARE, null);
@@ -84,7 +105,8 @@ public final class HomeMenuDialogView extends View {
         menuLayer.clear();
         float scale = figmaConfig.getScale(hostWidth);
         float menuWidth = 397f * scale;
-        float menuHeight = 600f * scale;
+        float menuHeight = (customActions == null ? 600f
+                : 50f + customActions.size() * 137f) * scale;
         float left = hostWidth - 40f * scale - menuWidth;
         WindowInsetsCompat windowInsets = ViewCompat.getRootWindowInsets(this);
         Insets statusBars = windowInsets == null ? Insets.NONE
@@ -92,6 +114,14 @@ public final class HomeMenuDialogView extends View {
         float top = statusBars.top + 154f * scale;
         menuBounds.set(left, top, left + menuWidth, top + menuHeight);
 
+        if (customActions != null) {
+            for (int index = 0; index < customActions.size(); index++) {
+                final int selected = index;
+                addTextOption("custom_" + index, customActions.get(index),
+                        25f + index * 137f, () -> actionHandler.onAction(selected));
+            }
+            return;
+        }
         addOption("new_chat", newChat, R.string.new_chat, 25f, false,
                 () -> listener.onNewChat());
         addOption("new_group", newGroup, R.string.new_group, 162f, false,
@@ -100,6 +130,23 @@ public final class HomeMenuDialogView extends View {
                 () -> listener.onLinkedDevices());
         addOption("settings", settings, R.string.settings, 436f, false,
                 () -> listener.onSettings());
+    }
+
+    private void addTextOption(String id, String label, float rowTop, Runnable action) {
+        float scale = figmaConfig.getScale(getWidth());
+        float top = menuBounds.top + rowTop * scale;
+        menuLayer.add(new Text.Builder(getContext(), id + "_label", label,
+                new RectF(menuBounds.left + 40f * scale, top + 39f * scale,
+                        menuBounds.right - 24f * scale, top + 87f * scale))
+                .setFont(NativeFonts.INTER).setFontVariations(FontVariation.MEDIUM)
+                .setTextSizePx(34f * scale).setTextColor(TEXT_COLOR)
+                .setAlignment(Text.Alignment.START)
+                .setVerticalAlignment(Text.VerticalAlignment.CENTER).setMaxLines(1));
+        menuLayer.add(new Button.Builder(getContext(), id + "_touch", transparent, "",
+                new RectF(menuBounds.left, top, menuBounds.right, top + 137f * scale))
+                .setImageScaleType(Image.ScaleType.FIT_XY).setRippleEnabled(true)
+                .setWaitForRippleBeforeClick(true).setRippleColor(0x12019CC4)
+                .setOnClickListener(value -> { dismissIfShowing(); action.run(); }));
     }
 
     private void addOption(String id, Bitmap icon, int labelResource, float rowTop,
