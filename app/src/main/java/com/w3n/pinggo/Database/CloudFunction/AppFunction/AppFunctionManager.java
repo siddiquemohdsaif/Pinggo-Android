@@ -186,6 +186,10 @@ public class AppFunctionManager {
     ChatHandler.getBlockStatus(appApi, phoneNumber, chatId, callback);
   }
 
+  public void getBlockedAccounts(String phoneNumber, Callback callback) {
+    ChatHandler.getBlockedAccounts(appApi, phoneNumber, callback);
+  }
+
   public void createGroup(String userId, String name, String description,
                           List<String> memberIds, Callback callback) {
     GroupHandler.create(appApi, userId, name, description, memberIds, callback);

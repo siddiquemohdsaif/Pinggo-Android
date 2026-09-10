@@ -192,6 +192,18 @@ public class ChatHandler {
         if (body != null) enqueueChatCall(appApi.getBlockStatus(body), callback);
     }
 
+    public static void getBlockedAccounts(AppRestAPI appApi, String phoneNumber,
+                                          AppFunctionManager.Callback callback) {
+        JSONObject body = new JSONObject();
+        try {
+            body.put("phoneNumber", normalizePhoneNumber(phoneNumber));
+        } catch (JSONException error) {
+            handleJsonError(error, callback);
+            return;
+        }
+        enqueueChatCall(appApi.getBlockedAccounts(createJsonBody(body)), callback);
+    }
+
     private static RequestBody chatIdentityBody(String phoneNumber, String chatId,
                                                 AppFunctionManager.Callback callback) {
         JSONObject body = new JSONObject();

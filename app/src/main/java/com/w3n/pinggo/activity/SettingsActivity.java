@@ -24,6 +24,9 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.ProfilePhotoLocalStore;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.data.local.SessionLogoutManager;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.w3n.pinggo.contacts.DeviceContactResolver;
 import com.w3n.pinggo.modals.UserData;
 import com.w3n.pinggo.views.common.NativeCropDialogView;
 import com.w3n.pinggo.views.common.NativePromptDialogView;
@@ -32,9 +35,8 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
+import java.util.ArrayList;
 
 public class SettingsActivity extends AppCompatActivity implements SettingsView.Listener {
   private SettingsView settingsView;
@@ -135,19 +137,33 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
 
   @Override
   public void onPrivacy() {
-    Map<String, ?> values = getSharedPreferences("chat_menu_state", MODE_PRIVATE).getAll();
-    List<String> blocked = new ArrayList<>();
-    for (Map.Entry<String, ?> entry : values.entrySet()) {
-      if (entry.getKey().startsWith("blocked:") && Boolean.TRUE.equals(entry.getValue())) {
-        String id = entry.getKey().substring("blocked:".length());
-        if (!id.trim().isEmpty()) blocked.add(id);
-      }
-    }
-    java.util.Collections.sort(blocked);
-    String message = blocked.isEmpty() ? "No blocked accounts."
-        : android.text.TextUtils.join("\n", blocked);
-    showPrompt(NativePromptDialogView.message(this, "Blocked accounts", message,
+    showPrompt(NativePromptDialogView.message(this, "Blocked accounts", "Loading…",
         this::removePrompt));
+    AppFunctionManager.getInstance().getBlockedAccounts(phone, new AppFunctionManager.Callback() {
+      @Override public void onSuccess(Object value) {
+        JsonObject root = value instanceof JsonObject ? (JsonObject) value : null;
+        JsonArray accounts = root != null && root.has("blockedAccounts")
+            && root.get("blockedAccounts").isJsonArray()
+            ? root.getAsJsonArray("blockedAccounts") : new JsonArray();
+        List<String> labels = new ArrayList<>();
+        for (JsonElement element : accounts) {
+          if (element == null || !element.isJsonObject()) continue;
+          JsonObject account = element.getAsJsonObject();
+          String id = account.has("userId") ? account.get("userId").getAsString() : "";
+          if (!id.trim().isEmpty()) labels.add(DeviceContactResolver.cachedNameOrPhone(id));
+        }
+        String message = labels.isEmpty() ? "No blocked accounts."
+            : android.text.TextUtils.join("\n", labels);
+        runOnUiThread(() -> showPrompt(NativePromptDialogView.message(
+            SettingsActivity.this, "Blocked accounts", message, SettingsActivity.this::removePrompt)));
+      }
+
+      @Override public void onError(String error) {
+        runOnUiThread(() -> showPrompt(NativePromptDialogView.message(SettingsActivity.this,
+            "Blocked accounts", error == null ? "Unable to load blocked accounts." : error,
+            SettingsActivity.this::removePrompt)));
+      }
+    });
   }
 
   @Override

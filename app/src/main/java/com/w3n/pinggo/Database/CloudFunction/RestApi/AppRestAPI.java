@@ -97,6 +97,9 @@ public interface AppRestAPI {
   @POST("chats/block-status")
   Call<JsonObject> getBlockStatus(@Body RequestBody body);
 
+  @POST("chats/blocked-accounts")
+  Call<JsonObject> getBlockedAccounts(@Body RequestBody body);
+
   @POST("groups/create") Call<JsonObject> createGroup(@Body RequestBody body);
   @POST("groups/get") Call<JsonObject> getGroup(@Body RequestBody body);
   @POST("groups/details") Call<JsonObject> getGroupDetails(@Body RequestBody body);
