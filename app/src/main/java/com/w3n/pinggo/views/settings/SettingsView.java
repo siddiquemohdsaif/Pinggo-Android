@@ -31,8 +31,11 @@ public final class SettingsView extends View {
   private Bitmap profileBitmap;
   private Image profileImage;
   private Text nameValue, phoneValue;
+  private String currentName = "";
+  private String currentPhone = "";
   private Button logout;
   private int topInset, bottomInset;
+  private boolean profileMode;
 
   public SettingsView(Context c, Listener l) {
     super(c);
@@ -48,8 +51,10 @@ public final class SettingsView extends View {
   }
 
   public void setValues(String name, String phone) {
-    if (nameValue != null) nameValue.setText(value(name));
-    if (phoneValue != null) phoneValue.setText(value(phone));
+    currentName = name == null ? "" : name;
+    currentPhone = phone == null ? "" : phone;
+    if (nameValue != null) nameValue.setText(value(currentName));
+    if (phoneValue != null) phoneValue.setText(value(currentPhone));
     invalidate();
   }
 
@@ -64,6 +69,18 @@ public final class SettingsView extends View {
     invalidate();
   }
 
+  public boolean isProfileMode() { return profileMode; }
+
+  public void showProfile() {
+    profileMode = true;
+    if (getWidth() > 0) build();
+  }
+
+  public void showSettings() {
+    profileMode = false;
+    if (getWidth() > 0) build();
+  }
+
   @Override
   protected void onSizeChanged(int w, int h, int ow, int oh) {
     super.onSizeChanged(w, h, ow, oh);
@@ -73,6 +90,15 @@ public final class SettingsView extends View {
   private void build() {
     bg.clear();
     content.clear();
+    logout = null;
+    if (!profileMode) {
+      buildSettings();
+      return;
+    }
+    buildProfile();
+  }
+
+  private void buildProfile() {
     float w = getWidth(), top = topInset + px(27.5f);
     bg.add(
         new Image.Builder(getContext(), "bg", white, new RectF(0, 0, w, getHeight()))
@@ -86,7 +112,7 @@ public final class SettingsView extends View {
         id -> listener.onBack());
     text(
         "title",
-        "Settings",
+        "Profile",
         new RectF(px(176f), top, w - px(55f), top + px(132f)),
         sp(24),
         PRIMARY,
@@ -110,21 +136,62 @@ public final class SettingsView extends View {
         id -> listener.onPhoto());
     float row = photoTop + px(627f);
     nameValue = addRow("name", "Name", row, id -> listener.onName());
+    nameValue.setText(value(currentName));
     row += px(225.5f);
     phoneValue = addRow("phone", "Phone number", row, id -> listener.onPhone());
-    logout =
-        button(
-            "logout",
-            danger,
-            "Log out",
-            new RectF(
-                px(66f),
-                getHeight() - bottomInset - px(209f),
-                w - px(66f),
-                getHeight() - bottomInset - px(55f)),
-            Color.WHITE,
-            id -> listener.onLogout());
+    phoneValue.setText(value(currentPhone));
     invalidate();
+  }
+
+  private void buildSettings() {
+    float w = getWidth(), top = topInset + px(27.5f);
+    bg.add(new Image.Builder(getContext(), "bg", white, new RectF(0, 0, w, getHeight()))
+        .setScaleType(Image.ScaleType.FIT_XY));
+    button("back", white, "‹", new RectF(px(22f), top, px(154f), top + px(132f)),
+        PRIMARY, id -> listener.onBack());
+    text("title", "Settings", new RectF(px(176f), top, w - px(180f), top + px(132f)),
+        sp(24), PRIMARY, FontVariation.BOLD);
+    button("edit_profile", white, "✎", new RectF(w - px(165f), top, w - px(22f), top + px(132f)),
+        PRIMARY, id -> listener.onEditProfile());
+
+    float profileTop = top + px(154f);
+    profileImage = content.add(new Image.Builder(getContext(), "settings_photo",
+        profileBitmap == null ? placeholder() : profileBitmap,
+        new RectF(px(55f), profileTop, px(253f), profileTop + px(198f)))
+        .setScaleType(Image.ScaleType.CENTER_CROP)
+        .setOnClickListener(id -> listener.onEditProfile()));
+    nameValue = text("settings_name", value(currentName), new RectF(px(286f), profileTop + px(22f),
+        w - px(44f), profileTop + px(99f)), sp(21), PRIMARY, FontVariation.SEMI_BOLD);
+    phoneValue = text("settings_phone", value(currentPhone), new RectF(px(286f), profileTop + px(96f),
+        w - px(44f), profileTop + px(165f)), sp(14), SECONDARY, FontVariation.REGULAR);
+    content.add(new Image.Builder(getContext(), "profile_line", line,
+        new RectF(px(44f), profileTop + px(225f), w - px(44f), profileTop + px(228f)))
+        .setScaleType(Image.ScaleType.FIT_XY));
+
+    float row = profileTop + px(264f);
+    addMenuRow("linked", "▣", "Linked devices", "Use PingGo on other devices", row,
+        id -> listener.onLinkedDevices());
+    row += px(209f);
+    addMenuRow("account", "⚿", "Account", "Log out", row, id -> listener.onAccount());
+    row += px(209f);
+    addMenuRow("privacy", "▢", "Privacy", "Blocked accounts", row, id -> listener.onPrivacy());
+    row += px(209f);
+    addMenuRow("invite", "♧", "Invite a friend", "Share PingGo with friends", row,
+        id -> listener.onInvite());
+    invalidate();
+  }
+
+  private void addMenuRow(String id, String icon, String title, String subtitle, float top,
+      Button.OnClickListener click) {
+    float w = getWidth();
+    button(id, white, "", new RectF(px(33f), top, w - px(33f), top + px(187f)), PRIMARY, click);
+    text(id + "_icon", icon, new RectF(px(66f), top + px(33f), px(209f), top + px(154f)),
+        sp(25), SECONDARY, FontVariation.REGULAR);
+    text(id + "_title", title, new RectF(px(220f), top + px(22f), w - px(55f), top + px(99f)),
+        sp(18), PRIMARY, FontVariation.REGULAR);
+    text(id + "_subtitle", subtitle,
+        new RectF(px(220f), top + px(91f), w - px(55f), top + px(160f)),
+        sp(14), SECONDARY, FontVariation.REGULAR);
   }
 
   private Text addRow(String id, String label, float top, Button.OnClickListener click) {
@@ -244,5 +311,15 @@ public final class SettingsView extends View {
     void onPhone();
 
     void onLogout();
+
+    void onEditProfile();
+
+    void onLinkedDevices();
+
+    void onAccount();
+
+    void onPrivacy();
+
+    void onInvite();
   }
 }

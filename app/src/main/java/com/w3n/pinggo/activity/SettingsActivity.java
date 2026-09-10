@@ -3,6 +3,7 @@ package com.w3n.pinggo.activity;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
+import android.content.Intent;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.ViewGroup;
@@ -31,6 +32,9 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 public class SettingsActivity extends AppCompatActivity implements SettingsView.Listener {
   private SettingsView settingsView;
@@ -98,7 +102,61 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
 
   @Override
   public void onBack() {
+    if (settingsView.isProfileMode()) {
+      settingsView.showSettings();
+      refresh();
+      return;
+    }
     finish();
+  }
+
+  @Override
+  public void onBackPressed() {
+    onBack();
+  }
+
+  @Override
+  public void onEditProfile() {
+    settingsView.showProfile();
+    refresh();
+  }
+
+  @Override
+  public void onLinkedDevices() {
+    startActivity(new Intent(this, LinkedDevicesActivity.class));
+  }
+
+  @Override
+  public void onAccount() {
+    showPrompt(NativePromptDialogView.confirm(this, "Log out?",
+        "You will need to sign in again to use this account.", "Log out",
+        this::onLogout, this::removePrompt));
+  }
+
+  @Override
+  public void onPrivacy() {
+    Map<String, ?> values = getSharedPreferences("chat_menu_state", MODE_PRIVATE).getAll();
+    List<String> blocked = new ArrayList<>();
+    for (Map.Entry<String, ?> entry : values.entrySet()) {
+      if (entry.getKey().startsWith("blocked:") && Boolean.TRUE.equals(entry.getValue())) {
+        String id = entry.getKey().substring("blocked:".length());
+        if (!id.trim().isEmpty()) blocked.add(id);
+      }
+    }
+    java.util.Collections.sort(blocked);
+    String message = blocked.isEmpty() ? "No blocked accounts."
+        : android.text.TextUtils.join("\n", blocked);
+    showPrompt(NativePromptDialogView.message(this, "Blocked accounts", message,
+        this::removePrompt));
+  }
+
+  @Override
+  public void onInvite() {
+    Intent share = new Intent(Intent.ACTION_SEND);
+    share.setType("text/plain");
+    share.putExtra(Intent.EXTRA_SUBJECT, "Join me on PingGo");
+    share.putExtra(Intent.EXTRA_TEXT, "Join me on PingGo for private messages and calls.");
+    startActivity(Intent.createChooser(share, "Invite a friend"));
   }
 
   @Override
