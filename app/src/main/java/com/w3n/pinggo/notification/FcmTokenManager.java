@@ -35,6 +35,13 @@ public final class FcmTokenManager {
         uploadIfLoggedIn(appContext, preferences.getString(TOKEN, null));
     }
 
+    public static String getSavedToken(@NonNull Context context) {
+        String token = context.getApplicationContext()
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(TOKEN, "");
+        return token == null ? "" : token.trim();
+    }
+
     private static void uploadIfLoggedIn(Context context, String token) {
         if (token == null || token.isEmpty()
                 || !LoginStateManager.getInstance().isLoggedIn(context)) return;

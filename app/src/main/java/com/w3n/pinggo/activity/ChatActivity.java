@@ -65,6 +65,7 @@ import com.w3n.pinggo.views.chat.ChatView;
 import com.w3n.pinggo.views.chat.ChatViewListener;
 import com.w3n.pinggo.views.chat.ChatPerformanceProfiler;
 import com.w3n.pinggo.views.chat.ConversationMenuDialogView;
+import com.w3n.pinggo.views.chat.EmojiDrawerView;
 import com.w3n.pinggo.call.ActiveCallRegistry;
 import com.w3n.pinggo.views.common.NativePromptDialogView;
 import com.w3n.pinggo.views.ImagePreviewView;
@@ -121,6 +122,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private final Handler typingHandler = new Handler(Looper.getMainLooper());
   private long lastSocketErrorToastAt;
   private ChatView chatView;
+  private EmojiDrawerView emojiDrawer;
   private boolean groupMemberActive = true;
   private boolean groupSendingAllowed = true;
   private ImagePreviewView imagePreviewView;
@@ -411,6 +413,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
             }
             if (chatView != null && chatView.dismissSearch())
               return;
+            if (emojiDrawer != null) {
+              closeEmojiDrawer();
+              return;
+            }
             if (chatView != null && chatView.dismissAttachmentPanel())
               return;
             if (chatView != null && chatView.clearMessageSelection())
@@ -2479,6 +2485,39 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   @Override
+  public void onEmojiRequested() {
+    if (contactBlocked || !requireGroupSendPermission()) return;
+    if (emojiDrawer != null) {
+      closeEmojiDrawer();
+      return;
+    }
+    emojiDrawer = new EmojiDrawerView(this, new EmojiDrawerView.Listener() {
+      @Override public void onEmojiSelected(String emoji) {
+        if (emoji == null || emoji.isEmpty() || contactBlocked || !requireGroupSendPermission()) return;
+        chatView.appendDraftWithoutFocus(emoji);
+      }
+
+      @Override public void onDismiss() { closeEmojiDrawer(); }
+    });
+    chatView.setEmojiPanelVisible(true);
+    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT, chatView.getEmojiPanelHeight());
+    params.gravity = android.view.Gravity.BOTTOM;
+    params.bottomMargin = chatView.getEmojiPanelBottomInset();
+    ((ViewGroup) findViewById(android.R.id.content)).addView(emojiDrawer, params);
+  }
+
+  private void closeEmojiDrawer() {
+    EmojiDrawerView current = emojiDrawer;
+    emojiDrawer = null;
+    if (current == null) return;
+    if (chatView != null) chatView.setEmojiPanelVisible(false);
+    if (current.getParent() instanceof ViewGroup)
+      ((ViewGroup) current.getParent()).removeView(current);
+    current.release();
+  }
+
+  @Override
   public void onMessageInfoSelected(MessageEntity message) {
     if (message == null || !currentUser.equals(normalize(message.senderId))) return;
     NativePromptDialogView info = NativePromptDialogView.info(this, "Message info",
@@ -3749,6 +3788,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   protected void onDestroy() {
+    closeEmojiDrawer();
     closeImagePreview();
     closeVideoPreview();
     closeSelectedMediaPreview();

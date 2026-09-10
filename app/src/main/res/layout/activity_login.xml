@@ -23,6 +23,15 @@
         android:clickable="false"
         android:importantForAccessibility="no" />
 
+    <Button
+        android:id="@+id/link_as_companion"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="24dp"
+        android:text="@string/link_as_companion_device"
+        android:textAllCaps="false" />
+
     <com.w3n.pinggo.views.common.BlockingProgressView
         android:id="@+id/blocking_progress"
         android:layout_width="match_parent"

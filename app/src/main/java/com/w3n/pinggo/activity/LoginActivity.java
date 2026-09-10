@@ -6,6 +6,8 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
 import android.view.ViewGroup;
+import android.content.Intent;
+import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
@@ -19,9 +21,12 @@ import androidx.fragment.app.Fragment;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.fragment.login.PhoneNumberFragment;
 import com.w3n.pinggo.views.common.ExitAppController;
+import com.w3n.pinggo.data.local.SessionLogoutManager;
 
 /** Hosts the fragments that make up the login flow. */
 public class LoginActivity extends AppCompatActivity {
+    public static final String EXTRA_LOGOUT_MESSAGE = "logoutMessage";
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -29,6 +34,16 @@ public class LoginActivity extends AppCompatActivity {
         setContentView(R.layout.activity_login);
         installStatusBarScrim();
         ExitAppController.install(this, getSupportFragmentManager());
+        findViewById(R.id.link_as_companion).setOnClickListener(view ->
+                startActivity(new Intent(this, CompanionLinkActivity.class)));
+        String logoutMessage = getIntent().getStringExtra(EXTRA_LOGOUT_MESSAGE);
+        String pendingMessage = SessionLogoutManager.consumeLogoutMessage(this);
+        if (logoutMessage == null || logoutMessage.trim().isEmpty()) {
+            logoutMessage = pendingMessage;
+        }
+        if (logoutMessage != null && !logoutMessage.trim().isEmpty()) {
+            Toast.makeText(this, logoutMessage.trim(), Toast.LENGTH_LONG).show();
+        }
     }
 
     private void configureSystemBars() {

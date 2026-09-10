@@ -14,6 +14,10 @@ public class LoginStateManager {
     private static final String PREF_UID = "UID";
     private static final String PREF_ENC = "ENC";
     private static final String PREF_USER_DATA = "USER_DATA";
+    private static final String PREF_DEVICE_ROLE = "DEVICE_ROLE";
+    private static final String PREF_LOGIN_AT = "LOGIN_AT";
+    private static final String ROLE_PRIMARY = "primary";
+    private static final String ROLE_COMPANION = "companion";
     private static String UID = null;
     private static String ENC = null;
     private static String USER_DATA = null;
@@ -55,7 +59,7 @@ public class LoginStateManager {
 
     public void setLogin(Context context, String UID, String ENC, UserData userData) {
         String userDataJson = userData == null ? null : userData.toJson();
-        setLoginData(context, UID, ENC, userDataJson, userData);
+        setLoginData(context, UID, ENC, userDataJson, userData, ROLE_PRIMARY, true);
 
 //        FirebaseMessaging.getInstance().getToken()
 //                .addOnCompleteListener(task -> {
@@ -73,6 +77,27 @@ public class LoginStateManager {
 //                });
     }
 
+    public void setCompanionLogin(Context context, String UID, String ENC) {
+        setCompanionLogin(context, UID, ENC, null);
+    }
+
+    public void setCompanionLogin(Context context, String UID, String ENC, UserData userData) {
+        UserData accountData = userData == null ? new UserData() : userData;
+        accountData.setId(UID);
+        accountData.setEncryptedCredential(ENC);
+        accountData.setPhoneNumber(UID);
+        UserData.ProfileData profileData = accountData.getProfileData();
+        if (profileData == null) {
+            profileData = new UserData.ProfileData();
+            accountData.setProfileData(profileData);
+        }
+        if (profileData.getPhoneNumber() == null || profileData.getPhoneNumber().trim().isEmpty()) {
+            profileData.setPhoneNumber(UID);
+        }
+        setLoginData(context, UID, ENC, accountData.toJson(), accountData,
+                ROLE_COMPANION, true);
+    }
+
     public void setUserData(Context context, UserData userData) {
         String uid = userData == null || userData.getId() == null ? getUID(context) : userData.getId();
         String enc = userData == null || userData.getEncryptedCredential() == null ? getENC(context) : userData.getEncryptedCredential();
@@ -84,16 +109,20 @@ public class LoginStateManager {
             }
         }
         String userDataJson = userData == null ? null : userData.toJson();
-        setLoginData(context, uid, enc, userDataJson, userData);
+        setLoginData(context, uid, enc, userDataJson, userData, getDeviceRole(context), false);
     }
 
-    private void setLoginData(Context context, String UID, String ENC, String userDataJson, UserData userData) {
+    private void setLoginData(Context context, String UID, String ENC, String userDataJson,
+                              UserData userData, String deviceRole, boolean refreshLoginTime) {
         SharedPreferences sharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        sharedPreferences.edit()
+        SharedPreferences.Editor editor = sharedPreferences.edit()
                 .putString(PREF_UID, UID)
                 .putString(PREF_ENC, ENC)
                 .putString(PREF_USER_DATA, userDataJson)
-                .commit();
+                .putString(PREF_DEVICE_ROLE, ROLE_COMPANION.equals(deviceRole)
+                        ? ROLE_COMPANION : ROLE_PRIMARY);
+        if (refreshLoginTime) editor.putLong(PREF_LOGIN_AT, System.currentTimeMillis());
+        editor.commit();
         LoginStateManager.UID = UID;
         LoginStateManager.ENC = ENC;
         LoginStateManager.USER_DATA = userDataJson;
@@ -108,6 +137,8 @@ public class LoginStateManager {
                 .putString(PREF_UID, null)
                 .putString(PREF_ENC, null)
                 .putString(PREF_USER_DATA, null)
+                .putString(PREF_DEVICE_ROLE, null)
+                .putLong(PREF_LOGIN_AT, 0L)
                 .apply();
         UID = null;
         ENC = null;
@@ -138,6 +169,20 @@ public class LoginStateManager {
             USER_DATA = sharedPreferences.getString(PREF_USER_DATA, null);
         }
         return USER_DATA;
+    }
+
+    public String getDeviceRole(Context context) {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(PREF_DEVICE_ROLE, ROLE_PRIMARY);
+    }
+
+    public boolean isCompanionDevice(Context context) {
+        return ROLE_COMPANION.equals(getDeviceRole(context));
+    }
+
+    public long getLoginAt(Context context) {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getLong(PREF_LOGIN_AT, 0L);
     }
 
     public UserData getUserDataModal(Context context) {

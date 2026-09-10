@@ -114,12 +114,39 @@ public interface AppRestAPI {
   @POST("profile/updateFcmToken")
   Call<JsonObject> updateFcmToken(@Body RequestBody body);
 
+  @GET("devices")
+  Call<JsonObject> getLinkedDevices();
+
+  @POST("devices/register")
+  Call<JsonObject> registerLinkedDevice(@Body JsonObject body);
+
+  @POST("devices/logout-account")
+  Call<JsonObject> logoutAccount(@Body JsonObject body);
+
+  @DELETE("devices/{deviceId}")
+  Call<JsonObject> unlinkDevice(@Path("deviceId") String deviceId);
+
+  @POST("device-links")
+  Call<JsonObject> createDeviceLink(@Body JsonObject body);
+
+  @POST("device-links/{linkRequestId}/approve")
+  Call<JsonObject> approveDeviceLink(@Path("linkRequestId") String linkRequestId,
+      @Body JsonObject body);
+
+  @POST("device-links/{linkRequestId}/status")
+  Call<JsonObject> getDeviceLinkStatus(@Path("linkRequestId") String linkRequestId,
+      @Body JsonObject body);
+
+  @POST("device-links/{linkRequestId}/complete")
+  Call<JsonObject> completeDeviceLink(@Path("linkRequestId") String linkRequestId,
+      @Body JsonObject body);
+
   @Multipart
   @POST("chats/attachments")
   Call<JsonObject> uploadChatAttachment(
-      @Part MultipartBody.Part file,
-      @Part("chatId") RequestBody chatId,
-      @Part("kind") RequestBody kind);
+          @Part MultipartBody.Part file,
+          @Part("chatId") RequestBody chatId,
+          @Part("kind") RequestBody kind);
 
   @POST("chats/attachments/init")
   Call<JsonObject> initChatAttachment(@Body RequestBody body);
@@ -127,18 +154,18 @@ public interface AppRestAPI {
   @Multipart
   @POST("chats/attachments/{uploadId}/chunks/{index}")
   Call<JsonObject> uploadChatAttachmentChunk(
-      @Path("uploadId") String uploadId,
-      @Path("index") int index,
-      @Part MultipartBody.Part chunk,
-      @Part("chunkHash") RequestBody chunkHash);
+          @Path("uploadId") String uploadId,
+          @Path("index") int index,
+          @Part MultipartBody.Part chunk,
+          @Part("chunkHash") RequestBody chunkHash);
 
   @GET("chats/attachments/{uploadId}/status")
   Call<JsonObject> getChatAttachmentStatus(@Path("uploadId") String uploadId);
 
   @POST("chats/attachments/{uploadId}/complete")
   Call<JsonObject> completeChatAttachment(
-      @Path("uploadId") String uploadId,
-      @Body RequestBody body);
+          @Path("uploadId") String uploadId,
+          @Body RequestBody body);
 
   @DELETE("chats/attachments/{uploadId}")
   Call<JsonObject> cancelChatAttachment(@Path("uploadId") String uploadId);

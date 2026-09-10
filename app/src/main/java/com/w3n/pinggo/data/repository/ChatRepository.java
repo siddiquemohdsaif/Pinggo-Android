@@ -30,6 +30,7 @@ import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.RestApi.APIAuth;
 import com.w3n.pinggo.Database.CloudFunction.RestApi.AppRestAPI;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
+import com.w3n.pinggo.Database.CloudFunction.Utils.DeviceIdentityManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.Database.CloudFunction.WebSocket.ChatWebSocketClient;
@@ -38,6 +39,7 @@ import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.local.MessageStatus;
 import com.w3n.pinggo.data.local.ChatDao;
 import com.w3n.pinggo.data.local.ChatEntity;
+import com.w3n.pinggo.data.local.SessionLogoutManager;
 import com.w3n.pinggo.data.local.PresenceDao;
 import com.w3n.pinggo.data.local.PresenceEntity;
 import com.w3n.pinggo.data.local.PingGoDatabase;
@@ -73,6 +75,7 @@ import retrofit2.Callback;
 import retrofit2.Response;
 
 public class ChatRepository implements ChatWebSocketClient.Listener {
+    public interface DeviceEventListener { void onDevicesChanged(); }
     private static final String PERF_TAG = "ChatsRepoPerf";
     private static final String TESTING_TAG = "PARVEZ_TESTING";
     private static final long ATTACHMENT_CHUNK_SIZE = 3L * 1024L * 1024L;
@@ -183,8 +186,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     private final Map<String, Map<String, MessageEntity>> temporaryReplyTargets =
             new java.util.LinkedHashMap<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private int historySyncRetryAttempts;
+    private Runnable historySyncRetryTask;
     private final ChatWebSocketClient socketClient;
     private EventListener eventListener;
+    private DeviceEventListener deviceEventListener;
     private String chatListPhoneNumber = "";
     private String nextChatListCursor;
     private boolean chatListHasMore;
@@ -670,10 +676,14 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             return;
         }
         Log.i("PingGoCallTrace", "socket_connect_requested userId=" + currentUserId);
-        socketClient.connect(currentUserId, encryptedCredential);
+        socketClient.connect(currentUserId, encryptedCredential,
+                DeviceIdentityManager.getDeviceId(appContext));
     }
 
     public void disconnect() {
+        if (historySyncRetryTask != null) mainHandler.removeCallbacks(historySyncRetryTask);
+        historySyncRetryTask = null;
+        historySyncRetryAttempts = 0;
         socketClient.disconnect();
     }
 
@@ -1686,6 +1696,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     if (messages == null) {
                         return;
                     }
+                    historySyncRetryAttempts = 0;
+                    historySyncRetryTask = null;
                     List<MessageEntity> entities = new ArrayList<>();
                     for (JsonElement element : messages) {
                         if (element != null && element.isJsonObject()) {
@@ -1709,9 +1721,18 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 @Override
                 public void onError(String error) {
                     notifySocketError(error);
+                    scheduleHistorySyncRetry(phoneNumber);
                 }
             });
         });
+    }
+
+    private void scheduleHistorySyncRetry(String phoneNumber) {
+        long delayMs = Math.min(30000L, 2000L << Math.min(historySyncRetryAttempts, 4));
+        historySyncRetryAttempts++;
+        if (historySyncRetryTask != null) mainHandler.removeCallbacks(historySyncRetryTask);
+        historySyncRetryTask = () -> syncAfterReconnect(phoneNumber);
+        mainHandler.postDelayed(historySyncRetryTask, delayMs);
     }
 
     public void refreshChatList(String phoneNumber) {
@@ -2125,7 +2146,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         if (token == null || token.trim().isEmpty()) {
             return;
         }
-        appFunctionManager.updateFcmToken(token, new AppFunctionManager.Callback() {
+        appFunctionManager.updateFcmToken(appContext, token, new AppFunctionManager.Callback() {
             @Override
             public void onSuccess(Object object) {
             }
@@ -2205,6 +2226,24 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     @Override
     public void onEvent(JsonObject event) {
         String type = JsonParserUtil.getString(event, "type");
+        if ("account_logout".equals(type) || "auth_failed".equals(type)) {
+            SessionLogoutManager.forceLogout(appContext,
+                    JsonParserUtil.getString(event, "message"));
+            return;
+        }
+        if ("device_unlinked".equals(type)) {
+            String revokedDeviceId = JsonParserUtil.getString(event, "deviceId");
+            String currentDeviceId = DeviceIdentityManager.getDeviceId(appContext);
+            if (!revokedDeviceId.isEmpty() && revokedDeviceId.equals(currentDeviceId)) {
+                SessionLogoutManager.forceLogout(appContext,
+                        JsonParserUtil.getString(event, "message"));
+                return;
+            }
+        }
+        if ("device_linked".equals(type) || "device_unlinked".equals(type)) {
+            DeviceEventListener listener = deviceEventListener;
+            if (listener != null) mainHandler.post(listener::onDevicesChanged);
+        }
         if (type.startsWith("call_") || "ice_candidate".equals(type)) {
             Log.i("PingGoCallTrace", "socket_call_event_received type=" + type
                     + " callId=" + JsonParserUtil.getString(event, "callId")
@@ -2351,6 +2390,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         }
     }
 
+    public void setDeviceEventListener(DeviceEventListener listener) {
+        deviceEventListener = listener;
+    }
+
     private void notifyCallsChanged() {
         EventListener listener = eventListener;
         if (listener != null) mainHandler.post(() -> {
@@ -2386,7 +2429,14 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     @Override
-    public void onClosed() {
+    public void onClosed(int code, String reason) {
+        if (code == 4003) {
+            String logoutMessage = reason != null
+                    && reason.toLowerCase(java.util.Locale.US).contains("unlinked")
+                    ? "This companion device was logged out by the primary device." : "";
+            SessionLogoutManager.forceLogout(appContext, logoutMessage);
+            return;
+        }
         notifyCallSocketDisconnected();
     }
 

@@ -1,6 +1,5 @@
 package com.w3n.pinggo.activity;
 
-import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
@@ -16,10 +15,14 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
+import com.w3n.pinggo.Database.CloudFunction.RestApi.APIAuth;
+import com.w3n.pinggo.Database.CloudFunction.RestApi.AppRestAPI;
+import com.w3n.pinggo.Database.CloudFunction.Utils.DeviceIdentityManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ProfilePhotoLocalStore;
 import com.w3n.pinggo.R;
-import com.w3n.pinggo.data.local.LogoutDataCleaner;
+import com.w3n.pinggo.data.local.SessionLogoutManager;
+import com.google.gson.JsonObject;
 import com.w3n.pinggo.modals.UserData;
 import com.w3n.pinggo.views.common.NativeCropDialogView;
 import com.w3n.pinggo.views.common.NativePromptDialogView;
@@ -276,15 +279,33 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
     settingsView.setLoading(true);
     new Thread(
         () -> {
-          LogoutDataCleaner.clear(this);
-          LoginStateManager.getInstance().logOut(this);
-          runOnUiThread(
-              () -> {
-                Intent i = new Intent(this, LoginActivity.class);
-                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                startActivity(i);
-                finish();
+          try {
+            LoginStateManager login = LoginStateManager.getInstance();
+            String token = login.getUID(this) + "_" + login.getENC(this);
+            AppRestAPI api = new APIAuth(token).getRetrofit().create(AppRestAPI.class);
+            String deviceId = DeviceIdentityManager.getDeviceId(this);
+            retrofit2.Response<JsonObject> response;
+            if (login.isCompanionDevice(this)) {
+              response = api.unlinkDevice(deviceId).execute();
+            } else {
+              JsonObject body = new JsonObject();
+              body.addProperty("deviceId", deviceId);
+              response = api.logoutAccount(body).execute();
+            }
+            if (response.isSuccessful() || response.code() == 401 || response.code() == 404) {
+              SessionLogoutManager.forceLogout(this);
+            } else {
+              runOnUiThread(() -> {
+                settingsView.setLoading(false);
+                Toast.makeText(this, R.string.logout_failed, Toast.LENGTH_LONG).show();
               });
+            }
+          } catch (Exception error) {
+            runOnUiThread(() -> {
+              settingsView.setLoading(false);
+              Toast.makeText(this, R.string.logout_failed, Toast.LENGTH_LONG).show();
+            });
+          }
         })
         .start();
   }

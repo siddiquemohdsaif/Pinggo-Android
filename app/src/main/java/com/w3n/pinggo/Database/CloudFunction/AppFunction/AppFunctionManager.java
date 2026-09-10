@@ -246,8 +246,8 @@ public class AppFunctionManager {
     ChatHandler.syncPresence(appApi, userIds, callback);
   }
 
-  public void updateFcmToken(String token, Callback callback) {
-    ChatHandler.updateFcmToken(appApi, token, callback);
+  public void updateFcmToken(Context context, String token, Callback callback) {
+    ChatHandler.updateFcmToken(context, appApi, token, callback);
   }
 
   public interface Callback {

@@ -1,5 +1,6 @@
 package com.w3n.pinggo.Database.CloudFunction.Utils;
 
+import android.content.Context;
 import androidx.annotation.NonNull;
 
 import com.google.gson.JsonElement;
@@ -221,11 +222,14 @@ public class ChatHandler {
         enqueueChatCall(appApi.syncPresence(createJsonBody(jsonObject)), callback);
     }
 
-    public static void updateFcmToken(AppRestAPI appApi, String token,
+    public static void updateFcmToken(Context context, AppRestAPI appApi, String token,
                                       AppFunctionManager.Callback callback) {
         JSONObject jsonObject = new JSONObject();
         try {
             jsonObject.put("fcmToken", token == null ? "" : token.trim());
+            jsonObject.put("deviceId", DeviceIdentityManager.getDeviceId(context));
+            jsonObject.put("deviceName", DeviceIdentityManager.getDeviceName());
+            jsonObject.put("platform", "android");
         } catch (JSONException e) {
             handleJsonError(e, callback);
             return;

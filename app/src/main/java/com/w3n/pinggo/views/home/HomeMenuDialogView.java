@@ -51,13 +51,20 @@ public final class HomeMenuDialogView extends View {
     private final Bitmap linkedDevices = resourceBitmap(R.drawable.home_menu_linked_devices);
     private final Bitmap settings = resourceBitmap(R.drawable.home_menu_settings);
     private final Listener listener;
+    private final boolean includeLinkedDevices;
     private final List<String> customActions;
     private final ActionHandler actionHandler;
     private RectF menuBounds = new RectF();
 
     public HomeMenuDialogView(@NonNull Context context, @NonNull Listener listener) {
+        this(context, listener, true);
+    }
+
+    public HomeMenuDialogView(@NonNull Context context, @NonNull Listener listener,
+                              boolean includeLinkedDevices) {
         super(context);
         this.listener = listener;
+        this.includeLinkedDevices = includeLinkedDevices;
         this.customActions = null;
         this.actionHandler = null;
         initialize();
@@ -67,6 +74,7 @@ public final class HomeMenuDialogView extends View {
                               @NonNull ActionHandler handler) {
         super(context);
         this.listener = null;
+        this.includeLinkedDevices = false;
         this.customActions = new ArrayList<>(actions);
         this.actionHandler = handler;
         initialize();
@@ -105,7 +113,7 @@ public final class HomeMenuDialogView extends View {
         menuLayer.clear();
         float scale = figmaConfig.getScale(hostWidth);
         float menuWidth = 397f * scale;
-        float menuHeight = (customActions == null ? 600f
+        float menuHeight = (customActions == null ? (includeLinkedDevices ? 600f : 463f)
                 : 50f + customActions.size() * 137f) * scale;
         float left = hostWidth - 40f * scale - menuWidth;
         WindowInsetsCompat windowInsets = ViewCompat.getRootWindowInsets(this);
@@ -126,9 +134,12 @@ public final class HomeMenuDialogView extends View {
                 () -> listener.onNewChat());
         addOption("new_group", newGroup, R.string.new_group, 162f, false,
                 () -> listener.onNewGroup());
-        addOption("linked_devices", linkedDevices, R.string.linked_devices, 299f, true,
-                () -> listener.onLinkedDevices());
-        addOption("settings", settings, R.string.settings, 436f, false,
+        if (includeLinkedDevices) {
+            addOption("linked_devices", linkedDevices, R.string.linked_devices, 299f, true,
+                    () -> listener.onLinkedDevices());
+        }
+        addOption("settings", settings, R.string.settings,
+                includeLinkedDevices ? 436f : 299f, false,
                 () -> listener.onSettings());
     }
 

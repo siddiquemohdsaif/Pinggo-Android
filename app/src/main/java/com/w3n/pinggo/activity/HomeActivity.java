@@ -84,6 +84,7 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         setContentView(homeView);
         ExitAppController.install(this, null);
         ViewGroup content = findViewById(android.R.id.content);
+        boolean companionDevice = LoginStateManager.getInstance().isCompanionDevice(this);
         homeMenuDialog = new HomeMenuDialogView(this, new HomeMenuDialogView.Listener() {
             @Override
             public void onNewChat() {
@@ -97,14 +98,15 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
 
             @Override
             public void onLinkedDevices() {
-                Toast.makeText(HomeActivity.this, "Linked Devices", Toast.LENGTH_SHORT).show();
+                if (LoginStateManager.getInstance().isCompanionDevice(HomeActivity.this)) return;
+                startActivity(new Intent(HomeActivity.this, LinkedDevicesActivity.class));
             }
 
             @Override
             public void onSettings() {
                 openSettings();
             }
-        });
+        }, !companionDevice);
         content.addView(homeMenuDialog, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {

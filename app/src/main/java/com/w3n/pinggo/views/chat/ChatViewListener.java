@@ -11,6 +11,7 @@ public interface ChatViewListener {
   void onMore();
   void onChatDetails();
   void onSend();
+  void onEmojiRequested();
   void onAudioRecordingStart();
   void onAudioRecordingSend();
   void onAudioRecordingCancel();

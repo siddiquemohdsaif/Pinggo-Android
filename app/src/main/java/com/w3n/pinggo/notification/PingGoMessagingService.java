@@ -6,6 +6,7 @@ import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.data.repository.ChatRepository;
+import com.w3n.pinggo.data.local.SessionLogoutManager;
 import java.util.Collections;
 
 public class PingGoMessagingService extends FirebaseMessagingService {
@@ -22,12 +23,38 @@ public class PingGoMessagingService extends FirebaseMessagingService {
         String callId = value(message, "callId");
         Log.i("PingGoCallTrace", "fcm_received type=" + type + " callId=" + callId
                 + " dataKeys=" + message.getData().keySet());
+        if ("account_logout".equals(type)) {
+            LoginStateManager login = LoginStateManager.getInstance();
+            String currentAccount = login.getUID(this);
+            String eventAccount = value(message, "accountId");
+            long revokedAt = number(message, "revokedAt");
+            if (currentAccount != null && currentAccount.equals(eventAccount)
+                    && login.getLoginAt(this) <= revokedAt) {
+                String logoutMessage = value(message, "message");
+                if (logoutMessage.isEmpty()
+                        && "device_unlinked".equals(value(message, "reason"))) {
+                    logoutMessage = "This companion device was logged out by the primary device.";
+                }
+                SessionLogoutManager.forceLogout(this, logoutMessage);
+            }
+            return;
+        }
         if (!LoginStateManager.getInstance().isLoggedIn(this)) {
             Log.w("PingGoCallTrace", "fcm_ignored_not_logged_in type=" + type
                     + " callId=" + callId);
             return;
         }
-        if ("new_message".equals(message.getData().get("type"))) {
+        if ("device_linked".equals(type) || "device_unlinked".equals(type)) {
+            LoginStateManager login = LoginStateManager.getInstance();
+            String currentAccount = login.getUID(this);
+            String eventAccount = value(message, "accountId");
+            if (login.isCompanionDevice(this)
+                    || currentAccount == null || !currentAccount.equals(eventAccount)) {
+                Log.w("PingGoCallTrace", "device_activity_fcm_ignored type=" + type);
+                return;
+            }
+            PingGoNotificationManager.showLinkedDeviceNotification(this, message.getData());
+        } else if ("new_message".equals(type)) {
             String chatId = value(message, "chatId");
             String messageId = value(message, "messageId");
             if (!chatId.isEmpty() && !messageId.isEmpty()) {
@@ -50,5 +77,10 @@ public class PingGoMessagingService extends FirebaseMessagingService {
     private static String value(RemoteMessage message, String key) {
         String value = message.getData().get(key);
         return value == null ? "" : value.trim();
+    }
+
+    private static long number(RemoteMessage message, String key) {
+        try { return Long.parseLong(value(message, key)); }
+        catch (Exception ignored) { return 0L; }
     }
 }

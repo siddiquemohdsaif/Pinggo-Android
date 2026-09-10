@@ -8,6 +8,7 @@ import com.w3n.pinggo.data.repository.ChatRepository;
 import java.io.File;
 
 public final class LogoutDataCleaner {
+    private static final String DEVICE_IDENTITY_PREFERENCES = "PinggoDeviceIdentity";
     private LogoutDataCleaner() {
     }
 
@@ -29,6 +30,12 @@ public final class LogoutDataCleaner {
 
         for (File prefFile : prefFiles) {
             String prefName = prefFile.getName().replaceFirst("\\.xml$", "");
+            // The installation identity belongs to the physical app install, not
+            // to the account being logged out. Keeping it prevents a logout/link
+            // transition from bypassing server-side device revocation and limits.
+            if (DEVICE_IDENTITY_PREFERENCES.equals(prefName)) {
+                continue;
+            }
             SharedPreferences preferences = context.getSharedPreferences(prefName, Context.MODE_PRIVATE);
             preferences.edit().clear().commit();
         }

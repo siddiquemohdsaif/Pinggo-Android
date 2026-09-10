@@ -30,7 +30,7 @@ public class ChatWebSocketClient {
 
         void onEvent(JsonObject event);
 
-        void onClosed();
+        void onClosed(int code, String reason);
 
         void onFailure(String error);
     }
@@ -48,15 +48,17 @@ public class ChatWebSocketClient {
     private boolean intentionalDisconnect;
     private String lastUserId;
     private String lastEncryptedCredential;
+    private String lastDeviceId;
     private int reconnectAttempts;
 
     public ChatWebSocketClient(Listener listener) {
         this.listener = listener;
     }
 
-    public void connect(String userId, String encryptedCredential) {
+    public void connect(String userId, String encryptedCredential, String deviceId) {
         lastUserId = userId;
         lastEncryptedCredential = encryptedCredential;
+        lastDeviceId = deviceId;
         intentionalDisconnect = false;
         if (connecting || authenticated) return;
         connecting = true;
@@ -72,7 +74,7 @@ public class ChatWebSocketClient {
             public void onOpen(WebSocket webSocket, Response response) {
                 connecting = false;
                 Log.d(TAG, "open responseCode=" + response.code());
-                sendAuth(userId, encryptedCredential);
+                sendAuth(userId, encryptedCredential, deviceId);
             }
 
             @Override
@@ -131,8 +133,15 @@ public class ChatWebSocketClient {
                 Log.w(TAG, "closed code=" + code + " reason=" + reason);
                 authenticated = false;
                 connecting = false;
+                // Authentication failure and remote device revocation are terminal
+                // for these credentials. Never let an unlinked companion reconnect.
+                if (code == 4001 || code == 4003) {
+                    intentionalDisconnect = true;
+                    reconnectHandler.removeCallbacksAndMessages(null);
+                    lastEncryptedCredential = null;
+                }
                 if (listener != null) {
-                    listener.onClosed();
+                    listener.onClosed(code, reason);
                 }
                 scheduleReconnect();
             }
@@ -195,11 +204,12 @@ public class ChatWebSocketClient {
                 && unacknowledgedMessages.containsKey(clientMessageId);
     }
 
-    private void sendAuth(String userId, String encryptedCredential) {
+    private void sendAuth(String userId, String encryptedCredential, String deviceId) {
         JsonObject auth = new JsonObject();
         auth.addProperty("type", "auth");
         auth.addProperty("userId", userId);
         auth.addProperty("encryptedCredential", encryptedCredential);
+        auth.addProperty("deviceId", deviceId);
         send(auth);
     }
 
@@ -232,7 +242,7 @@ public class ChatWebSocketClient {
         reconnectHandler.postDelayed(() -> {
             if (!intentionalDisconnect && !connecting && !authenticated) {
                 webSocket = null;
-                connect(lastUserId, lastEncryptedCredential);
+                connect(lastUserId, lastEncryptedCredential, lastDeviceId);
             }
         }, delayMs);
     }

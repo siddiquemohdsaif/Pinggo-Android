@@ -22,6 +22,7 @@ import androidx.core.graphics.drawable.IconCompat;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.activity.ChatActivity;
 import com.w3n.pinggo.activity.HomeActivity;
+import com.w3n.pinggo.activity.LinkedDevicesActivity;
 import com.w3n.pinggo.activity.VoiceCallActivity;
 import com.w3n.pinggo.activity.VideoCallActivity;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
@@ -37,6 +38,7 @@ import java.util.Map;
 
 public final class PingGoNotificationManager {
     public static final String MESSAGE_CHANNEL_ID = "pinggo_messages";
+    public static final String LINKED_DEVICE_CHANNEL_ID = "pinggo_linked_devices";
     public static final String EXTRA_CHAT_ID = "notificationChatId";
     public static final String EXTRA_MESSAGE_ID = "notificationMessageId";
     public static final String EXTRA_MESSAGE_IDS = "notificationMessageIds";
@@ -75,6 +77,88 @@ public final class PingGoNotificationManager {
         calls.enableVibration(true);
         calls.setLockscreenVisibility(android.app.Notification.VISIBILITY_PUBLIC);
         if (manager != null) manager.createNotificationChannel(calls);
+        NotificationChannel linkedDevices = new NotificationChannel(
+                LINKED_DEVICE_CHANNEL_ID, "Linked devices", NotificationManager.IMPORTANCE_HIGH);
+        linkedDevices.setDescription("Device link and logout activity for your PingGo account");
+        linkedDevices.enableVibration(true);
+        if (manager != null) manager.createNotificationChannel(linkedDevices);
+    }
+
+    public static void showLinkedDeviceNotification(
+            @NonNull Context context, Map<String, String> data) {
+        String type = value(data, "type");
+        String reason = value(data, "reason");
+        String deviceId = value(data, "deviceId");
+        String deviceName = value(data, "deviceName");
+        if (deviceName.isEmpty()) deviceName = "Companion device";
+
+        String title;
+        String detail;
+        if ("device_linked".equals(type)) {
+            title = "Device linked";
+            detail = deviceName + " was linked to your PingGo account.";
+        } else if ("self_logout".equals(reason)) {
+            title = "Companion device logged out";
+            detail = deviceName + " logged out from your PingGo account.";
+        } else {
+            title = "Companion device detached";
+            detail = deviceName + " was removed from your PingGo account.";
+        }
+
+        int notificationId = 0x53000000
+                | ((deviceId.isEmpty() ? type : deviceId).hashCode() & 0x0fffffff);
+        Intent openLinkedDevices = new Intent(context, LinkedDevicesActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent contentIntent = PendingIntent.getActivity(
+                context, notificationId, openLinkedDevices,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Bitmap logo = BitmapFactory.decodeResource(
+                context.getResources(), R.drawable.pinggo_logo);
+        NotificationCompat.Builder notification = new NotificationCompat.Builder(
+                context, LINKED_DEVICE_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_pinggo_notification)
+                .setLargeIcon(logo)
+                .setContentTitle(title)
+                .setContentText(detail)
+                .setStyle(new NotificationCompat.BigTextStyle().bigText(detail))
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setAutoCancel(true)
+                .setContentIntent(contentIntent);
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED) {
+            NotificationManagerCompat.from(context).notify(notificationId, notification.build());
+        }
+    }
+
+    public static void showSessionLogoutNotification(
+            @NonNull Context context, @NonNull String message) {
+        createChannels(context);
+        int notificationId = 0x5300ff01;
+        Intent login = new Intent(context, com.w3n.pinggo.activity.LoginActivity.class)
+                .putExtra(com.w3n.pinggo.activity.LoginActivity.EXTRA_LOGOUT_MESSAGE, message)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+        PendingIntent contentIntent = PendingIntent.getActivity(
+                context, notificationId, login,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        NotificationCompat.Builder notification = new NotificationCompat.Builder(
+                context, LINKED_DEVICE_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_pinggo_notification)
+                .setContentTitle("Device logged out")
+                .setContentText(message)
+                .setStyle(new NotificationCompat.BigTextStyle().bigText(message))
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setAutoCancel(true)
+                .setContentIntent(contentIntent);
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED) {
+            NotificationManagerCompat.from(context).notify(notificationId, notification.build());
+        }
     }
 
     public static void showIncomingCallNotification(Context context, JsonObject event) {

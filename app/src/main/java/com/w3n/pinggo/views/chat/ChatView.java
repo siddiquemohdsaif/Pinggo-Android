@@ -130,6 +130,8 @@ public final class ChatView extends View {
   private Text attachmentPreviewTextComponent;
   private ComposerBackgroundComponent composerBackground;
   private int topInset, bottomInset, imeInset;
+  private int lastKeyboardHeight;
+  private boolean emojiPanelVisible;
   private int floatingCallInset;
   private boolean imeVisible;
   private boolean searchVisible;
@@ -139,7 +141,10 @@ public final class ChatView extends View {
   private boolean keepKeyboardAfterSend;
   private boolean forceBottomOnNextMessageSubmission;
   private boolean directComposerSendGesture;
+  private boolean directEmojiDrawerGesture;
   private boolean directMessageListGesture;
+  private long suppressEmojiFocusUntilMs;
+  private boolean waitingForKeyboardBeforeClosingEmojiDrawer;
   private String searchDraft = "";
   private Runnable searchDismissAction;
   private final List<Integer> searchMatches = new ArrayList<>();
@@ -268,9 +273,20 @@ public final class ChatView extends View {
     bottomInset = nextBottom;
     imeInset = Math.max(0, ime);
     imeVisible = visible;
+    if (visible && imeInset > bottomInset) lastKeyboardHeight = imeInset - bottomInset;
     if (getWidth() <= 0) return;
     if (structureChanged || input == null || list == null) build();
     else applyKeyboardInsets();
+    if (visible && emojiPanelVisible && waitingForKeyboardBeforeClosingEmojiDrawer) {
+      waitingForKeyboardBeforeClosingEmojiDrawer = false;
+      post(() -> {
+        if (!emojiPanelVisible) return;
+        listener.onEmojiRequested();
+        // Closing the drawer rebuilds the component tree. Reattach the already-visible IME
+        // to the replacement composer on the next frame without exposing an empty gap.
+        post(this::showComposerKeyboard);
+      });
+    }
   }
 
   public void setFloatingCallInset(int inset) {
@@ -440,6 +456,21 @@ public final class ChatView extends View {
     if (send == null || !send.isVisible() || !send.isEnabled()) return false;
     RectF bounds = new RectF(send.getBounds());
     if (imeVisible) bounds.offset(0f, -Math.max(0, imeInset - bottomInset));
+    return bounds.contains(x, y);
+  }
+
+  private boolean isInsideDisplayedEmojiButton(float x, float y) {
+    if (input == null || contactBlocked) return false;
+    float scale = getWidth() / 1080f;
+    float screenBottom = getHeight() - bottomInset;
+    float panelHeight = composer.attachmentPanelVisible ? px(308f)
+        : emojiPanelVisible ? getEmojiPanelHeight() : 0f;
+    float composerBottom = screenBottom - panelHeight - 40f * scale;
+    RectF bounds = new RectF(46f * scale, composerBottom - 116f * scale,
+        145f * scale, composerBottom - 17f * scale);
+    if (imeVisible && !emojiPanelVisible) {
+      bounds.offset(0f, -Math.max(0, imeInset - bottomInset));
+    }
     return bounds.contains(x, y);
   }
 
@@ -703,6 +734,39 @@ public final class ChatView extends View {
     updateComposerActionIcon();
   }
 
+  public void appendDraftWithoutFocus(String value) {
+    if (value == null || value.isEmpty()) return;
+    composer.draft = (input == null ? composer.draft : input.getText()) + value;
+    if (input != null) {
+      // TextField#setText/setSelection may transiently restore its native editor focus. When
+      // the emoji drawer is open that focus normally means "switch back to the keyboard",
+      // which causes the composer to flash at the screen bottom. Suppress only that
+      // programmatic focus transition and keep focus on the component host.
+      suppressEmojiFocusUntilMs = SystemClock.uptimeMillis() + 200L;
+      input.clearFocus();
+      requestFocus();
+      input.setText(composer.draft);
+      input.setSelection(composer.draft.length());
+      input.clearFocus();
+    }
+    updateComposerActionIcon();
+    scheduleComposerResize();
+  }
+
+  public int getEmojiPanelHeight() {
+    return lastKeyboardHeight > 0 ? lastKeyboardHeight : Math.round(px(308f));
+  }
+
+  public int getEmojiPanelBottomInset() { return bottomInset; }
+
+  public void setEmojiPanelVisible(boolean visible) {
+    if (emojiPanelVisible == visible) return;
+    emojiPanelVisible = visible;
+    if (!visible) waitingForKeyboardBeforeClosingEmojiDrawer = false;
+    if (visible) composer.attachmentPanelVisible = false;
+    if (getWidth() > 0) build();
+  }
+
   private void updateReply() {
     if (getWidth() > 0 && getHeight() > 0) {
       build();
@@ -726,6 +790,10 @@ public final class ChatView extends View {
 
   private void toggleAttachmentPanel() {
     hideComposerKeyboard();
+    if (emojiPanelVisible) {
+      emojiPanelVisible = false;
+      listener.onEmojiRequested();
+    }
     composer.attachmentPanelVisible = !composer.attachmentPanelVisible;
     build();
   }
@@ -765,7 +833,8 @@ public final class ChatView extends View {
     attachmentPreviewTextComponent = null;
     attachmentPreviewRemove = null;
     attachmentPreviewSend = null;
-    float attachmentPanelHeight = composer.attachmentPanelVisible ? px(308f) : 0;
+    float attachmentPanelHeight = composer.attachmentPanelVisible ? px(308f)
+        : emojiPanelVisible ? getEmojiPanelHeight() : 0;
     float w = getWidth();
     float scale = w / 1080f;
     float top = topInset + floatingCallInset;
@@ -1023,6 +1092,12 @@ public final class ChatView extends View {
                 .setStrokeWidthPx(0)
                 .setCornerRadiusPx(0)
                 .setPaddingPx(0, px(22f))
+                .setOnFocusChangedListener((id, focused) -> {
+                  if (focused && emojiPanelVisible
+                      && SystemClock.uptimeMillis() >= suppressEmojiFocusUntilMs) post(() -> {
+                    beginKeyboardFromEmojiDrawer();
+                  });
+                })
                 .setOnTextChangedListener(
                     (id, value) -> {
                       composer.draft = value;
@@ -1166,7 +1241,10 @@ public final class ChatView extends View {
 
   private void applyKeyboardInsets() {
     if (list == null || getWidth() <= 0) return;
-    float shift = imeVisible ? -Math.max(0, imeInset - bottomInset) : 0;
+    // While switching from the IME to the emoji drawer, the drawer already occupies the
+    // keyboard-height slot. Do not apply both offsets during the IME closing animation.
+    float shift = imeVisible && !emojiPanelVisible
+        ? -Math.max(0, imeInset - bottomInset) : 0;
     overlay.setTranslationY(shift);
     float listBottom = Math.max(headerBottom + px(2.75f), baseListBottom + shift);
     RectF nextBounds = new RectF(0, messageListTop(), getWidth(), listBottom);
@@ -1199,7 +1277,8 @@ public final class ChatView extends View {
 
     float top = topInset + floatingCallInset;
     float screenBottom = getHeight() - bottomInset;
-    float attachmentPanelHeight = composer.attachmentPanelVisible ? px(308f) : 0f;
+    float attachmentPanelHeight = composer.attachmentPanelVisible ? px(308f)
+        : emojiPanelVisible ? getEmojiPanelHeight() : 0f;
     float composerBottom = screenBottom - attachmentPanelHeight - 40f * scale;
     float headerEdge = top + 170f * scale;
     float composerChromeAbove = px(198f) + 20f;
@@ -1310,7 +1389,8 @@ public final class ChatView extends View {
     float width = getWidth();
     float scale = width / 1080f;
     float screenBottom = getHeight() - bottomInset;
-    float attachmentPanelHeight = composer.attachmentPanelVisible ? px(308f) : 0f;
+    float attachmentPanelHeight = composer.attachmentPanelVisible ? px(308f)
+        : emojiPanelVisible ? getEmojiPanelHeight() : 0f;
     float attachmentPanelTop = screenBottom - attachmentPanelHeight;
     float composerBottom = attachmentPanelTop - 40f * scale;
     float composerTop = composerBottom - composerHeight;
@@ -1356,24 +1436,32 @@ public final class ChatView extends View {
   }
 
   private void openEmojiKeyboard() {
+    hideComposerKeyboard();
     if (composer.attachmentPanelVisible) {
-      if (input != null) composer.draft = input.getText();
       composer.attachmentPanelVisible = false;
       build();
     }
-    if (input == null) return;
+    listener.onEmojiRequested();
+  }
+
+  private void showComposerKeyboard() {
+    if (input == null || emojiPanelVisible) return;
     requestFocus();
     input.requestFocus();
-    post(() -> {
-      if (input == null) return;
-      input.requestFocus();
-      InputMethodManager keyboard =
-          (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-      if (keyboard != null) {
-        keyboard.restartInput(this);
-        keyboard.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT);
-      }
-    });
+    InputMethodManager keyboard =
+        (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+    if (keyboard != null) keyboard.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT);
+  }
+
+  private void beginKeyboardFromEmojiDrawer() {
+    if (input == null || !emojiPanelVisible
+        || waitingForKeyboardBeforeClosingEmojiDrawer) return;
+    waitingForKeyboardBeforeClosingEmojiDrawer = true;
+    requestFocus();
+    input.requestFocus();
+    InputMethodManager keyboard =
+        (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+    if (keyboard != null) keyboard.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT);
   }
 
   private static boolean sameBounds(RectF first, RectF second) {
@@ -1631,6 +1719,25 @@ public final class ChatView extends View {
   @Override
   public boolean onTouchEvent(MotionEvent e) {
     int action = e.getActionMasked();
+    if (action == MotionEvent.ACTION_DOWN
+        && input != null
+        && (input.isFocused() || imeVisible)
+        && isInsideDisplayedEmojiButton(e.getX(), e.getY())) {
+      // A selected/focused native TextField otherwise consumes this first sibling tap while
+      // dismissing its selection/IME. Keep the complete gesture here and switch panels on UP.
+      directEmojiDrawerGesture = true;
+      return true;
+    }
+    if (directEmojiDrawerGesture) {
+      if (action == MotionEvent.ACTION_UP) {
+        boolean openDrawer = isInsideDisplayedEmojiButton(e.getX(), e.getY());
+        directEmojiDrawerGesture = false;
+        if (openDrawer) openEmojiKeyboard();
+        return true;
+      }
+      if (action == MotionEvent.ACTION_CANCEL) directEmojiDrawerGesture = false;
+      return true;
+    }
     if (action == MotionEvent.ACTION_DOWN
         && input != null
         && (input.isFocused() || imeVisible)
