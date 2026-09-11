@@ -34,6 +34,7 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.DeviceIdentityManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.Database.CloudFunction.WebSocket.ChatWebSocketClient;
+import com.w3n.pinggo.contacts.DeviceContactResolver;
 import com.w3n.pinggo.data.local.MessageDao;
 import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.local.MessageStatus;
@@ -91,6 +92,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         default void onBlockStatus(String chatId, boolean blocked) { }
         default void onGroupMembershipChanged(String chatId, boolean active) { }
         default void onGroupUpdated(String chatId) { }
+        default void onAccountDeleted(String chatId, String userId) { }
+        default void onAccountRecreated(String chatId, String userId) { }
         default void onCallsChanged() { }
     }
 
@@ -2273,6 +2276,41 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             handleMessageFailed(event);
         } else if ("new_message".equals(type) || "new_group_message".equals(type)) {
             handleNewMessage(event, totalUnreadBeforeEvent, serverTotalUnread);
+        } else if ("account_deleted".equals(type)) {
+            String changedChatId = JsonParserUtil.getString(event, "chatId");
+            String deletedUserId = normalizeAccountId(JsonParserUtil.getString(event, "userId"));
+            ChatProfilePhotoStore.remove(appContext, deletedUserId);
+            JsonObject value = event.has("message") && event.get("message").isJsonObject()
+                    ? event.getAsJsonObject("message") : null;
+            MessageEntity deletedPill = value == null ? null : toMessageEntity(value);
+            ioExecutor.execute(() -> {
+                if (!changedChatId.isEmpty())
+                    chatDao.clearProfilePhoto(changedChatId, System.currentTimeMillis());
+                if (deletedPill != null) {
+                    messageDao.upsert(deletedPill);
+                    updateChatSummary(deletedPill);
+                }
+            });
+            EventListener listener = eventListener;
+            if (listener != null) mainHandler.post(() -> {
+                if (eventListener == listener)
+                    listener.onAccountDeleted(changedChatId, deletedUserId);
+            });
+        } else if ("account_recreated".equals(type)) {
+            String changedChatId = JsonParserUtil.getString(event, "chatId");
+            String recreatedUserId = normalizeAccountId(JsonParserUtil.getString(event, "userId"));
+            JsonObject value = event.has("message") && event.get("message").isJsonObject()
+                    ? event.getAsJsonObject("message") : null;
+            MessageEntity recreatedPill = value == null ? null : toMessageEntity(value);
+            if (recreatedPill != null) ioExecutor.execute(() -> {
+                messageDao.upsert(recreatedPill);
+                updateChatSummary(recreatedPill);
+            });
+            EventListener listener = eventListener;
+            if (listener != null) mainHandler.post(() -> {
+                if (eventListener == listener)
+                    listener.onAccountRecreated(changedChatId, recreatedUserId);
+            });
         } else if ("group_removed".equals(type) || "group_left".equals(type)
                 || "group_added".equals(type)) {
             String changedGroupId = JsonParserUtil.getString(event, "groupId");
@@ -3088,6 +3126,12 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             return text;
         }
 
+        if ("group_system".equals(messageType)) {
+            JsonObject event = message.has("systemEvent") && message.get("systemEvent").isJsonObject()
+                    ? message.getAsJsonObject("systemEvent") : null;
+            return systemEventPreview(event);
+        }
+
         switch (messageType) {
             case "image":
                 return "Photo";
@@ -3201,9 +3245,65 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             case "voice_call": return "Voice call";
             case "video_call": return "Video call";
             case "location": return "Location";
-            case "group_system": return "Group updated";
+            case "group_system": return systemEventPreview(message);
             default: return "Message";
         }
+    }
+
+    private String systemEventPreview(JsonObject event) {
+        if (event == null) return "Group updated";
+        String type = JsonParserUtil.getString(event, "event");
+        String actorId = normalizeAccountId(JsonParserUtil.getString(event, "actorId"));
+        return systemEventPreview(type, actorId, eventTargetLabels(event));
+    }
+
+    private String systemEventPreview(MessageEntity message) {
+        return systemEventPreview(message.groupEventType,
+                normalizeAccountId(message.groupEventActorId),
+                entityTargetLabels(message.groupEventTargetIds));
+    }
+
+    private String systemEventPreview(String event, String actorId, String targets) {
+        if ("account_deleted".equals(event)) return "Deleted account";
+        if ("account_recreated".equals(event)) return "Account active again";
+        String actor = actorId.equals(normalizeAccountId(currentUserId))
+                ? "You" : DeviceContactResolver.cachedNameOrPhone(actorId);
+        if (actor == null || actor.trim().isEmpty()) actor = "A member";
+        switch (event == null ? "" : event) {
+            case "group_created": return actor + " created the group";
+            case "members_added": return actor + " added " + targets;
+            case "members_removed": return actor + " removed " + targets;
+            case "member_left": return actor + " left the group";
+            case "admin_promoted": return actor + " made " + targets + " an admin";
+            case "admin_demoted": return actor + " removed " + targets + " as admin";
+            case "group_info_updated": return actor + " updated the group info";
+            case "admin_only_enabled": return actor + " allowed only admins to message and call";
+            case "admin_only_disabled": return actor + " allowed all members to message and call";
+            default: return "Group updated";
+        }
+    }
+
+    private String eventTargetLabels(JsonObject event) {
+        JsonArray values = event.has("targetIds") && event.get("targetIds").isJsonArray()
+                ? event.getAsJsonArray("targetIds") : new JsonArray();
+        List<String> labels = new ArrayList<>();
+        for (JsonElement value : values) {
+            String id = normalizeAccountId(value.getAsString());
+            labels.add(id.equals(normalizeAccountId(currentUserId))
+                    ? "you" : DeviceContactResolver.cachedNameOrPhone(id));
+        }
+        return labels.isEmpty() ? "members" : android.text.TextUtils.join(", ", labels);
+    }
+
+    private String entityTargetLabels(String encoded) {
+        if (encoded == null || encoded.isEmpty()) return "members";
+        List<String> labels = new ArrayList<>();
+        for (String value : encoded.split("\\u001F", -1)) {
+            String id = normalizeAccountId(value);
+            if (!id.isEmpty()) labels.add(id.equals(normalizeAccountId(currentUserId))
+                    ? "you" : DeviceContactResolver.cachedNameOrPhone(id));
+        }
+        return labels.isEmpty() ? "members" : android.text.TextUtils.join(", ", labels);
     }
 
     private Long getNullableLong(JsonObject object, String key) {

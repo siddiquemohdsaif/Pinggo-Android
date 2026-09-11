@@ -106,6 +106,10 @@ public interface ChatDao {
     int updateLocalProfilePhotoPath(String chatId, String profilePhotoUrl,
                                     String localPath, long updatedAt);
 
+    @Query("UPDATE chats SET profilePhotoUrl = '', localProfilePhotoPath = '', updatedAt = :updatedAt "
+            + "WHERE chatId = :chatId")
+    void clearProfilePhoto(String chatId, long updatedAt);
+
     @Transaction
     default void updateLocalProfilePhotoPaths(List<ChatEntity> chats, long updatedAt) {
         if (chats == null) return;

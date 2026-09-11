@@ -33,6 +33,7 @@ public final class ChatHeaderComponent {
   private Text presence;
   private String presenceValue = "connecting...";
   private boolean callActionsVisible = true;
+  private boolean profileVisible = true;
 
   /** Simplified details header using the conversation header's exact geometry and assets. */
   public static View detailsHeader(
@@ -107,9 +108,10 @@ public final class ChatHeaderComponent {
         new RectF(51f * scale, top + 60f * scale, 102f * scale, top + 111f * scale),
         new RectF(25f * scale, top + 34f * scale, 128f * scale, top + 137f * scale),
         id -> listener.onBack());
-    content.add(new Image.Builder(context, "profile", profile,
+    Image profileImage = content.add(new Image.Builder(context, "profile", profile,
         new RectF(152f * scale, top + 34f * scale, 254f * scale, top + 136f * scale))
         .setScaleType(Image.ScaleType.CENTER_CROP));
+    profileImage.setVisible(profileVisible);
     text(content, "name", chatName,
         new RectF(285f * scale, top + 42f * scale, 742f * scale, top + 91f * scale),
         38f * scale, PRIMARY, FontVariation.MEDIUM);
@@ -146,6 +148,10 @@ public final class ChatHeaderComponent {
   void setPresence(String value) {
     presenceValue = value == null ? "" : value;
     if (presence != null) presence.setText(presenceValue).setVisible(!presenceValue.isEmpty());
+  }
+
+  void setProfileVisible(boolean visible) {
+    profileVisible = visible;
   }
 
   void setCallActionsVisible(boolean visible) { callActionsVisible = visible; }

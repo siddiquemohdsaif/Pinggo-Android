@@ -32,6 +32,17 @@ public class ChatProfilePhotoStore {
     return localPath;
   }
 
+  public static void remove(Context context, String phoneNumber) {
+    if (context == null || phoneNumber == null) return;
+    String normalized = normalizePhoneNumber(phoneNumber);
+    String path = getPrefs(context).getString(normalized, null);
+    if (path != null) {
+      File file = new File(path);
+      if (file.exists()) file.delete();
+    }
+    getPrefs(context).edit().remove(normalized).remove(URL_KEY_PREFIX + normalized).apply();
+  }
+
   public static String downloadAndStore(
       Context context, String phoneNumber, String profilePhotoUrl) {
     if (context == null || isEmpty(phoneNumber) || isEmpty(profilePhotoUrl)) {

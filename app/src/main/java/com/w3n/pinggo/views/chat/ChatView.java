@@ -136,6 +136,7 @@ public final class ChatView extends View {
   private boolean imeVisible;
   private boolean searchVisible;
   private boolean contactBlocked;
+  private boolean contactAccountActive = true;
   private boolean groupMemberActive = true;
   private boolean groupSendingAllowed = true;
   private boolean keepKeyboardAfterSend;
@@ -1190,7 +1191,18 @@ public final class ChatView extends View {
             id -> selectAttachment(type));
       }
     }
-    if (contactBlocked) {
+    if (!groupChat && !contactAccountActive) {
+      overlay.add(new Image.Builder(getContext(), "deleted_account_composer_background", white,
+          new RectF(0f, composerTop - px(12f), w, screenBottom))
+          .setScaleType(Image.ScaleType.FIT_XY));
+      text(overlay, "deleted_account_message", "This user no longer has a Pinggo account",
+          new RectF(px(44f), composerTop, w - px(44f), composerBottom),
+          sp(14), SECONDARY, FontVariation.REGULAR, Text.Alignment.CENTER);
+      overlay.add(new Button.Builder(getContext(), "deleted_account_touch_interceptor", transparent, "",
+          new RectF(0f, composerTop - px(12f), w, screenBottom))
+          .setImageScaleType(Image.ScaleType.FIT_XY).setRippleEnabled(false)
+          .setOnClickListener(id -> { }));
+    } else if (contactBlocked) {
       overlay.add(new Image.Builder(getContext(), "blocked_composer_background", white,
           new RectF(0f, composerTop - px(12f), w, screenBottom))
           .setScaleType(Image.ScaleType.FIT_XY));
@@ -1592,6 +1604,21 @@ public final class ChatView extends View {
     if (contactBlocked == blocked) return;
     contactBlocked = blocked;
     if (blocked) {
+      composer.draft = "";
+      composer.clearReply();
+      composer.clearAttachment();
+      composer.attachmentPanelVisible = false;
+    }
+    if (getWidth() > 0 && getHeight() > 0) build();
+  }
+
+  public void setContactAccountActive(boolean active) {
+    if (contactAccountActive == active) return;
+    contactAccountActive = active;
+    chatHeader.setCallActionsVisible(active);
+    chatHeader.setProfileVisible(active);
+    if (!active) {
+      clearMessageSelection();
       composer.draft = "";
       composer.clearReply();
       composer.clearAttachment();

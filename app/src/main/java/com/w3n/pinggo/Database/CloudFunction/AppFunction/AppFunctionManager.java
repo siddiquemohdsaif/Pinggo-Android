@@ -57,6 +57,10 @@ public class AppFunctionManager {
     LoginHandler.checkUserExists(appApi, phoneNumber, callback);
   }
 
+  public void reactivateAccount(String phoneNumber, String reactivationToken, Callback callback) {
+    LoginHandler.reactivateAccount(appApi, phoneNumber, reactivationToken, callback);
+  }
+
   public void userLogin(String phoneNumber, Callback callback) {
     LoginHandler.login(appApi, phoneNumber, callback);
   }

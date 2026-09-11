@@ -510,6 +510,22 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
             refreshGroupMembership();
           }
 
+          @Override
+          public void onAccountDeleted(String eventChatId, String userId) {
+            if (groupChat || chatId == null || !chatId.equals(eventChatId)
+                || !normalize(receiverId).equals(normalize(userId))) return;
+            profilePhotoPath = null;
+            chatView.setContactAccountActive(false);
+            conversationMenuDialog.setContactExists(false);
+          }
+
+          @Override
+          public void onAccountRecreated(String eventChatId, String userId) {
+            if (groupChat || chatId == null || !chatId.equals(eventChatId)
+                || !normalize(receiverId).equals(normalize(userId))) return;
+            chatView.setContactAccountActive(true);
+          }
+
           @Override public void onGroupUpdated(String eventChatId) {
             if (groupChat && chatId != null && chatId.equals(eventChatId))
               refreshGroupMembership();
@@ -1014,6 +1030,17 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       ChatView.PreparedMessages backgroundPreparation) {
     long operationStartedNanos = SystemClock.elapsedRealtimeNanos();
     latestMessages = preparedMessages;
+    if (!groupChat) {
+      Boolean accountActive = null;
+      for (int index = latestMessages.size() - 1; index >= 0; index--) {
+        MessageEntity item = latestMessages.get(index);
+        if (!normalize(receiverId).equals(normalize(item.groupEventActorId))) continue;
+        if ("account_recreated".equals(item.groupEventType)) accountActive = true;
+        else if ("account_deleted".equals(item.groupEventType)) accountActive = false;
+        if (accountActive != null) break;
+      }
+      if (accountActive != null) chatView.setContactAccountActive(accountActive);
+    }
     long renderStarted = System.nanoTime();
     boolean changed = backgroundPreparation == null
         ? chatView.submitMessages(latestMessages)

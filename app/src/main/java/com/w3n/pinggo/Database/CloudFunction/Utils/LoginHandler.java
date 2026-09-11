@@ -75,16 +75,23 @@ public class LoginHandler {
     }
 
     boolean exists = getBoolean(responseBody, "exists");
+    boolean deleted = getBoolean(responseBody, "deleted");
+    String reactivationToken = getString(responseBody, "reactivationToken", null);
     String email = getString(responseBody, "email", null);
-    callback.onSuccess(new CheckUserExistsResult(exists, email));
+    callback.onSuccess(new CheckUserExistsResult(exists, deleted, reactivationToken, email));
   }
 
   public static final class CheckUserExistsResult {
     private final boolean exists;
+    private final boolean deleted;
+    private final String reactivationToken;
     private final String email;
 
-    public CheckUserExistsResult(boolean exists, String email) {
+    public CheckUserExistsResult(boolean exists, boolean deleted, String reactivationToken,
+                                 String email) {
       this.exists = exists;
+      this.deleted = deleted;
+      this.reactivationToken = reactivationToken == null ? "" : reactivationToken.trim();
       this.email = email == null ? "" : email.trim();
     }
 
@@ -94,6 +101,35 @@ public class LoginHandler {
 
     public String getEmail() {
       return email;
+    }
+
+    public boolean isDeleted() { return deleted; }
+
+    public String getReactivationToken() { return reactivationToken; }
+  }
+
+  public static void reactivateAccount(AppRestAPI appApi, String phoneNumber,
+      String reactivationToken, AppFunctionManager.Callback callback) {
+    try {
+      JSONObject value = new JSONObject();
+      value.put("phoneNumber", normalizePhoneNumber(phoneNumber));
+      value.put("reactivationToken", reactivationToken == null ? "" : reactivationToken);
+      RequestBody body = RequestBody.create(value.toString(),
+          MediaType.parse("application/json; charset=utf-8"));
+      appApi.reactivateAccount(body).enqueue(new Callback<JsonObject>() {
+        @Override public void onResponse(@NonNull Call<JsonObject> call,
+            @NonNull Response<JsonObject> response) {
+          if (callback == null) return;
+          if (!response.isSuccessful() || response.body() == null) {
+            callback.onError(getErrorMessage(response));
+          } else callback.onSuccess(response.body());
+        }
+        @Override public void onFailure(Call<JsonObject> call, Throwable error) {
+          if (callback != null) callback.onError(getFailureMessage(error));
+        }
+      });
+    } catch (JSONException error) {
+      if (callback != null) callback.onError("json error:" + error);
     }
   }
 

@@ -1479,6 +1479,8 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       case "members_added": return actor + " added " + targetLabels(targets);
       case "members_removed": return actor + " removed " + targetLabels(targets);
       case "member_left": return actor + " left the group";
+      case "account_deleted": return "Deleted account";
+      case "account_recreated": return "Account active again";
       case "admin_promoted": return actor + " made " + targetLabels(targets) + " an admin";
       case "admin_demoted": return actor + " removed " + targetLabels(targets) + " as admin";
       case "group_info_updated": return actor + " updated the group info";

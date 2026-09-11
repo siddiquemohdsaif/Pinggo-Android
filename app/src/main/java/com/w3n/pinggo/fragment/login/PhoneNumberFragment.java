@@ -20,6 +20,7 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.OtpHandler;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.Util.login.LoginFlowResolver;
 import com.w3n.pinggo.views.common.BlockingProgressView;
+import com.w3n.pinggo.views.common.NativePromptDialogView;
 import com.w3n.pinggo.views.login.PhoneNumberLoginView;
 
 /** The first screen in the login flow. */
@@ -27,6 +28,7 @@ public class PhoneNumberFragment extends Fragment {
     private PhoneNumberLoginView loginView;
     private BlockingProgressView blockingProgressView;
     private boolean requestInProgress;
+    private NativePromptDialogView reactivationDialog;
 
     @Nullable
     @Override
@@ -83,6 +85,11 @@ public class PhoneNumberFragment extends Fragment {
 
                         LoginHandler.CheckUserExistsResult result =
                                 (LoginHandler.CheckUserExistsResult) object;
+                        if (result.isDeleted()) {
+                            setRequestInProgress(false);
+                            showReactivationDialog(fullPhoneNumber, result.getReactivationToken());
+                            return;
+                        }
                         String email = result.getEmail();
                         boolean emailEnabled = LoginFlowResolver.isAvailable(
                                 AppContextProvider.getParsedAppConfig(), countryCode,
@@ -104,6 +111,47 @@ public class PhoneNumberFragment extends Fragment {
                         }
                     }
                 });
+    }
+
+    private void showReactivationDialog(String phoneNumber, String token) {
+        removeReactivationDialog();
+        reactivationDialog = NativePromptDialogView.confirm(requireContext(),
+                "Account deleted",
+                "This account was previously deleted. Reactivate it using the old profile data?",
+                "Reactivate",
+                () -> reactivateAccount(phoneNumber, token),
+                this::removeReactivationDialog);
+        ViewGroup root = requireActivity().findViewById(android.R.id.content);
+        root.addView(reactivationDialog, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    private void reactivateAccount(String phoneNumber, String token) {
+        if (requestInProgress) return;
+        setRequestInProgress(true);
+        AppFunctionManager.getInstance().reactivateAccount(phoneNumber, token,
+                new AppFunctionManager.Callback() {
+                    @Override public void onSuccess(Object value) {
+                        if (!isAdded()) return;
+                        setRequestInProgress(false);
+                        checkUserAndContinue(phoneNumber);
+                    }
+
+                    @Override public void onError(String error) {
+                        setRequestInProgress(false);
+                        if (isAdded()) Toast.makeText(requireContext(), error,
+                                Toast.LENGTH_LONG).show();
+                    }
+                });
+    }
+
+    private void removeReactivationDialog() {
+        NativePromptDialogView current = reactivationDialog;
+        reactivationDialog = null;
+        if (current == null) return;
+        if (current.getParent() instanceof ViewGroup)
+            ((ViewGroup) current.getParent()).removeView(current);
+        current.release();
     }
 
     private void sendExistingUserEmailOtp(String fullPhoneNumber, String countryCode,
@@ -234,6 +282,7 @@ public class PhoneNumberFragment extends Fragment {
 
     @Override
     public void onDestroyView() {
+        removeReactivationDialog();
         if (loginView != null) {
             loginView.setOnNextListener(null);
         }

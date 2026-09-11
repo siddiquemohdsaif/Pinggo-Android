@@ -130,9 +130,61 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
 
   @Override
   public void onAccount() {
-    showPrompt(NativePromptDialogView.confirm(this, "Log out?",
-        "You will need to sign in again to use this account.", "Log out",
-        this::onLogout, this::removePrompt));
+    List<String> actions = new ArrayList<>();
+    actions.add("Log out");
+    actions.add("Delete account");
+    showPrompt(NativePromptDialogView.actions(this, actions, index -> {
+      if (index == 0) {
+        showPrompt(NativePromptDialogView.confirm(this, "Log out?",
+            "You will need to sign in again to use this account.", "Log out",
+            this::onLogout, this::removePrompt));
+      } else {
+        confirmAccountPhone();
+      }
+    }, this::removePrompt));
+  }
+
+  private void confirmAccountPhone() {
+    showPrompt(NativePromptDialogView.input(this,
+        "Enter your phone number to permanently delete your account", "",
+        InputType.TYPE_CLASS_PHONE, value -> {
+          if (!phoneDigits(value).equals(phoneDigits(phone))) {
+            Toast.makeText(this, "Phone number does not match this account.", Toast.LENGTH_LONG).show();
+            return false;
+          }
+          deleteAccount(value);
+          return true;
+        }, this::removePrompt));
+  }
+
+  private void deleteAccount(String confirmedPhone) {
+    settingsView.setLoading(true);
+    new Thread(() -> {
+      try {
+        LoginStateManager login = LoginStateManager.getInstance();
+        String token = login.getUID(this) + "_" + login.getENC(this);
+        AppRestAPI api = new APIAuth(token).getRetrofit().create(AppRestAPI.class);
+        JsonObject body = new JsonObject();
+        body.addProperty("phoneNumber", phoneDigits(confirmedPhone));
+        retrofit2.Response<JsonObject> response = api.deleteAccount(body).execute();
+        if (response.isSuccessful()) {
+          SessionLogoutManager.forceLogout(this, "Your Pinggo account was deleted.");
+        } else {
+          runOnUiThread(() -> deletionFailed("Account deletion failed. Please try again."));
+        }
+      } catch (Exception error) {
+        runOnUiThread(() -> deletionFailed("Account deletion failed. Check your connection and try again."));
+      }
+    }, "pinggo-account-delete").start();
+  }
+
+  private void deletionFailed(String message) {
+    settingsView.setLoading(false);
+    Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+  }
+
+  private static String phoneDigits(String value) {
+    return value == null ? "" : value.replaceAll("[^0-9]", "");
   }
 
   @Override

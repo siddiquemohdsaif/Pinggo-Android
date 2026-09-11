@@ -19,6 +19,9 @@ public interface AppRestAPI {
   @POST("checkUserExists")
   Call<JsonObject> checkUserExists(@Body RequestBody body);
 
+  @POST("checkUserExists/reactivate")
+  Call<JsonObject> reactivateAccount(@Body RequestBody body);
+
   @POST("login")
   Call<JsonObject> login(@Body RequestBody body);
 
@@ -125,6 +128,9 @@ public interface AppRestAPI {
 
   @POST("devices/logout-account")
   Call<JsonObject> logoutAccount(@Body JsonObject body);
+
+  @POST("account/delete")
+  Call<JsonObject> deleteAccount(@Body JsonObject body);
 
   @DELETE("devices/{deviceId}")
   Call<JsonObject> unlinkDevice(@Path("deviceId") String deviceId);

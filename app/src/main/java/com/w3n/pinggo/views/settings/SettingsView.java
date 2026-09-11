@@ -172,7 +172,7 @@ public final class SettingsView extends View {
     addMenuRow("linked", "▣", "Linked devices", "Use PingGo on other devices", row,
         id -> listener.onLinkedDevices());
     row += px(209f);
-    addMenuRow("account", "⚿", "Account", "Log out", row, id -> listener.onAccount());
+    addMenuRow("account", "⚿", "Account", "Log out, delete account", row, id -> listener.onAccount());
     row += px(209f);
     addMenuRow("privacy", "▢", "Privacy", "Blocked accounts", row, id -> listener.onPrivacy());
     row += px(209f);
