@@ -11,6 +11,8 @@ import android.text.StaticLayout;
 import android.text.Layout;
 import android.text.TextPaint;
 import android.util.Log;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParser;
 import com.ogfa.nativeviews.font.NativeFonts;
 import com.ogfa.nativeviews.image.Image;
 import com.ogfa.nativeviews.list.ComponentList;
@@ -1024,7 +1026,8 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     long metricStartedNanos = SystemClock.elapsedRealtimeNanos();
     if (call) {
       float desiredWidth = FILE_BUBBLE_WIDTH_PX * ATTACHMENT_SCALE;
-      float desiredHeight = FILE_BUBBLE_HEIGHT_PX * ATTACHMENT_SCALE;
+      float desiredHeight = (model.displayText != null && model.displayText.contains("\n")
+          ? 180f : FILE_BUBBLE_HEIGHT_PX) * ATTACHMENT_SCALE;
       float scale = Math.min(1f, availableWidth / desiredWidth);
       float finalWidth = desiredWidth * scale;
       float replyHeight = model.repliedMessageId == null || model.repliedMessageId.isEmpty()
@@ -1380,6 +1383,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         + String.valueOf(message.forwardedFrom) + '\u0001'
         + message.pinned + '\u0001' + String.valueOf(message.pinnedBy) + '\u0001'
         + String.valueOf(message.deletedText) + '\u0001'
+        + String.valueOf(message.callParticipantIdsJson) + '\u0001'
         + attachmentState + '\u0001'
         + attachmentStateProvider.downloadedBytes(message) + '\u0001'
         + attachmentStateProvider.totalBytes(message);
@@ -1401,6 +1405,8 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       displayed = "";
     } else if (isCallType(type)) {
       displayed = stripCallLabel(message.text);
+      String participants = callParticipantLine(message);
+      if (!participants.isEmpty()) displayed += "\n" + participants;
     } else {
       displayed = message.text == null ? "" : message.text;
     }
@@ -1414,6 +1420,25 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         .replace('\n', ' ')
         .trim()
         .replaceAll("\\s+", " ");
+  }
+
+  private String callParticipantLine(MessageEntity message) {
+    String json = message.callParticipantIdsJson;
+    if (json == null || json.trim().isEmpty()) return "";
+    try {
+      JsonElement root = new JsonParser().parse(json);
+      if (!root.isJsonArray() || root.getAsJsonArray().size() < 3) return "";
+      java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+      for (JsonElement value : root.getAsJsonArray()) {
+        if (value == null || value.isJsonNull()) continue;
+        String id = normalize(value.getAsString());
+        if (id.isEmpty() || currentUser.equals(id)) continue;
+        names.add(DeviceContactResolver.cachedNameOrPhone(id));
+      }
+      return android.text.TextUtils.join(", ", names);
+    } catch (RuntimeException ignored) {
+      return "";
+    }
   }
 
   private String formatMessageTime(long sentTime) {

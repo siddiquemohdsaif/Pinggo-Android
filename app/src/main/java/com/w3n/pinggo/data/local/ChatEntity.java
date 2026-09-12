@@ -22,6 +22,7 @@ public class ChatEntity {
     public String lastMessageStatus;
     public String lastMessageType;
     public String lastMessageAttachmentName;
+    public String lastCallParticipantIdsJson;
     public int unreadCount;
     public boolean pinned;
     public long notificationMuted;
@@ -72,6 +73,7 @@ public class ChatEntity {
         this.lastMessageStatus = lastMessageStatus;
         this.lastMessageType = lastMessageType;
         this.lastMessageAttachmentName = lastMessageAttachmentName;
+        this.lastCallParticipantIdsJson = "[]";
         this.unreadCount = unreadCount;
         this.pinned = pinned;
         this.notificationMuted = notificationMuted;

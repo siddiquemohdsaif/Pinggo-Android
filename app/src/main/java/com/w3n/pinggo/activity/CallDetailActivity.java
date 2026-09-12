@@ -36,6 +36,7 @@ public class CallDetailActivity extends AppCompatActivity implements CallDetailV
   public static final String EXTRA_FULL_CALLED_DATE_TIME = "com.w3n.pinggo.EXTRA_FULL_CALLED_DATE_TIME";
   public static final String EXTRA_DURATION = "com.w3n.pinggo.EXTRA_DURATION";
   public static final String EXTRA_IS_VIDEO_CALL = "com.w3n.pinggo.EXTRA_IS_VIDEO_CALL";
+  public static final String EXTRA_IS_CONFERENCE = "com.w3n.pinggo.EXTRA_IS_CONFERENCE";
   private CallDetailView detailView;
   private static final int CALL_PAGE_SIZE = 50;
   private String callHistoryChatId = "";
@@ -54,7 +55,9 @@ public class CallDetailActivity extends AppCompatActivity implements CallDetailV
     String calledTime = value(EXTRA_CALLED_TIME, getString(R.string.unknown_time));
     detailView = new CallDetailView(
         this,
-        DeviceContactResolver.nameOrPhone(this, value(EXTRA_PHONE_NUMBER, "")),
+        getIntent().getBooleanExtra(EXTRA_IS_CONFERENCE, false)
+            ? value(EXTRA_CONTACT_NAME, "Conference call")
+            : DeviceContactResolver.nameOrPhone(this, value(EXTRA_PHONE_NUMBER, "")),
         value(EXTRA_PHONE_NUMBER, ""),
         value(EXTRA_FULL_CALLED_DATE_TIME, calledTime),
         value(EXTRA_DURATION, getString(R.string.unknown_duration)),
@@ -148,7 +151,7 @@ public class CallDetailActivity extends AppCompatActivity implements CallDetailV
           value(EXTRA_CONTACT_NAME, getString(R.string.call)), rowTime.format(date),
           fullTime.format(date), formatDuration(call.durationSeconds),
           "video".equals(call.mediaType), currentUser.equals(normalize(call.callerId)),
-          call.connectedAt == null || call.connectedAt <= 0));
+          call.connectedAt == null || call.connectedAt <= 0, call.conference));
     }
     return calls;
   }

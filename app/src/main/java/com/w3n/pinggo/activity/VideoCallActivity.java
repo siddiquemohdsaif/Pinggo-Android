@@ -1,6 +1,7 @@
 package com.w3n.pinggo.activity;
 
 import android.Manifest;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.media.AudioManager;
@@ -76,12 +77,44 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
+    String offer = getIntent().getStringExtra(VoiceCallActivity.EXTRA_SDP_OFFER);
+    String selectedEngine = getIntent().getStringExtra(VoiceCallActivity.EXTRA_CALL_ENGINE);
+    if ((offer == null || offer.isEmpty()) && (selectedEngine == null || selectedEngine.isEmpty())) {
+      com.w3n.pinggo.call.CallEngineChooser.show(this, "video",
+          getIntent().getStringExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID), engine -> {
+            getIntent().putExtra(VoiceCallActivity.EXTRA_CALL_ENGINE, engine);
+            openCallScreen();
+          });
+      return;
+    }
+    openCallScreen();
+  }
+
+  private void openCallScreen() {
+    String routedOffer = getIntent().getStringExtra(VoiceCallActivity.EXTRA_SDP_OFFER);
+    String selectedEngine = getIntent().getStringExtra(VoiceCallActivity.EXTRA_CALL_ENGINE);
+    Log.i("PingGoCallTrace", "video_engine_route callId="
+        + value(VoiceCallActivity.EXTRA_CALL_ID) + " engine=" + selectedEngine
+        + " incoming=" + (routedOffer != null && !routedOffer.isEmpty()));
+    if (com.w3n.pinggo.call.CallEngineToggle.LIVEKIT.equals(selectedEngine)
+        && (routedOffer == null || routedOffer.isEmpty())) {
+      Intent liveKit = new Intent(getIntent());
+      liveKit.setClass(this, LiveKitCallActivity.class);
+      liveKit.putExtra(LiveKitCallActivity.EXTRA_MEDIA_TYPE, "video");
+      startActivity(liveKit);
+      finish();
+      return;
+    }
     Log.i("PingGoCallTrace", "video_activity_created callId="
         + value(VoiceCallActivity.EXTRA_CALL_ID) + " hasOffer="
         + !value(VoiceCallActivity.EXTRA_SDP_OFFER).isEmpty() + " autoAccept="
         + getIntent().getBooleanExtra(VoiceCallActivity.EXTRA_AUTO_ACCEPT, false));
-    PingGoNotificationManager.clearCallNotification(this,
-        value(VoiceCallActivity.EXTRA_CALL_ID));
+    if (!value(VoiceCallActivity.EXTRA_SDP_OFFER).isEmpty()) {
+      if (getIntent().getBooleanExtra(VoiceCallActivity.EXTRA_AUTO_ACCEPT, false))
+        PingGoNotificationManager.clearCallNotification(this,
+            value(VoiceCallActivity.EXTRA_CALL_ID));
+      else PingGoNotificationManager.markCallNotificationOpened(this, getIntent());
+    }
     WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     ActiveCallRegistry.getInstance().register(this, value(VoiceCallActivity.EXTRA_CALL_CHAT_ID),
         ActiveCallRegistry.TYPE_VIDEO);
@@ -239,6 +272,8 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
         + value(VoiceCallActivity.EXTRA_CALL_ID) + " incomingUnanswered="
         + controller.isIncomingUnanswered());
     stopIncomingRingtone();
+    PingGoNotificationManager.clearCallNotification(this,
+        value(VoiceCallActivity.EXTRA_CALL_ID));
     controller.accept();
     callView.showIncomingPrompt(false);
   }
@@ -246,6 +281,8 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
   @Override
   public void onReject() {
     stopCallTones();
+    PingGoNotificationManager.clearCallNotification(this,
+        value(VoiceCallActivity.EXTRA_CALL_ID));
     controller.reject();
   }
 
@@ -273,6 +310,12 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
           state == VideoCallController.CallState.ENDING ||
           state == VideoCallController.CallState.ENDED) {
         stopCallTones();
+      }
+      if (state == VideoCallController.CallState.CONNECTED
+          || state == VideoCallController.CallState.ENDING
+          || state == VideoCallController.CallState.ENDED) {
+        PingGoNotificationManager.clearCallNotification(this,
+            value(VoiceCallActivity.EXTRA_CALL_ID));
       }
       if (state == VideoCallController.CallState.CONNECTED) {
         ActiveCallRegistry.getInstance().setConnected(this, true);

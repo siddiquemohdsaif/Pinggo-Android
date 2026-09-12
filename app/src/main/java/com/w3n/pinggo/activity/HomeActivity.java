@@ -191,7 +191,7 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         if (uid != null && !uid.trim().isEmpty()) {
             repository.ensureChatListLoaded(normalizeAccountId(uid));
             callRepository = CallRepository.getInstance(this);
-            callRepository.observeLatestCalls(uid).observe(this, calls -> {
+            callRepository.observeCalls(uid).observe(this, calls -> {
                 latestCallEntities = calls == null ? new ArrayList<>() : calls;
                 submitCachedCalls(latestCallEntities);
                 if (callPaginationRevealPending) {
@@ -342,6 +342,15 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                     : callerId;
             ChatEntity chat = chatsById.get(chatId);
             String contact = DeviceContactResolver.cachedNameOrPhone(otherId);
+            if (call.conference) {
+                contact = chat != null && chat.isGroup && chat.contactName != null
+                        && !chat.contactName.trim().isEmpty()
+                        ? chat.contactName.trim() : "Conference call";
+                if (chat == null || !chat.isGroup) {
+                    String names = conferenceParticipantNames(call.participantIdsJson, ownId);
+                    if (!names.isEmpty()) contact += "\n" + names;
+                }
+            }
             long endedAt = call.endedAt;
             long duration = call.durationSeconds;
             boolean outgoing = ownId.equals(normalizeAccountId(callerId));
@@ -350,7 +359,7 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
             calls.add(new CallLog(chatId, call.messageId, otherId,
                     contact, rowTime.format(date), fullTime.format(date),
                     formatCallDuration(duration),
-                    "video".equals(call.mediaType), outgoing, missed));
+                    "video".equals(call.mediaType), outgoing, missed, call.conference));
         }
         if (homeView != null)
             homeView.submitCalls(calls);
@@ -359,6 +368,22 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
     private static String jsonString(JsonObject object, String name) {
         JsonElement value = object.get(name);
         return value == null || value.isJsonNull() ? "" : value.getAsString();
+    }
+
+    private static String conferenceParticipantNames(String json, String ownId) {
+        if (json == null || json.trim().isEmpty()) return "";
+        try {
+            JsonArray ids = com.google.gson.JsonParser.parseString(json).getAsJsonArray();
+            List<String> names = new ArrayList<>();
+            for (JsonElement item : ids) {
+                String id = normalizeAccountId(item.getAsString());
+                if (!id.isEmpty() && !id.equals(ownId))
+                    names.add(DeviceContactResolver.cachedNameOrPhone(id));
+            }
+            return android.text.TextUtils.join(", ", names);
+        } catch (RuntimeException ignored) {
+            return "";
+        }
     }
 
     private static long jsonLong(JsonObject object, String name) {
@@ -388,6 +413,7 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                 callLog.getFullCalledDateTime());
         intent.putExtra(CallDetailActivity.EXTRA_DURATION, callLog.getDuration());
         intent.putExtra(CallDetailActivity.EXTRA_IS_VIDEO_CALL, callLog.isVideoCall());
+        intent.putExtra(CallDetailActivity.EXTRA_IS_CONFERENCE, callLog.isConference());
         startActivity(intent);
     }
 

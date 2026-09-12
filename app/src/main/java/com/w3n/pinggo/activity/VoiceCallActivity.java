@@ -1,6 +1,7 @@
 package com.w3n.pinggo.activity;
 
 import android.Manifest;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.media.AudioManager;
 import android.media.Ringtone;
@@ -39,6 +40,7 @@ public class VoiceCallActivity extends AppCompatActivity
   public static final String EXTRA_SDP_OFFER = "com.w3n.pinggo.EXTRA_SDP_OFFER";
   public static final String EXTRA_CALL_CHAT_ID = "com.w3n.pinggo.EXTRA_CALL_CHAT_ID";
   public static final String EXTRA_AUTO_ACCEPT = "com.w3n.pinggo.EXTRA_AUTO_ACCEPT";
+  public static final String EXTRA_CALL_ENGINE = "com.w3n.pinggo.EXTRA_CALL_ENGINE";
   private VoiceActiveCallView callView;
   private AudioManager audioManager;
   private WebRTCCallClient callClient;
@@ -96,11 +98,41 @@ public class VoiceCallActivity extends AppCompatActivity
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
+    String offer = getIntent().getStringExtra(EXTRA_SDP_OFFER);
+    String selectedEngine = getIntent().getStringExtra(EXTRA_CALL_ENGINE);
+    if ((offer == null || offer.isEmpty()) && (selectedEngine == null || selectedEngine.isEmpty())) {
+      com.w3n.pinggo.call.CallEngineChooser.show(this, "audio",
+          getIntent().getStringExtra(EXTRA_CALL_CHAT_ID), engine -> {
+            getIntent().putExtra(EXTRA_CALL_ENGINE, engine);
+            openCallScreen();
+          });
+      return;
+    }
+    openCallScreen();
+  }
+
+  private void openCallScreen() {
+    String routedOffer = getIntent().getStringExtra(EXTRA_SDP_OFFER);
+    String selectedEngine = getIntent().getStringExtra(EXTRA_CALL_ENGINE);
+    Log.i(CALL_TRACE, "voice_engine_route callId=" + callId() + " engine=" + selectedEngine
+        + " incoming=" + (routedOffer != null && !routedOffer.isEmpty()));
+    if (com.w3n.pinggo.call.CallEngineToggle.LIVEKIT.equals(selectedEngine)
+        && (routedOffer == null || routedOffer.isEmpty())) {
+      Intent liveKit = new Intent(getIntent());
+      liveKit.setClass(this, LiveKitCallActivity.class);
+      liveKit.putExtra(LiveKitCallActivity.EXTRA_MEDIA_TYPE, "audio");
+      startActivity(liveKit);
+      finish();
+      return;
+    }
     Log.i(CALL_TRACE, "voice_activity_created callId=" + callId()
         + " hasOffer=" + isIncoming() + " autoAccept="
         + getIntent().getBooleanExtra(EXTRA_AUTO_ACCEPT, false));
-    PingGoNotificationManager.clearCallNotification(this,
-        getIntent().getStringExtra(EXTRA_CALL_ID));
+    if (isIncoming()) {
+      if (getIntent().getBooleanExtra(EXTRA_AUTO_ACCEPT, false))
+        PingGoNotificationManager.clearCallNotification(this, callId());
+      else PingGoNotificationManager.markCallNotificationOpened(this, getIntent());
+    }
     WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
     ActiveCallRegistry.getInstance().register(this,
@@ -185,6 +217,7 @@ public class VoiceCallActivity extends AppCompatActivity
     if (!isIncoming() || incomingAccepted)
       return;
     incomingAccepted = true;
+    PingGoNotificationManager.clearCallNotification(this, callId());
     stopIncomingRingtone();
     callView.hideIncomingPrompt();
     callView.setCallStatus("Connecting…");
@@ -203,6 +236,7 @@ public class VoiceCallActivity extends AppCompatActivity
 
   private void rejectIncoming() {
     stopIncomingRingtone();
+    PingGoNotificationManager.clearCallNotification(this, callId());
     if (!isIncoming() || incomingAccepted) {
       finish();
       return;
@@ -237,6 +271,7 @@ public class VoiceCallActivity extends AppCompatActivity
   @Override
   public void onSpeaker() {
     speakerOn = !speakerOn;
+    Log.i(CALL_TRACE, "voice_audio_route callId=" + callId() + " speaker=" + speakerOn);
     if (audioManager != null)
       audioManager.setSpeakerphoneOn(speakerOn);
     callView.setAudioState(speakerOn, muted);
@@ -245,6 +280,7 @@ public class VoiceCallActivity extends AppCompatActivity
   @Override
   public void onMute() {
     muted = !muted;
+    Log.i(CALL_TRACE, "voice_local_mute callId=" + callId() + " muted=" + muted);
     if (audioManager != null)
       audioManager.setMicrophoneMute(muted);
     if (callClient != null)
@@ -296,6 +332,7 @@ public class VoiceCallActivity extends AppCompatActivity
     if (!getIntent().getStringExtra(EXTRA_CALL_ID).equals(callId))
       return;
     if ("call_end".equals(type) || "call_no_answer".equals(type)) {
+      PingGoNotificationManager.clearCallNotification(this, callId());
       Toast.makeText(this, "Call ended.", Toast.LENGTH_SHORT).show();
       finish();
     }
@@ -381,6 +418,9 @@ public class VoiceCallActivity extends AppCompatActivity
 
   @Override
   protected void onDestroy() {
+    Log.i(CALL_TRACE, "voice_activity_destroyed callId=" + callId()
+        + " changingConfiguration=" + isChangingConfigurations()
+        + " finishing=" + isFinishing() + " connected=" + timerRunning);
     stopCallTones();
     stopCallTimer();
     if (audioManager != null) {
@@ -390,7 +430,7 @@ public class VoiceCallActivity extends AppCompatActivity
     if (callClient != null)
       callClient.close(true);
     else
-      ChatRepository.getInstance(this).setCallEventListener(null);
+      ChatRepository.getInstance(this).clearCallEventListener(this);
     callClient = null;
     if (callView != null)
       callView.release();

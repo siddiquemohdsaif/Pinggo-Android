@@ -13,6 +13,7 @@ public class Chat {
     private final String lastMessageStatus;
     private final String lastMessageType;
     private final String lastMessageAttachmentName;
+    private String lastCallParticipantIdsJson = "[]";
     private final int unreadCount;
     private final boolean pinned;
     private final long notificationMuted;
@@ -143,6 +144,10 @@ public class Chat {
     public String getLastMessageStatus() { return lastMessageStatus; }
     public String getLastMessageType() { return lastMessageType; }
     public String getLastMessageAttachmentName() { return lastMessageAttachmentName; }
+    public String getLastCallParticipantIdsJson() { return lastCallParticipantIdsJson; }
+    public void setLastCallParticipantIdsJson(String value) {
+        lastCallParticipantIdsJson = value == null ? "[]" : value;
+    }
 
     public int getUnreadCount() {
         return unreadCount;

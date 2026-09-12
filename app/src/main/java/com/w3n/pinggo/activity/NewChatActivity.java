@@ -9,7 +9,11 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.provider.ContactsContract;
 import android.text.InputType;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.ViewGroup;
+import android.widget.EditText;
+import android.widget.FrameLayout;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
 import com.w3n.pinggo.Util.PhoneNumberFormatter;
 import com.w3n.pinggo.Util.login.CountryDetector;
@@ -28,6 +32,7 @@ import com.google.gson.JsonObject;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
+import com.w3n.pinggo.data.local.ChatEntity;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.views.chat.NewChatView;
 import com.w3n.pinggo.views.common.NativePromptDialogView;
@@ -44,13 +49,19 @@ import java.util.concurrent.Executors;
 public class NewChatActivity extends AppCompatActivity implements NewChatView.Listener {
   public static final String EXTRA_CREATE_GROUP = "com.w3n.pinggo.EXTRA_CREATE_GROUP";
   public static final String EXTRA_ADD_TO_GROUP_ID = "com.w3n.pinggo.EXTRA_ADD_TO_GROUP_ID";
+  public static final String EXTRA_SELECT_CALL_MEMBERS = "com.w3n.pinggo.EXTRA_SELECT_CALL_MEMBERS";
+  public static final String EXTRA_EXCLUDED_MEMBER_IDS = "com.w3n.pinggo.EXTRA_EXCLUDED_MEMBER_IDS";
+  public static final String RESULT_MEMBER_IDS = "com.w3n.pinggo.RESULT_MEMBER_IDS";
   public static final String EXTRA_FORWARD_SOURCE_CHAT_ID = "com.w3n.pinggo.EXTRA_FORWARD_SOURCE_CHAT_ID";
   public static final String EXTRA_FORWARD_MESSAGE_IDS = "com.w3n.pinggo.EXTRA_FORWARD_MESSAGE_IDS";
   private static final int CONTACTS_PERMISSION_REQUEST = 42, DISCOVER_BATCH_SIZE = 50;
+  private static final String DISCOVERY_CACHE = "discovered_accounts_v1";
+  private static final long DISCOVERY_CACHE_TTL_MS = 24L * 60L * 60L * 1000L;
   private final ExecutorService discoveryExecutor = Executors.newSingleThreadExecutor();
   private final ExecutorService photoExecutor = Executors.newFixedThreadPool(3);
   private final List<JsonObject> found = new ArrayList<>();
   private final List<String> invites = new ArrayList<>();
+  private final List<ChatEntity> orderedChats = new ArrayList<>();
   private final Set<String> rendered = new LinkedHashSet<>();
   private final Set<String> photoDownloads = Collections.newSetFromMap(new ConcurrentHashMap<>());
   private NewChatView newChatView;
@@ -61,6 +72,8 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   private boolean createGroupMode;
   private boolean creatingGroup;
   private String addToGroupId;
+  private boolean selectCallMembers;
+  private final Set<String> excludedMemberIds = new LinkedHashSet<>();
 
   @Override
   protected void onCreate(Bundle state) {
@@ -72,32 +85,75 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     repository = ChatRepository.getInstance(this);
     createGroupMode = getIntent().getBooleanExtra(EXTRA_CREATE_GROUP, false);
     addToGroupId = getIntent().getStringExtra(EXTRA_ADD_TO_GROUP_ID);
+    selectCallMembers = getIntent().getBooleanExtra(EXTRA_SELECT_CALL_MEMBERS, false);
+    ArrayList<String> excluded = getIntent().getStringArrayListExtra(EXTRA_EXCLUDED_MEMBER_IDS);
+    if (excluded != null) for (String id : excluded) {
+      String normalized = normalize(id);
+      if (!normalized.isEmpty()) excludedMemberIds.add(normalized);
+    }
+    if (selectCallMembers) createGroupMode = true;
     if (addToGroupId != null && !addToGroupId.trim().isEmpty()) createGroupMode = true;
     if (createGroupMode)
       newChatView.setGroupMode(true);
-    if (addToGroupId != null && !addToGroupId.trim().isEmpty()) {
+    if (selectCallMembers) {
+      newChatView.setTitle("Add to call");
+      newChatView.setGroupActionLabel("Invite");
+    } else if (addToGroupId != null && !addToGroupId.trim().isEmpty()) {
       newChatView.setTitle("Add members");
       newChatView.setGroupActionLabel("Add");
     } else if (isForwarding())
       newChatView.setTitle("Forward to");
-    setContentView(newChatView);
+    if (createGroupMode) {
+      repository.observeChats().observe(this, chats -> {
+        orderedChats.clear();
+        if (chats != null) orderedChats.addAll(chats);
+        render();
+      });
+    }
+    FrameLayout root = new FrameLayout(this);
+    root.addView(newChatView, new FrameLayout.LayoutParams(-1, -1));
+    EditText search = new EditText(this);
+    search.setSingleLine(true);
+    search.setHint("Search name or phone number");
+    search.setTextSize(15f);
+    search.setPadding(dp(16), 0, dp(16), 0);
+    search.setBackgroundColor(0xFFFFFFFF);
+    search.setElevation(dp(2));
+    FrameLayout.LayoutParams searchParams = new FrameLayout.LayoutParams(-1, dp(48));
+    searchParams.leftMargin = dp(16);
+    searchParams.rightMargin = dp(16);
+    root.addView(search, searchParams);
+    setContentView(root);
     ViewCompat.setOnApplyWindowInsetsListener(
         newChatView,
         (v, i) -> {
           Insets b = i.getInsets(WindowInsetsCompat.Type.systemBars());
           newChatView.setInsets(b.top, b.bottom);
+          FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) search.getLayoutParams();
+          params.topMargin = b.top + dp(64);
+          search.setLayoutParams(params);
           return i;
         });
     ViewCompat.requestApplyInsets(newChatView);
+    search.addTextChangedListener(new TextWatcher() {
+      @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+      @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+        newChatView.setSearchQuery(s == null ? "" : s.toString());
+      }
+      @Override public void afterTextChanged(Editable s) {}
+    });
     loadContactsWithPermission();
   }
 
   private void loadContactsWithPermission() {
     if (ContextCompat.checkSelfPermission(this,
         Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
-      DeviceContactResolver.warmUp(this, this::discoverContacts);
+      DeviceContactResolver.warmUp(this, () -> {
+        if (!loadDiscoveryCache()) discoverContacts();
+      });
       return;
     }
+    if (loadDiscoveryCache()) return;
     ActivityCompat.requestPermissions(
         this, new String[] { Manifest.permission.READ_CONTACTS }, CONTACTS_PERMISSION_REQUEST);
   }
@@ -110,25 +166,28 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
         && results.length > 0
         && results[0] == PackageManager.PERMISSION_GRANTED) {
       DeviceContactResolver.warmUp(this, this::discoverContacts);
-    } else
+    } else if (createGroupMode)
+      render();
+    else
       newChatView.showStatus("Contacts permission is required to discover chats.");
   }
 
   private void discoverContacts() {
-    newChatView.showStatus("Loading contacts...");
+    if (!selectCallMembers) newChatView.showStatus("Loading contacts...");
     discoveryExecutor.execute(
         () -> {
           List<String> contacts = readPhoneContacts();
           runOnUiThread(
               () -> {
                 if (contacts.isEmpty()) {
-                  newChatView.showStatus("No contacts found.");
+                  if (createGroupMode) render();
+                  else newChatView.showStatus("No contacts found.");
                   return;
                 }
                 found.clear();
                 invites.clear();
                 rendered.clear();
-                newChatView.showStatus("Discovering contacts...");
+                if (!selectCallMembers) newChatView.showStatus("Discovering contacts...");
               });
           if (!contacts.isEmpty())
             discoverNextBatch(contacts, 0);
@@ -139,7 +198,7 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     if (isClosing())
       return;
     if (start >= contacts.size()) {
-      runOnUiThread(this::render);
+      runOnUiThread(() -> { render(); saveDiscoveryCache(); });
       return;
     }
     int end = Math.min(start + DISCOVER_BATCH_SIZE, contacts.size());
@@ -281,18 +340,93 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     if (isClosing() || newChatView == null)
       return;
     List<NewChatView.Item> items = new ArrayList<>();
-    for (JsonObject contact : found)
-      items.add(
-          NewChatView.Item.found(
-              normalize(string(contact, "phoneNumber")),
-              string(contact, "chatId"),
-              string(contact, "profilePhotoUrl")));
+    Set<String> addedAccounts = new LinkedHashSet<>();
+    if (createGroupMode) {
+      // ChatDao already supplies the Chats screen order: pinned first, then most recent.
+      // Include existing one-to-one chat users even when they are not saved in
+      // Android contacts. Saved contacts below are merged and deduplicated.
+      for (ChatEntity chat : orderedChats) {
+        if (chat == null || chat.isGroup) continue;
+        String phone = normalize(chat.otherUserId);
+        if (phone.isEmpty() || excludedMemberIds.contains(phone)
+            || !addedAccounts.add(phone)) continue;
+        items.add(NewChatView.Item.found(phone, chat.chatId, chat.profilePhotoUrl,
+            chat.contactName));
+      }
+    }
+    for (JsonObject contact : found) {
+      String phone = normalize(string(contact, "phoneNumber"));
+      if (excludedMemberIds.contains(phone) || !addedAccounts.add(phone)) continue;
+      items.add(NewChatView.Item.found(phone, string(contact, "chatId"),
+          string(contact, "profilePhotoUrl")));
+    }
     if (!invites.isEmpty()) {
-      items.add(NewChatView.Item.divider("Invite"));
+      boolean dividerAdded = false;
       for (String phone : invites)
-        items.add(NewChatView.Item.invite(phone));
+        if (!excludedMemberIds.contains(normalize(phone))
+            && addedAccounts.add(normalize(phone))) {
+          if (!dividerAdded) {
+            items.add(NewChatView.Item.divider("Invite"));
+            dividerAdded = true;
+          }
+          items.add(NewChatView.Item.invite(phone));
+        }
     }
     newChatView.submitItems(items);
+  }
+
+  private boolean loadDiscoveryCache() {
+    android.content.SharedPreferences cache = getSharedPreferences(
+        DISCOVERY_CACHE, MODE_PRIVATE);
+    String owner = normalize(currentPhone());
+    if (!owner.equals(cache.getString("owner", ""))) return false;
+    long savedAt = cache.getLong("savedAt", 0L);
+    if (savedAt <= 0L || System.currentTimeMillis() - savedAt >= DISCOVERY_CACHE_TTL_MS)
+      return false;
+    try {
+      JsonObject value = com.google.gson.JsonParser.parseString(
+          cache.getString("value", "{}")).getAsJsonObject();
+      found.clear(); invites.clear(); rendered.clear();
+      JsonArray cachedFound = value.getAsJsonArray("found");
+      if (cachedFound != null) for (JsonElement item : cachedFound) {
+        if (!item.isJsonObject()) continue;
+        JsonObject contact = item.getAsJsonObject();
+        String phone = normalize(string(contact, "phoneNumber"));
+        if (!phone.isEmpty() && rendered.add(phone)) found.add(contact);
+      }
+      JsonArray cachedInvites = value.getAsJsonArray("invites");
+      if (cachedInvites != null) for (JsonElement item : cachedInvites) {
+        String phone = normalize(item.getAsString());
+        if (!phone.isEmpty() && rendered.add(phone)) invites.add(phone);
+      }
+      render();
+      android.util.Log.i("PingGoContacts", "discovery_cache_hit ageMs="
+          + (System.currentTimeMillis() - savedAt) + " found=" + found.size());
+      return true;
+    } catch (RuntimeException error) {
+      cache.edit().clear().apply();
+      return false;
+    }
+  }
+
+  private void saveDiscoveryCache() {
+    JsonObject value = new JsonObject();
+    JsonArray cachedFound = new JsonArray();
+    for (JsonObject contact : found) cachedFound.add(contact.deepCopy());
+    JsonArray cachedInvites = new JsonArray();
+    for (String phone : invites) cachedInvites.add(phone);
+    value.add("found", cachedFound);
+    value.add("invites", cachedInvites);
+    getSharedPreferences(DISCOVERY_CACHE, MODE_PRIVATE).edit()
+        .putString("owner", normalize(currentPhone()))
+        .putLong("savedAt", System.currentTimeMillis())
+        .putString("value", value.toString()).apply();
+    android.util.Log.i("PingGoContacts", "discovery_cache_saved found="
+        + found.size() + " invites=" + invites.size());
+  }
+
+  private int dp(int value) {
+    return Math.round(value * getResources().getDisplayMetrics().density);
   }
 
   @Override
@@ -349,6 +483,12 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   public void onCreateGroup(List<String> memberIds) {
     if (!createGroupMode || creatingGroup || memberIds == null || memberIds.isEmpty())
       return;
+    if (selectCallMembers) {
+      setResult(RESULT_OK, new Intent().putStringArrayListExtra(
+          RESULT_MEMBER_IDS, new ArrayList<>(memberIds)));
+      finish();
+      return;
+    }
     if (addToGroupId != null && !addToGroupId.trim().isEmpty()) {
       creatingGroup = true;
       AppFunctionManager.getInstance().updateGroupMembers(

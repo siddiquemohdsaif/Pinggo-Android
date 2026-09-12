@@ -196,10 +196,10 @@ public final class CallsView extends View {
             row.add(new Image.Builder(getContext(), scope.id("avatar"), cachedAvatar("?"),
                     new RectF(50f * scale, 27f * scale, 182f * scale, 159f * scale))
                     .setScaleType(Image.ScaleType.CENTER_CROP));
-            row.add(rowText(scope.id("name"), new RectF(220f * scale, 38f * scale,
-                    width - 210f * scale, 92f * scale), 42f * scale, PRIMARY,
-                    FontVariation.MEDIUM));
-            row.add(rowText(scope.id("details"), new RectF(220f * scale, 103f * scale,
+            row.add(rowText(scope.id("name"), new RectF(220f * scale, 14f * scale,
+                    width - 210f * scale, 108f * scale), 36f * scale, PRIMARY,
+                    FontVariation.MEDIUM).setWrapEnabled(true));
+            row.add(rowText(scope.id("details"), new RectF(220f * scale, 110f * scale,
                     width - 210f * scale, 157f * scale), 38f * scale, SECONDARY,
                     FontVariation.REGULAR));
             row.add(new Image.Builder(getContext(), scope.id("type"), phoneOutgoingBitmap,
@@ -220,6 +220,12 @@ public final class CallsView extends View {
             item.find("name", Text.class).setText(call.getContactName());
             String duration = call.getDuration() == null ? "" : call.getDuration().trim();
             String details = call.getCalledTime() == null ? "" : call.getCalledTime().trim();
+            if (call.isConference()) {
+                String type = call.isGroupCall()
+                        ? (call.isVideoCall() ? "Group video call" : "Group voice call")
+                        : (call.isVideoCall() ? "Conference video call" : "Conference voice call");
+                details = type + (details.isEmpty() ? "" : " · " + details);
+            }
             if (!duration.isEmpty()) details += (details.isEmpty() ? "" : " · ") + duration;
             item.find("details", Text.class).setText(details);
             item.find("type", Image.class)

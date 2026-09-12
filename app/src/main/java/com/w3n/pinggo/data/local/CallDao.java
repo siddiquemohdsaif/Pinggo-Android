@@ -12,12 +12,9 @@ public interface CallDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     void upsertAll(List<CallEntity> calls);
 
-    @Query("SELECT c.* FROM calls c WHERE c.ownerId = :ownerId AND NOT EXISTS ("
-            + "SELECT 1 FROM calls newer WHERE newer.ownerId = c.ownerId "
-            + "AND newer.chatId = c.chatId AND (newer.endedAt > c.endedAt "
-            + "OR (newer.endedAt = c.endedAt AND newer.callId > c.callId))) "
-            + "ORDER BY c.endedAt DESC, c.callId DESC")
-    LiveData<List<CallEntity>> observeLatestCalls(String ownerId);
+    @Query("SELECT * FROM calls WHERE ownerId = :ownerId "
+            + "ORDER BY endedAt DESC, callId DESC")
+    LiveData<List<CallEntity>> observeCalls(String ownerId);
 
     @Query("SELECT * FROM calls WHERE ownerId = :ownerId AND chatId = :chatId "
             + "ORDER BY endedAt DESC, callId DESC LIMIT :limit")

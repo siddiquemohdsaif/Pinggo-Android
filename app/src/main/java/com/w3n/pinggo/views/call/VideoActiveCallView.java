@@ -3,10 +3,12 @@ package com.w3n.pinggo.views.call;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.BitmapShader;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.graphics.Shader;
 import android.view.MotionEvent;
 import android.view.View;
 import com.ogfa.nativeviews.button.Button;
@@ -32,13 +34,16 @@ public final class VideoActiveCallView extends View {
   private int topInset, bottomInset;
   private boolean speakerOn, muted, cameraEnabled = true, incomingPrompt, callConnected, remoteMuted;
   private String callStatus = "Connecting…";
+  private boolean conferenceMode;
+  private String participantSummary = "";
+  private boolean addMemberVisible;
 
   public VideoActiveCallView(Context context, String phone, String profilePath, Listener listener) {
     super(context);
     this.phone = phone == null || phone.trim().isEmpty() ? "Unknown" : phone;
     this.listener = listener;
     Bitmap decoded = profilePath == null ? null : BitmapFactory.decodeFile(profilePath);
-    profile = decoded == null ? avatar() : decoded;
+    profile = circularBitmap(decoded == null ? avatar() : decoded);
     setClickable(true);
   }
   public void setInsets(int top, int bottom) {
@@ -53,6 +58,11 @@ public final class VideoActiveCallView extends View {
     callStatus = status == null || status.trim().isEmpty() ? "Video call" : status;
     if (getWidth() > 0) build();
   }
+  public void setConferenceParticipants(boolean conference, String participants) {
+    conferenceMode = conference;
+    participantSummary = participants == null ? "" : participants.trim();
+    if (getWidth() > 0) build();
+  }
   public void setCameraEnabled(boolean enabled) {
     cameraEnabled = enabled;
     if (getWidth() > 0) build();
@@ -60,6 +70,10 @@ public final class VideoActiveCallView extends View {
   public void setCallConnected(boolean connected) {
     callConnected = connected;
     if (!connected) muted = false;
+    if (getWidth() > 0) build();
+  }
+  public void setAddMemberVisible(boolean visible) {
+    addMemberVisible = visible;
     if (getWidth() > 0) build();
   }
   public void setRemoteMuted(boolean value) {
@@ -79,9 +93,16 @@ public final class VideoActiveCallView extends View {
     button("back", control, "‹", new RectF(px(27.5f), top, px(159.5f), top + px(132f)), Color.WHITE,
         id -> listener.onBack());
     content.add(new Image.Builder(getContext(), "header_profile", profile,
-        new RectF(px(187f), top + px(11f), px(297f), top + px(121f))).setScaleType(Image.ScaleType.CENTER_CROP));
-    text("phone", phone, new RectF(px(324.5f), top, w - px(44f), top + px(132f)), sp(17), Color.WHITE,
+        new RectF(px(187f), top + px(11f), px(297f), top + px(121f)))
+        .setScaleType(Image.ScaleType.CENTER_CROP));
+    text("phone", conferenceMode ? "Conference call" : phone,
+        new RectF(px(324.5f), top, w - px(44f), top + px(132f)), sp(17), Color.WHITE,
         FontVariation.SEMI_BOLD, Text.Alignment.START);
+    if (conferenceMode && !participantSummary.isEmpty()) {
+      text("participants", participantSummary,
+          new RectF(px(324.5f), top + px(66f), w - px(44f), top + px(132f)),
+          sp(12), 0xFFCCD3D9, FontVariation.REGULAR, Text.Alignment.START);
+    }
     text("status", callStatus, new RectF(px(66f), top + px(247.5f), w - px(66f), top + px(412.5f)),
         sp(22), Color.WHITE, FontVariation.SEMI_BOLD, Text.Alignment.CENTER);
     if (remoteMuted) {
@@ -106,13 +127,20 @@ public final class VideoActiveCallView extends View {
   }
   private void controls(float w, float h) {
     float bottom = h - bottomInset - px(66f), top = bottom - px(176f), gap = px(22f);
-    float width = Math.min(px(192.5f), (w - px(66f) - gap * 4) / 5);
-    float x = (w - (width * 5 + gap * 4)) / 2;
-    button("flip", control, "Flip", new RectF(x, top, x + width, bottom), Color.WHITE,
-        id -> listener.onFlipCamera());
+    int count = addMemberVisible ? 6 : 5;
+    float width = Math.min(px(192.5f), (w - px(44f) - gap * (count - 1)) / count);
+    float x = (w - (width * count + gap * (count - 1))) / 2;
+    Button flipButton = button("flip", callConnected && cameraEnabled ? control : disabled,
+        "Flip", new RectF(x, top, x + width, bottom), Color.WHITE,
+        id -> { if (callConnected && cameraEnabled) listener.onFlipCamera(); });
+    flipButton.setEnabled(callConnected && cameraEnabled);
     x += width + gap;
-    button("camera", cameraEnabled ? selected : control, cameraEnabled ? "Camera" : "Camera off",
-        new RectF(x, top, x + width, bottom), Color.WHITE, id -> listener.onCamera());
+    Button cameraButton = button("camera", !callConnected ? disabled
+            : cameraEnabled ? selected : control,
+        cameraEnabled ? "Camera" : "Camera off",
+        new RectF(x, top, x + width, bottom), Color.WHITE,
+        id -> { if (callConnected) listener.onCamera(); });
+    cameraButton.setEnabled(callConnected);
     x += width + gap;
     button("speaker", speakerOn ? selected : control, speakerOn ? "Speaker on" : "Speaker",
         new RectF(x, top, x + width, bottom), Color.WHITE, id -> listener.onSpeaker());
@@ -122,6 +150,13 @@ public final class VideoActiveCallView extends View {
         id -> { if (callConnected) listener.onMute(); });
     muteButton.setEnabled(callConnected);
     x += width + gap;
+    if (addMemberVisible) {
+      Button addButton = button("add_member", callConnected ? control : disabled, "Add",
+          new RectF(x, top, x + width, bottom), Color.WHITE,
+          id -> { if (callConnected) listener.onAddMember(); });
+      addButton.setEnabled(callConnected);
+      x += width + gap;
+    }
     button("end", danger, "End", new RectF(x, top, x + width, bottom), Color.WHITE,
         id -> listener.onEnd());
   }
@@ -136,7 +171,7 @@ public final class VideoActiveCallView extends View {
     return content.add(new Button.Builder(getContext(), id, image, label, rect)
         .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(px(66f)).setFont(NativeFonts.INTER)
         .setFontVariations(FontVariation.SEMI_BOLD).setTextSizePx(sp(13)).setTextColor(color)
-        .setRippleEnabled(true).setWaitForRippleBeforeClick(true).setRippleColor(0x33FFFFFF).setOnClickListener(click));
+        .setRippleEnabled(true).setWaitForRippleBeforeClick(false).setRippleColor(0x33FFFFFF).setOnClickListener(click));
   }
   @Override protected void onDraw(Canvas canvas) { super.onDraw(canvas); layers.draw(canvas); }
   @Override public boolean onTouchEvent(MotionEvent event) {
@@ -152,6 +187,23 @@ public final class VideoActiveCallView extends View {
     canvas.drawText("▣", size / 2f, size / 2f - (metrics.ascent + metrics.descent) / 2f, paint);
     return bitmap;
   }
+  private static Bitmap circularBitmap(Bitmap source) {
+    if (source == null || source.getWidth() <= 0 || source.getHeight() <= 0) return source;
+    int size = Math.min(source.getWidth(), source.getHeight());
+    float left = (source.getWidth() - size) / 2f;
+    float top = (source.getHeight() - size) / 2f;
+    Bitmap result = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+    Canvas canvas = new Canvas(result);
+    Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+    BitmapShader shader = new BitmapShader(source, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+    android.graphics.Matrix matrix = new android.graphics.Matrix();
+    matrix.setTranslate(-left, -top);
+    shader.setLocalMatrix(matrix);
+    paint.setShader(shader);
+    canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint);
+    source.recycle();
+    return result;
+  }
   private float px(float v) {
     return figmaConfig.toRuntime(v, Math.max(1, getResources().getDisplayMetrics().widthPixels));
   }
@@ -164,5 +216,6 @@ public final class VideoActiveCallView extends View {
     void onBack(); void onSpeaker(); void onMute(); void onEnd();
     void onFlipCamera(); void onCamera();
     void onAccept(); void onReject();
+    default void onAddMember() {}
   }
 }

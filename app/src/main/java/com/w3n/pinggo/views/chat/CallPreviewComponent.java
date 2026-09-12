@@ -9,7 +9,7 @@ import android.view.MotionEvent;
 import com.ogfa.nativeviews.component.Component;
 import com.ogfa.nativeviews.component.ComponentHost;
 
-/** Single-line call record using the same inner-card treatment as a file message. */
+/** Call record using the same inner-card treatment as a file message. */
 final class CallPreviewComponent implements Component {
   private static final int PANEL_COLOR = 0xFFF8F9FA;
   private static final int TITLE_COLOR = 0xFF131D2F;
@@ -78,11 +78,22 @@ final class CallPreviewComponent implements Component {
     paint.setTypeface(typeface);
     paint.setColor(TITLE_COLOR);
     paint.setTextSize(34f * scale);
-    String fitted = ellipsize(title, paint,
-        Math.max(1f, inner.right - 18f * scale - (inner.left + 116f * scale)));
+    String[] lines = title.split("\\n", 2);
+    float maximumWidth = Math.max(1f,
+        inner.right - 18f * scale - (inner.left + 116f * scale));
+    String fitted = ellipsize(lines[0], paint, maximumWidth);
     Paint.FontMetrics metrics = paint.getFontMetrics();
-    float baseline = inner.centerY() - (metrics.ascent + metrics.descent) / 2f;
+    float center = inner.centerY();
+    float baseline = lines.length == 1
+        ? center - (metrics.ascent + metrics.descent) / 2f
+        : center - 9f * scale - metrics.descent;
     canvas.drawText(fitted, inner.left + 116f * scale, baseline, paint);
+    if (lines.length > 1) {
+      paint.setColor(0xFF687382);
+      paint.setTextSize(27f * scale);
+      canvas.drawText(ellipsize(lines[1], paint, maximumWidth),
+          inner.left + 116f * scale, center + 25f * scale, paint);
+    }
   }
 
   private static String ellipsize(String value, Paint paint, float maximumWidth) {

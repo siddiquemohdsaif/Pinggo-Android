@@ -216,7 +216,14 @@ public final class CallDetailView extends View {
       item.find("type", Image.class)
           .setBitmap(callIcon(call));
       item.find("date", Text.class).setText(call.getFullCalledDateTime());
-      item.find("duration", Text.class).setText(call.getDuration());
+      String duration = call.getDuration();
+      if (call.isConference()) {
+        duration = (call.isGroupCall()
+            ? (call.isVideoCall() ? "Group video call" : "Group voice call")
+            : (call.isVideoCall() ? "Conference video call" : "Conference voice call"))
+            + (duration == null || duration.trim().isEmpty() ? "" : " · " + duration);
+      }
+      item.find("duration", Text.class).setText(duration);
       item.find("divider", Image.class).setVisible(position < calls.size() - 1);
     }
   }

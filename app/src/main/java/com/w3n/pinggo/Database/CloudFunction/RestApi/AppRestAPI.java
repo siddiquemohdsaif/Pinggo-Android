@@ -67,6 +67,9 @@ public interface AppRestAPI {
   @POST("calls/logs")
   Call<JsonObject> getCallLogs(@Body RequestBody body);
 
+  @POST("calls/livekit/token")
+  Call<JsonObject> getLiveKitToken(@Body RequestBody body);
+
   @POST("chats/getChat")
   Call<JsonObject> getChat(@Body RequestBody body);
 

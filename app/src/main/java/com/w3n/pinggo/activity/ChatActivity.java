@@ -1663,7 +1663,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   public void onVideoCall() {
     if (!requireGroupSendPermission()) return;
     if (isGroupChat()) {
-      Toast.makeText(this, "Group call implementation pending.", Toast.LENGTH_SHORT).show();
+      openCall(VideoCallActivity.class);
       return;
     }
     if (contactBlocked) {
@@ -1677,7 +1677,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   public void onVoiceCall() {
     if (!requireGroupSendPermission()) return;
     if (isGroupChat()) {
-      Toast.makeText(this, "Group call implementation pending.", Toast.LENGTH_SHORT).show();
+      openCall(VoiceCallActivity.class);
       return;
     }
     if (contactBlocked) {

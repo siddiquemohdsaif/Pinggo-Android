@@ -23,11 +23,14 @@ public class CallEntity {
     public Long connectedAt;
     public long endedAt;
     public long durationSeconds;
+    public boolean conference;
+    public String participantIdsJson;
 
     public CallEntity(@NonNull String ownerId, @NonNull String callId, String messageId,
                       String chatId, String callerId, String receiverId, String mediaType,
                       String status, String terminationReason, long createdAt, Long ringingAt,
-                      Long connectedAt, long endedAt, long durationSeconds) {
+                      Long connectedAt, long endedAt, long durationSeconds, boolean conference,
+                      String participantIdsJson) {
         this.ownerId = ownerId;
         this.callId = callId;
         this.messageId = messageId;
@@ -42,5 +45,7 @@ public class CallEntity {
         this.connectedAt = connectedAt;
         this.endedAt = endedAt;
         this.durationSeconds = durationSeconds;
+        this.conference = conference;
+        this.participantIdsJson = participantIdsJson;
     }
 }

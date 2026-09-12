@@ -25,9 +25,12 @@ import com.w3n.pinggo.activity.HomeActivity;
 import com.w3n.pinggo.activity.LinkedDevicesActivity;
 import com.w3n.pinggo.activity.VoiceCallActivity;
 import com.w3n.pinggo.activity.VideoCallActivity;
+import com.w3n.pinggo.activity.LiveKitCallActivity;
+import com.w3n.pinggo.call.CallEngineToggle;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
 import com.w3n.pinggo.call.WebRTCCallClient;
 import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
+import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.google.gson.JsonObject;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
@@ -55,10 +58,11 @@ public final class PingGoNotificationManager {
     public static final String EXTRA_CALLER_NAME = "notificationCallerName";
     public static final String EXTRA_CALL_MEDIA_TYPE = "notificationCallMediaType";
     private static final String CALL_CHANNEL_ID = "pinggo_calls";
-    private static final String GROUP_KEY = "pinggo_messages";
+    private static final String GROUP_KEY = "pinggo_message_batch";
     private static final int SUMMARY_NOTIFICATION_ID = 0x4f000001;
     private static final String CALL_ACTION_PREFS = "PingGoCallNotificationActions";
     private static final String OFFER_NOTIFICATION_PREFIX = "offer-notification:";
+    private static final String RESOLVED_NOTIFICATION_PREFIX = "resolved-notification:";
     private static final long OFFER_NOTIFICATION_TTL_MS = 2 * 60 * 60 * 1000L;
 
     private PingGoNotificationManager() { }
@@ -166,6 +170,9 @@ public final class PingGoNotificationManager {
         for (Map.Entry<String, com.google.gson.JsonElement> item : event.entrySet()) {
             if (item.getValue() != null && item.getValue().isJsonPrimitive())
                 data.put(item.getKey(), item.getValue().getAsString());
+            else if ("participantIds".equals(item.getKey()) && item.getValue() != null
+                    && item.getValue().isJsonArray())
+                data.put(item.getKey(), item.getValue().toString());
         }
         JsonObject sdp = event.has("sdp") && event.get("sdp").isJsonObject()
                 ? event.getAsJsonObject("sdp") : null;
@@ -174,19 +181,39 @@ public final class PingGoNotificationManager {
     }
 
     public static void showIncomingCallNotification(Context context, Map<String, String> data) {
-        showIncomingCallNotification(context, data, "");
+        String encodedOffer = value(data, "offerDescriptionBase64");
+        String plainOffer = value(data, "offerDescription");
+        String offer = "";
+        if (!encodedOffer.isEmpty() || !plainOffer.isEmpty()) {
+            JsonObject sdp = new JsonObject();
+            sdp.addProperty("type", value(data, "offerType"));
+            sdp.addProperty("description", plainOffer);
+            sdp.addProperty("descriptionBase64", encodedOffer);
+            offer = WebRTCCallClient.decodeSdp(sdp);
+        }
+        showIncomingCallNotification(context, data, offer);
     }
 
     private static void showIncomingCallNotification(
             Context context, Map<String, String> data, String offer) {
+        suppressMessageNotifications(context);
         String callId = value(data, "callId");
         String chatId = value(data, "chatId");
         String callerId = value(data, "callerId");
         String callerName = value(data, "callerName");
         boolean video = "video".equals(value(data, "mediaType"));
+        boolean liveKit = "livekit".equals(value(data, "engine"));
+        boolean conference = "group".equals(value(data, "callMode"))
+                || "true".equalsIgnoreCase(value(data, "conference"));
         if (callId.isEmpty() || callerId.isEmpty()) return;
         android.content.SharedPreferences callPreferences = context.getSharedPreferences(
                 CALL_ACTION_PREFS, Context.MODE_PRIVATE);
+        long resolvedAt = callPreferences.getLong(RESOLVED_NOTIFICATION_PREFIX + callId, 0L);
+        if (resolvedAt > 0L
+                && System.currentTimeMillis() - resolvedAt < OFFER_NOTIFICATION_TTL_MS) {
+            Log.i("PingGoCallTrace", "notification_duplicate_resolved_skipped callId=" + callId);
+            return;
+        }
         long richerNotificationAt = callPreferences.getLong(
                 OFFER_NOTIFICATION_PREFIX + callId, 0L);
         if (offer.isEmpty() && richerNotificationAt > 0L
@@ -201,34 +228,37 @@ public final class PingGoNotificationManager {
         }
         Log.i("PingGoCallTrace", "notification_build_incoming callId=" + callId
                 + " chatId=" + chatId + " media=" + (video ? "video" : "audio")
+                + " engine=" + (liveKit ? "livekit" : "legacy")
                 + " hasOffer=" + !offer.isEmpty());
         callerName = DeviceContactResolver.nameOrPhone(context, callerId);
         int id = callNotificationId(callId);
         Intent answerIntent;
         PendingIntent content;
         PendingIntent answer;
-        if (!offer.isEmpty()) {
+        if (!offer.isEmpty() || liveKit) {
             answerIntent = callActivityIntent(context, callId, chatId, callerId,
-                    callerName, video, offer, true);
+                    callerName, video, offer, true, liveKit, conference,
+                    value(data, "participantIds"));
             answer = PendingIntent.getActivity(context, id, answerIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
             content = PendingIntent.getActivity(context, id ^ 0x24680,
                     callActivityIntent(context, callId, chatId, callerId,
-                            callerName, video, offer, false),
+                            callerName, video, offer, false, liveKit, conference,
+                            value(data, "participantIds")),
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         } else {
             answerIntent = callActionIntent(context, ACTION_CALL_ANSWER, callId, chatId,
-                    callerId, callerName, video);
+                    callerId, callerName, video, false);
             answer = PendingIntent.getBroadcast(context, id, answerIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
             content = PendingIntent.getBroadcast(context, id ^ 0x24680,
                     callActionIntent(context, ACTION_CALL_OPEN, callId, chatId,
-                            callerId, callerName, video),
+                            callerId, callerName, video, false),
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         }
         PendingIntent decline = PendingIntent.getBroadcast(context, id ^ 0x13579,
                 callActionIntent(context, ACTION_CALL_DECLINE, callId, chatId,
-                        callerId, callerName, video),
+                        callerId, callerName, video, liveKit),
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Bitmap avatar = downloadBitmap(value(data, "profilePhotoUrl"));
         Bitmap icon = avatar != null ? avatar : BitmapFactory.decodeResource(
@@ -238,7 +268,8 @@ public final class PingGoNotificationManager {
         NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CALL_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_pinggo_notification).setLargeIcon(icon)
                 .setContentTitle(callerName)
-                .setContentText(video ? "Incoming video call" : "Incoming voice call")
+                .setContentText((conference ? "Incoming group " : "Incoming ")
+                        + (video ? "video call" : "voice call"))
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setPriority(NotificationCompat.PRIORITY_MAX).setOngoing(true)
                 .setAutoCancel(false).setContentIntent(content).setFullScreenIntent(content, true)
@@ -246,10 +277,11 @@ public final class PingGoNotificationManager {
         notifyAllowed(context, id, builder);
         Log.i("PingGoCallTrace", "notification_posted callId=" + callId
                 + " notificationId=" + id + " answerMode="
-                + (!offer.isEmpty() ? "direct_activity" : "wait_for_socket_invite"));
+                + ((!offer.isEmpty() || liveKit) ? "direct_activity" : "wait_for_socket_invite"));
     }
 
     public static void showMissedCallNotification(Context context, Map<String, String> data) {
+        suppressMessageNotifications(context);
         String callId = value(data, "callId");
         context.getSharedPreferences(CALL_ACTION_PREFS, Context.MODE_PRIVATE).edit()
                 .remove(OFFER_NOTIFICATION_PREFIX + callId).apply();
@@ -274,9 +306,63 @@ public final class PingGoNotificationManager {
         notifyAllowed(context, callNotificationId(callId), builder);
     }
 
+    /** Hide message cards during a call without marking their messages as read. */
+    private static void suppressMessageNotifications(Context context) {
+        NotificationManagerCompat manager = NotificationManagerCompat.from(context);
+        for (NotificationStateStore.ChatState chat : NotificationStateStore.all(context)) {
+            manager.cancel(notificationId(chat.chatId));
+        }
+        manager.cancel(SUMMARY_NOTIFICATION_ID);
+        Log.i("PingGoCallTrace", "message_notifications_suppressed_for_call");
+    }
+
     public static void clearCallNotification(Context context, String callId) {
         Log.i("PingGoCallTrace", "notification_cleared callId=" + callId);
+        if (callId != null && !callId.trim().isEmpty()) {
+            context.getSharedPreferences(CALL_ACTION_PREFS, Context.MODE_PRIVATE).edit()
+                    .putLong(RESOLVED_NOTIFICATION_PREFIX + callId,
+                            System.currentTimeMillis())
+                    .remove(OFFER_NOTIFICATION_PREFIX + callId)
+                    .apply();
+        }
         NotificationManagerCompat.from(context).cancel(callNotificationId(callId));
+    }
+
+    /** Keeps an opened incoming call in the shade without showing it again as a heads-up call. */
+    public static void markCallNotificationOpened(Context context, Intent activityIntent) {
+        String callId = stringExtra(activityIntent, VoiceCallActivity.EXTRA_CALL_ID);
+        if (callId.isEmpty()) return;
+        String callerName = stringExtra(activityIntent, VoiceCallActivity.EXTRA_PHONE_NUMBER);
+        boolean video = "video".equals(stringExtra(activityIntent,
+                LiveKitCallActivity.EXTRA_MEDIA_TYPE))
+                || activityIntent.getComponent() != null
+                && VideoCallActivity.class.getName().equals(
+                activityIntent.getComponent().getClassName());
+        Intent reopen = new Intent(activityIntent)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent content = PendingIntent.getActivity(context,
+                callNotificationId(callId) ^ 0x24680, reopen,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Bitmap icon = BitmapFactory.decodeResource(context.getResources(), R.drawable.pinggo_logo);
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CALL_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_pinggo_notification)
+                .setLargeIcon(icon)
+                .setContentTitle(callerName.isEmpty() ? "Incoming call" : callerName)
+                .setContentText(video ? "Incoming video call" : "Incoming voice call")
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setOngoing(true)
+                .setAutoCancel(false)
+                .setOnlyAlertOnce(true)
+                .setSilent(true)
+                .setContentIntent(content);
+        notifyAllowed(context, callNotificationId(callId), builder);
+        Log.i("PingGoCallTrace", "notification_opened_silenced callId=" + callId);
+    }
+
+    private static String stringExtra(Intent intent, String key) {
+        String value = intent == null ? null : intent.getStringExtra(key);
+        return value == null ? "" : value.trim();
     }
 
     public static void rememberCallAction(Context context, String callId, String action) {
@@ -297,24 +383,52 @@ public final class PingGoNotificationManager {
     }
 
     private static Intent callActivityIntent(Context context, String callId, String chatId,
-            String callerId, String callerName, boolean video, String offer, boolean autoAccept) {
-        return new Intent(context, video ? VideoCallActivity.class : VoiceCallActivity.class)
+            String callerId, String callerName, boolean video, String offer, boolean autoAccept,
+            boolean liveKit, boolean conference, String participantIdsJson) {
+        Intent intent = new Intent(context, liveKit ? LiveKitCallActivity.class
+                : (video ? VideoCallActivity.class : VoiceCallActivity.class))
                 .putExtra(VoiceCallActivity.EXTRA_CALL_ID, callId)
                 .putExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID, chatId)
                 .putExtra(VoiceCallActivity.EXTRA_CALLER_ID, callerId)
                 .putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER, callerName)
+                .putExtra(VoiceCallActivity.EXTRA_PROFILE_PATH,
+                        ChatProfilePhotoStore.getLocalPath(context, callerId))
                 .putExtra(VoiceCallActivity.EXTRA_SDP_OFFER, offer)
                 .putExtra(VoiceCallActivity.EXTRA_AUTO_ACCEPT, autoAccept)
+                .putExtra(VoiceCallActivity.EXTRA_CALL_ENGINE,
+                        liveKit ? CallEngineToggle.LIVEKIT : CallEngineToggle.LEGACY)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        if (liveKit) {
+            intent.putExtra(LiveKitCallActivity.EXTRA_MEDIA_TYPE, video ? "video" : "audio");
+            intent.putExtra(LiveKitCallActivity.EXTRA_INCOMING, true);
+            intent.putExtra(LiveKitCallActivity.EXTRA_CONFERENCE_CALL, conference);
+            intent.putStringArrayListExtra(LiveKitCallActivity.EXTRA_PARTICIPANT_IDS,
+                    parseParticipantIds(participantIdsJson));
+        }
+        return intent;
+    }
+
+    private static ArrayList<String> parseParticipantIds(String json) {
+        ArrayList<String> result = new ArrayList<>();
+        if (json == null || json.trim().isEmpty()) return result;
+        try {
+            com.google.gson.JsonElement parsed = com.google.gson.JsonParser.parseString(json);
+            if (!parsed.isJsonArray()) return result;
+            for (com.google.gson.JsonElement value : parsed.getAsJsonArray())
+                if (value != null && value.isJsonPrimitive()) result.add(value.getAsString());
+        } catch (RuntimeException ignored) { }
+        return result;
     }
 
     private static Intent callActionIntent(Context context, String action, String callId,
-            String chatId, String callerId, String callerName, boolean video) {
+            String chatId, String callerId, String callerName, boolean video, boolean liveKit) {
         return new Intent(context, NotificationActionReceiver.class).setAction(action)
                 .putExtra(EXTRA_CALL_ID, callId).putExtra(EXTRA_CHAT_ID, chatId)
                 .putExtra(EXTRA_SENDER_ID, callerId)
                 .putExtra(EXTRA_CALLER_NAME, callerName)
-                .putExtra(EXTRA_CALL_MEDIA_TYPE, video ? "video" : "audio");
+                .putExtra(EXTRA_CALL_MEDIA_TYPE, video ? "video" : "audio")
+                .putExtra(VoiceCallActivity.EXTRA_CALL_ENGINE,
+                        liveKit ? CallEngineToggle.LIVEKIT : CallEngineToggle.LEGACY);
     }
 
     private static void notifyAllowed(Context context, int id, NotificationCompat.Builder builder) {
@@ -379,7 +493,6 @@ public final class PingGoNotificationManager {
                 .setAutoCancel(true)
                 .setWhen(latest.receivedAt)
                 .setShowWhen(true)
-                .setGroup(GROUP_KEY)
                 .setNumber(chat.messages.size())
                 .setContentIntent(contentIntent)
                 .setDeleteIntent(actionIntent(context, ACTION_DISMISS, notificationId,
@@ -413,8 +526,24 @@ public final class PingGoNotificationManager {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED) return;
-        NotificationManagerCompat.from(context).notify(notificationId, notification.build());
-        showGroupSummary(context, chats);
+        NotificationManagerCompat manager = NotificationManagerCompat.from(context);
+        if (chats.size() > 1) {
+            // Silent children provide per-chat expansion/actions, while only the summary
+            // alerts and appears as the collapsed WhatsApp-style batch card.
+            for (NotificationStateStore.ChatState storedChat : chats) {
+                NotificationCompat.Builder child = storedChat.chatId.equals(chatId)
+                        ? notification : storedChatNotification(context, storedChat);
+                child.setGroup(GROUP_KEY)
+                        .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
+                        .setSilent(true)
+                        .setOnlyAlertOnce(true);
+                manager.notify(notificationId(storedChat.chatId), child.build());
+            }
+            showGroupSummary(context, chats);
+        } else {
+            manager.cancel(SUMMARY_NOTIFICATION_ID);
+            manager.notify(notificationId, notification.build());
+        }
     }
 
     public static void clearChatNotification(@NonNull Context context, String chatId) {
@@ -444,9 +573,8 @@ public final class PingGoNotificationManager {
             return;
         }
         int totalMessages = 0;
-        Person self = new Person.Builder().setName("You").setKey("pinggo_self").build();
-        NotificationCompat.MessagingStyle style = new NotificationCompat.MessagingStyle(self)
-                .setGroupConversation(true);
+        NotificationCompat.InboxStyle style = new NotificationCompat.InboxStyle();
+        int visibleLines = 0;
         for (NotificationStateStore.ChatState chat : chats) {
             totalMessages += chat.messages.size();
             NotificationStateStore.MessageState latest = chat.latest();
@@ -454,11 +582,22 @@ public final class PingGoNotificationManager {
                     && chat.groupName != null && !chat.groupName.isEmpty()
                     ? chat.groupName
                     : DeviceContactResolver.nameOrPhone(context, chat.senderId);
-            Person sender = new Person.Builder().setName(name).setKey(chat.senderId).build();
-            style.addMessage(latest.preview, latest.receivedAt, sender);
+            // InboxStyle is intentional here: this notification represents several
+            // independent chats, not multiple people in one MessagingStyle conversation.
+            if (visibleLines < 7) {
+                String preview = latest.preview == null || latest.preview.trim().isEmpty()
+                        ? "New message" : latest.preview.trim();
+                style.addLine(name + ": " + preview);
+                visibleLines++;
+            }
         }
         String title = totalMessages + " messages from " + chats.size() + " chats";
-        style.setConversationTitle(title);
+        style.setBigContentTitle(title);
+        if (chats.size() > visibleLines) {
+            style.setSummaryText("+" + (chats.size() - visibleLines) + " more chats");
+        } else {
+            style.setSummaryText("PingGo");
+        }
         Intent openApp = new Intent(context, HomeActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent contentIntent = PendingIntent.getActivity(
@@ -477,7 +616,7 @@ public final class PingGoNotificationManager {
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setGroup(GROUP_KEY)
                 .setGroupSummary(true)
-                .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
+                .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
                 .setNumber(totalMessages)
                 .setAutoCancel(true)
                 .setContentIntent(contentIntent);
@@ -486,6 +625,62 @@ public final class PingGoNotificationManager {
                 == PackageManager.PERMISSION_GRANTED) {
             manager.notify(SUMMARY_NOTIFICATION_ID, summary.build());
         }
+    }
+
+    private static NotificationCompat.Builder storedChatNotification(
+            Context context, NotificationStateStore.ChatState chat) {
+        NotificationStateStore.MessageState latest = chat.latest();
+        boolean groupChat = chat.chatId.startsWith("grp_");
+        String senderId = latest.senderId == null || latest.senderId.isEmpty()
+                ? chat.senderId : latest.senderId;
+        String senderName = DeviceContactResolver.nameOrPhone(context, senderId);
+        String conversationName = groupChat && chat.groupName != null
+                && !chat.groupName.isEmpty() ? chat.groupName : senderName;
+        int id = notificationId(chat.chatId);
+        Intent openChat = new Intent(context, ChatActivity.class)
+                .putExtra(ChatActivity.EXTRA_CHAT_ID, chat.chatId)
+                .putExtra(ChatActivity.EXTRA_CHAT_NAME, conversationName)
+                .putExtra(ChatActivity.EXTRA_OPEN_REQUEST_NANOS,
+                        SystemClock.elapsedRealtimeNanos())
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent content = PendingIntent.getActivity(context, id, openChat,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Bitmap avatar = downloadBitmap(groupChat ? chat.groupIcon : chat.profilePhotoUrl);
+        Bitmap icon = avatar != null ? avatar : BitmapFactory.decodeResource(
+                context.getResources(), R.drawable.pinggo_logo);
+        Person self = new Person.Builder().setName("You").setKey("pinggo_self").build();
+        NotificationCompat.MessagingStyle messageStyle =
+                new NotificationCompat.MessagingStyle(self)
+                        .setConversationTitle(conversationName)
+                        .setGroupConversation(groupChat);
+        for (NotificationStateStore.MessageState message : chat.messages) {
+            String messageSenderId = message.senderId == null || message.senderId.isEmpty()
+                    ? senderId : message.senderId;
+            Person person = new Person.Builder()
+                    .setName(DeviceContactResolver.nameOrPhone(context, messageSenderId))
+                    .setKey(messageSenderId).build();
+            messageStyle.addMessage(message.preview, message.receivedAt, person);
+        }
+        return new NotificationCompat.Builder(context, MESSAGE_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_pinggo_notification)
+                .setLargeIcon(icon)
+                .setContentTitle(conversationName)
+                .setContentText(latest.preview)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setAutoCancel(true)
+                .setWhen(latest.receivedAt)
+                .setShowWhen(true)
+                .setNumber(chat.messages.size())
+                .setContentIntent(content)
+                .setStyle(messageStyle)
+                .setDeleteIntent(actionIntent(context, ACTION_DISMISS, id,
+                        chat.chatId, latest.messageId, senderId))
+                .addAction(replyAction(context, id, chat.chatId,
+                        latest.messageId, senderId))
+                .addAction(markReadAction(context, id, chat))
+                .addAction(action(context, ACTION_MUTE, "Mute", id,
+                        chat.chatId, latest.messageId, senderId));
     }
 
     private static NotificationStateStore.ChatState findChat(

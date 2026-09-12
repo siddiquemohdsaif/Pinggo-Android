@@ -14,6 +14,7 @@ public class CallLog {
     private final boolean videoCall;
     private final boolean outgoing;
     private final boolean missed;
+    private final boolean conference;
 
     public CallLog(String contactName, String calledTime, String fullCalledDateTime, String duration, boolean videoCall) {
         this("", "", "", contactName, calledTime, fullCalledDateTime, duration,
@@ -37,6 +38,13 @@ public class CallLog {
                    String calledTime,
                    String fullCalledDateTime, String duration, boolean videoCall,
                    boolean outgoing, boolean missed) {
+        this(chatId, messageId, phoneNumber, contactName, calledTime, fullCalledDateTime,
+                duration, videoCall, outgoing, missed, false);
+    }
+
+    public CallLog(String chatId, String messageId, String phoneNumber, String contactName,
+                   String calledTime, String fullCalledDateTime, String duration,
+                   boolean videoCall, boolean outgoing, boolean missed, boolean conference) {
         this.chatId = chatId == null ? "" : chatId;
         this.messageId = messageId == null ? "" : messageId;
         this.phoneNumber = phoneNumber == null ? "" : phoneNumber;
@@ -47,6 +55,7 @@ public class CallLog {
         this.videoCall = videoCall;
         this.outgoing = outgoing;
         this.missed = missed;
+        this.conference = conference;
     }
 
     public String getChatId() { return chatId; }
@@ -75,6 +84,8 @@ public class CallLog {
 
     public boolean isOutgoing() { return outgoing; }
     public boolean isMissed() { return missed; }
+    public boolean isConference() { return conference; }
+    public boolean isGroupCall() { return chatId.startsWith("grp_"); }
 
     /** Mirrors the call-icon rules used by ChatsView and ChatMessageAdapter. */
     public int getIconDirection() {

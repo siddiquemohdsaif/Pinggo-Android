@@ -50,12 +50,13 @@ public interface ChatDao {
             + "lastMessageSenderId = :senderId, lastMessageDeliveredTime = :deliveredTime, "
             + "lastMessageReadTime = :readTime, lastMessageStatus = :status, "
             + "lastMessageType = :messageType, lastMessageAttachmentName = :attachmentName, "
+            + "lastCallParticipantIdsJson = :callParticipantIdsJson, "
             + "updatedAt = :updatedAt WHERE chatId = :chatId "
             + "AND lastMessageTime <= :sentTime")
     int updateLastMessage(String chatId, String messageId, String preview, long sentTime,
                           String senderId, Long deliveredTime, Long readTime, String status,
                           String messageType,
-                          String attachmentName, long updatedAt);
+                          String attachmentName, String callParticipantIdsJson, long updatedAt);
 
     @Query("UPDATE chats SET lastMessageDeliveredTime = :deliveredTime, "
             + "lastMessageReadTime = :readTime, lastMessageStatus = :status "
@@ -82,7 +83,8 @@ public interface ChatDao {
     @Query("UPDATE chats SET lastMessage = NULL, lastMessageId = NULL, "
             + "lastMessageSenderId = NULL, lastMessageDeliveredTime = NULL, "
             + "lastMessageReadTime = NULL, lastMessageStatus = NULL, lastMessageType = NULL, "
-            + "lastMessageAttachmentName = NULL, unreadCount = 0, updatedAt = :updatedAt "
+            + "lastMessageAttachmentName = NULL, lastCallParticipantIdsJson = NULL, "
+            + "unreadCount = 0, updatedAt = :updatedAt "
             + "WHERE chatId = :chatId")
     void clearLastMessage(String chatId, long updatedAt);
 

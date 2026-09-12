@@ -65,6 +65,8 @@ public class PingGoMessagingService extends FirebaseMessagingService {
             }
             PingGoNotificationManager.showMessageNotification(this, message.getData());
         } else if ("call_incoming".equals(message.getData().get("type"))) {
+            // Wake signaling immediately so the server can also deliver queued ICE candidates.
+            ChatRepository.getInstance(this).connect();
             PingGoNotificationManager.showIncomingCallNotification(this, message.getData());
         } else if ("call_missed".equals(message.getData().get("type"))) {
             PingGoNotificationManager.showMissedCallNotification(this, message.getData());

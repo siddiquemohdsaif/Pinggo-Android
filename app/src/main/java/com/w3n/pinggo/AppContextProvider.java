@@ -16,15 +16,20 @@ import com.google.gson.JsonObject;
 import com.ogfa.nativeviews.component.FigmaConfig;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
+import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.activity.VoiceCallActivity;
 import com.w3n.pinggo.activity.VideoCallActivity;
+import com.w3n.pinggo.activity.LiveKitCallActivity;
+import com.w3n.pinggo.call.CallEngineToggle;
 import com.w3n.pinggo.call.FloatingVoiceCallController;
 import com.w3n.pinggo.call.FloatingVideoCallController;
 import com.w3n.pinggo.call.WebRTCCallClient;
 import com.w3n.pinggo.data.repository.ChatRepository;
+import com.w3n.pinggo.data.cache.KeyboardHeightCache;
 import com.w3n.pinggo.modals.AppConfiguration;
 import com.w3n.pinggo.notification.PingGoNotificationManager;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
+import java.util.ArrayList;
 import com.w3n.pinggo.views.common.NativeMessageView;
 
 import org.json.JSONObject;
@@ -43,6 +48,7 @@ public class AppContextProvider extends Application implements ChatRepository.In
 
         // Initialize the app context when the application starts
         appContext = getApplicationContext();
+        KeyboardHeightCache.initialize(this);
         PingGoNotificationManager.createChannels(this);
         FloatingVoiceCallController.getInstance().initialize(this);
         FloatingVideoCallController.getInstance().initialize(this);
@@ -63,7 +69,8 @@ public class AppContextProvider extends Application implements ChatRepository.In
     public void onIncomingCall(JsonObject event) {
         JsonObject sdp = event.has("sdp") && event.get("sdp").isJsonObject()
                 ? event.getAsJsonObject("sdp") : null;
-        if (sdp == null) {
+        boolean liveKit = "livekit".equals(JsonParserUtil.getString(event, "engine"));
+        if (!liveKit && sdp == null) {
             Log.e("PingGoCallTrace", "invite_rejected_missing_sdp event=" + event);
             return;
         }
@@ -71,6 +78,7 @@ public class AppContextProvider extends Application implements ChatRepository.In
         String callId = JsonParserUtil.getString(event, "callId");
         String requestedAction = PingGoNotificationManager.consumeCallAction(this, callId);
         Log.i("PingGoCallTrace", "invite_received callId=" + callId + " chatId=" + chatId
+                + " engine=" + (liveKit ? "livekit" : "legacy")
                 + " requestedAction=" + requestedAction + " activeChat="
                 + ChatRepository.getInstance(this).isActiveChat(chatId));
         if (PingGoNotificationManager.ACTION_CALL_DECLINE.equals(requestedAction)) return;
@@ -84,21 +92,40 @@ public class AppContextProvider extends Application implements ChatRepository.In
         }
         String callerId = JsonParserUtil.getString(event, "callerId");
         boolean video = "video".equals(JsonParserUtil.getString(event, "mediaType"));
-        Intent intent = new Intent(this, video ? VideoCallActivity.class : VoiceCallActivity.class);
+        boolean conference = "group".equals(JsonParserUtil.getString(event, "callMode"))
+                || JsonParserUtil.getBoolean(event, "conference");
+        Intent intent = new Intent(this, liveKit ? LiveKitCallActivity.class
+                : (video ? VideoCallActivity.class : VoiceCallActivity.class));
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER,
                 DeviceContactResolver.nameOrPhone(this, callerId));
+        intent.putExtra(VoiceCallActivity.EXTRA_PROFILE_PATH,
+                ChatProfilePhotoStore.getLocalPath(this, callerId));
         intent.putExtra(VoiceCallActivity.EXTRA_CALL_ID,
                 callId);
         intent.putExtra(VoiceCallActivity.EXTRA_CALLER_ID, callerId);
         intent.putExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID,
                 chatId);
         intent.putExtra(VoiceCallActivity.EXTRA_SDP_OFFER,
-                WebRTCCallClient.decodeSdp(sdp));
+                sdp == null ? "" : WebRTCCallClient.decodeSdp(sdp));
+        intent.putExtra(LiveKitCallActivity.EXTRA_MEDIA_TYPE, video ? "video" : "audio");
+        intent.putExtra(LiveKitCallActivity.EXTRA_INCOMING, true);
+        intent.putExtra(LiveKitCallActivity.EXTRA_CONFERENCE_CALL, conference);
+        if (event.has("participantIds") && event.get("participantIds").isJsonArray()) {
+            ArrayList<String> participantIds = new ArrayList<>();
+            for (com.google.gson.JsonElement value : event.getAsJsonArray("participantIds"))
+                if (value != null && value.isJsonPrimitive()) participantIds.add(value.getAsString());
+            intent.putStringArrayListExtra(LiveKitCallActivity.EXTRA_PARTICIPANT_IDS,
+                    participantIds);
+        }
+        intent.putExtra(VoiceCallActivity.EXTRA_CALL_ENGINE,
+                liveKit ? CallEngineToggle.LIVEKIT : CallEngineToggle.LEGACY);
         intent.putExtra(VoiceCallActivity.EXTRA_AUTO_ACCEPT, answerRequested);
         Log.i("PingGoCallTrace", "activity_launch_requested callId=" + callId
                 + " media=" + (video ? "video" : "audio") + " autoAccept=" + answerRequested
-                + " offerLength=" + WebRTCCallClient.decodeSdp(sdp).length());
+                + " engine=" + (liveKit ? "livekit" : "legacy")
+                + " conference=" + conference
+                + " offerLength=" + (sdp == null ? 0 : WebRTCCallClient.decodeSdp(sdp).length()));
         try {
             startActivity(intent);
             Log.i("PingGoCallTrace", "activity_launch_dispatched callId=" + callId);

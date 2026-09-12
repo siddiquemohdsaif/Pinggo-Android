@@ -21,6 +21,14 @@ final class NotificationStateStore {
         String chatId = value(data, "chatId");
         if (chatId.isEmpty()) return parse(root);
         try {
+            // A swipe dismisses a conversation only for the current notification batch.
+            // When any new message arrives, previously dismissed but still-unread chats
+            // must participate in the rebuilt multi-chat summary again.
+            Iterator<String> existingKeys = root.keys();
+            while (existingKeys.hasNext()) {
+                JSONObject existing = root.optJSONObject(existingKeys.next());
+                if (existing != null) existing.put("hidden", false);
+            }
             JSONObject chat = root.optJSONObject(chatId);
             if (chat == null) chat = new JSONObject();
             chat.put("chatId", chatId);

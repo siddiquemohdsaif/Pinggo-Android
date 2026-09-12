@@ -47,6 +47,8 @@ public final class NewChatView extends View {
   private boolean groupMode;
   private String groupActionLabel = "Create";
   private final Set<String> selectedMembers = new LinkedHashSet<>();
+  private final List<Item> sourceItems = new ArrayList<>();
+  private String searchQuery = "";
 
   public NewChatView(Context context, Listener listener) {
     super(context);
@@ -86,8 +88,37 @@ public final class NewChatView extends View {
   }
 
   public void submitItems(List<Item> items) {
-    adapter.submit(items);
+    sourceItems.clear();
+    if (items != null) sourceItems.addAll(items);
+    applyFilter();
+  }
+
+  public void setSearchQuery(String query) {
+    searchQuery = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+    applyFilter();
+  }
+
+  private void applyFilter() {
+    List<Item> visible = new ArrayList<>();
+    boolean inviteDividerAdded = false;
+    for (Item item : sourceItems) {
+      if (item.type == Item.DIVIDER) continue;
+      String name = item.displayName == null || item.displayName.trim().isEmpty()
+          ? DeviceContactResolver.cachedNameOrPhone(item.phoneNumber) : item.displayName;
+      boolean matches = searchQuery.isEmpty()
+          || item.phoneNumber.toLowerCase(Locale.ROOT).contains(searchQuery)
+          || name.toLowerCase(Locale.ROOT).contains(searchQuery);
+      if (!matches) continue;
+      if (item.type == Item.INVITE && !inviteDividerAdded) {
+        visible.add(Item.divider("Invite"));
+        inviteDividerAdded = true;
+      }
+      visible.add(item);
+    }
+    adapter.submit(visible);
     statusMessage = adapter.getItemCount() == 0 ? "No contacts found." : "";
+    if (!searchQuery.isEmpty() && adapter.getItemCount() == 0)
+      statusMessage = "No matching contacts.";
     update();
   }
 
@@ -129,7 +160,8 @@ public final class NewChatView extends View {
             else listener.onCreateGroup(new ArrayList<>(selectedMembers));
           });
     }
-    float listTop = top + px(165f);
+    // Leave room for the platform EditText search field overlaid by NewChatActivity.
+    float listTop = top + px(330f);
     list =
         content.add(
             new ComponentList.Builder<Item>(
@@ -290,7 +322,8 @@ public final class NewChatView extends View {
         return;
       }
       holder.find("avatar", Image.class).setBitmap(photo(value));
-      String displayName = DeviceContactResolver.cachedNameOrPhone(value.phoneNumber);
+      String displayName = value.displayName == null || value.displayName.trim().isEmpty()
+          ? DeviceContactResolver.cachedNameOrPhone(value.phoneNumber) : value.displayName;
       holder.find("name", Text.class).setText(displayName);
       holder
           .find("detail", Text.class)
@@ -309,7 +342,9 @@ public final class NewChatView extends View {
   private Bitmap photo(Item item) {
     String path = ChatProfilePhotoStore.getLocalPath(getContext(), item.phoneNumber);
     Bitmap b = BitmapFactory.decodeFile(path);
-    return b == null ? avatar(DeviceContactResolver.cachedNameOrPhone(item.phoneNumber)) : b;
+    String displayName = item.displayName == null || item.displayName.trim().isEmpty()
+        ? DeviceContactResolver.cachedNameOrPhone(item.phoneNumber) : item.displayName;
+    return b == null ? avatar(displayName) : b;
   }
 
   private Bitmap avatar(String v) {
@@ -379,25 +414,30 @@ public final class NewChatView extends View {
   public static final class Item {
     public static final int FOUND = 0, INVITE = 1, DIVIDER = 2;
     public final int type;
-    public final String phoneNumber, chatId, profilePhotoUrl;
+    public final String phoneNumber, chatId, profilePhotoUrl, displayName;
 
-    private Item(int t, String p, String c, String u) {
+    private Item(int t, String p, String c, String u, String n) {
       type = t;
       phoneNumber = p;
       chatId = c;
       profilePhotoUrl = u;
+      displayName = n;
     }
 
     public static Item found(String p, String c, String u) {
-      return new Item(FOUND, p, c, u);
+      return found(p, c, u, "");
+    }
+
+    public static Item found(String p, String c, String u, String n) {
+      return new Item(FOUND, p, c, u, n);
     }
 
     public static Item invite(String p) {
-      return new Item(INVITE, p, "", "");
+      return new Item(INVITE, p, "", "", "");
     }
 
     public static Item divider(String label) {
-      return new Item(DIVIDER, label, "", "");
+      return new Item(DIVIDER, label, "", "", "");
     }
   }
 

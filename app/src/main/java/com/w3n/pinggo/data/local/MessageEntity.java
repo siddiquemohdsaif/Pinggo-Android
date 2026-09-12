@@ -59,6 +59,7 @@ public class MessageEntity {
     public String groupEventTargetIds;
     /** JSON object keyed by group member id with deliveredAt/readAt timestamps. */
     public String groupReceiptsJson;
+    public String callParticipantIdsJson;
 
     public MessageEntity() {
         messageId = "";

@@ -30,8 +30,8 @@ public final class CallRepository {
         return instance;
     }
 
-    public LiveData<List<CallEntity>> observeLatestCalls(String ownerId) {
-        return dao.observeLatestCalls(normalize(ownerId));
+    public LiveData<List<CallEntity>> observeCalls(String ownerId) {
+        return dao.observeCalls(normalize(ownerId));
     }
 
     public LiveData<List<CallEntity>> observeCallHistory(String ownerId, String chatId, int limit) {
@@ -55,7 +55,8 @@ public final class CallRepository {
                     normalize(string(call, "receiverId")), string(call, "mediaType"),
                     string(call, "status"), string(call, "terminationReason"), createdAt,
                     nullableNumber(call, "ringingAt"), nullableNumber(call, "connectedAt"),
-                    endedAt, number(call, "durationSeconds")));
+                    endedAt, number(call, "durationSeconds"), bool(call, "conference"),
+                    json(call, "participantIds")));
         }
         if (!calls.isEmpty()) ioExecutor.execute(() -> dao.upsertAll(calls));
     }
@@ -71,6 +72,14 @@ public final class CallRepository {
     private static Long nullableNumber(JsonObject value, String key) {
         JsonElement element = value.get(key);
         return element == null || element.isJsonNull() ? null : element.getAsLong();
+    }
+    private static boolean bool(JsonObject value, String key) {
+        JsonElement element = value.get(key);
+        return element != null && !element.isJsonNull() && element.getAsBoolean();
+    }
+    private static String json(JsonObject value, String key) {
+        JsonElement element = value.get(key);
+        return element == null || element.isJsonNull() ? "[]" : element.toString();
     }
     private static String normalize(String value) {
         String result = value == null ? "" : value.trim();

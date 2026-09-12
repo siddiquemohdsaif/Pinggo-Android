@@ -36,6 +36,8 @@ import com.ogfa.nativeviews.text.FontVariation;
 import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParser;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.R;
@@ -862,6 +864,15 @@ public final class ChatsView extends View {
             row.add(rowText(scope.id("video_call_text"),
                     new RectF(270f * scale, 103f * scale, width - 210f * scale, 157f * scale),
                     38f * scale, SECONDARY, FontVariation.REGULAR));
+            row.add(rowText(scope.id("conference_voice_call_text"),
+                    new RectF(266f * scale, 91f * scale, width - 210f * scale, 130f * scale),
+                    38f * scale, SECONDARY, FontVariation.REGULAR));
+            row.add(rowText(scope.id("conference_video_call_text"),
+                    new RectF(270f * scale, 91f * scale, width - 210f * scale, 130f * scale),
+                    38f * scale, SECONDARY, FontVariation.REGULAR));
+            row.add(rowText(scope.id("conference_participants"),
+                    new RectF(220f * scale, 126f * scale, width - 210f * scale, 160f * scale),
+                    29f * scale, SECONDARY, FontVariation.REGULAR));
             row.add(new Image.Builder(getContext(), scope.id("divider"), dividerBitmap,
                     new RectF(220f * scale, height - Math.max(1f, scale), width, height))
                     .setScaleType(Image.ScaleType.FIT_XY));
@@ -947,7 +958,10 @@ public final class ChatsView extends View {
             if (call) {
                 boolean missed = preview.toLowerCase(Locale.US).contains("missed");
                 String iconId = voiceCall ? "voice_call_icon" : "video_call_icon";
-                String textId = voiceCall ? "voice_call_text" : "video_call_text";
+                String participants = conferenceParticipantNames(chat);
+                String textId = participants.isEmpty()
+                        ? (voiceCall ? "voice_call_text" : "video_call_text")
+                        : (voiceCall ? "conference_voice_call_text" : "conference_video_call_text");
                 Bitmap icon = voiceCall
                         ? (missed ? phoneMissedBitmap
                         : received ? phoneIncomingBitmap : phoneOutgoingBitmap)
@@ -958,6 +972,11 @@ public final class ChatsView extends View {
                         .setText(ellipsize(formatCallPreview(preview, videoCall),
                                 voiceCall ? 604f * scale : 600f * scale, 38f * scale))
                         .setTextColor(previewColor).setVisible(true);
+                if (!participants.isEmpty()) {
+                    item.find("conference_participants", Text.class)
+                            .setText(ellipsize(participants, 650f * scale, 29f * scale))
+                            .setTextColor(previewColor).setVisible(true);
+                }
             } else if (video || squareMedia) {
                 String mediaName = chat.getLastMessageAttachmentName();
                 if (audio) mediaName = "Voice message";
@@ -1004,6 +1023,9 @@ public final class ChatsView extends View {
             item.find("video_call_icon", Image.class).setVisible(false);
             item.find("voice_call_text", Text.class).setVisible(false);
             item.find("video_call_text", Text.class).setVisible(false);
+            item.find("conference_voice_call_text", Text.class).setVisible(false);
+            item.find("conference_video_call_text", Text.class).setVisible(false);
+            item.find("conference_participants", Text.class).setVisible(false);
         }
 
     }
@@ -1187,7 +1209,7 @@ public final class ChatsView extends View {
                     ? (entity.isGroup ? null
                         : ChatProfilePhotoStore.getLocalPath(getContext(), entity.otherUserId))
                     : entity.localProfilePhotoPath;
-            chats.add(new Chat(entity.chatId, name, entity.profilePhotoUrl, path,
+            Chat chat = new Chat(entity.chatId, name, entity.profilePhotoUrl, path,
                     homeMessagePreview(entity), entity.lastMessageTime,
                     normalizeId(entity.lastMessageSenderId).equals(currentPhoneNumber()),
                     entity.lastMessageDeliveredTime, entity.lastMessageReadTime,
@@ -1195,9 +1217,32 @@ public final class ChatsView extends View {
                     entity.lastMessageType, entity.lastMessageAttachmentName,
                     entity.unreadCount,
                     entity.pinned, entity.notificationMuted, entity.archived,
-                    entity.isOnline, entity.lastSeen));
+                    entity.isOnline, entity.lastSeen);
+            chat.setLastCallParticipantIdsJson(entity.lastCallParticipantIdsJson);
+            chats.add(chat);
         }
         return chats;
+    }
+
+    private String conferenceParticipantNames(Chat chat) {
+        if (chat == null || chat.getChatId().startsWith("grp_")) return "";
+        String json = chat.getLastCallParticipantIdsJson();
+        if (json == null || json.trim().isEmpty()) return "";
+        try {
+            JsonElement root = new JsonParser().parse(json);
+            if (!root.isJsonArray() || root.getAsJsonArray().size() < 3) return "";
+            String ownId = currentPhoneNumber();
+            LinkedHashSet<String> names = new LinkedHashSet<>();
+            for (JsonElement element : root.getAsJsonArray()) {
+                if (element == null || element.isJsonNull()) continue;
+                String accountId = normalizeId(element.getAsString());
+                if (accountId.isEmpty() || accountId.equals(ownId)) continue;
+                names.add(DeviceContactResolver.cachedNameOrPhone(accountId));
+            }
+            return android.text.TextUtils.join(", ", names);
+        } catch (RuntimeException ignored) {
+            return "";
+        }
     }
 
     private String homeMessagePreview(ChatEntity entity) {

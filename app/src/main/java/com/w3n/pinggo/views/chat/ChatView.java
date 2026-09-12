@@ -34,6 +34,7 @@ import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.data.cache.MediaPreviewCache;
+import com.w3n.pinggo.data.cache.KeyboardHeightCache;
 import com.w3n.pinggo.data.local.MessageEntity;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.res.ResourcesCompat;
@@ -202,6 +203,7 @@ public final class ChatView extends View {
     this.groupChat = groupChat;
     listener = l;
     this.profiler = profiler;
+    lastKeyboardHeight = KeyboardHeightCache.get(c);
     composerMeasurePaint.setTextSize(sp(16));
     composerMeasurePaint.setTypeface(ResourcesCompat.getFont(c, NativeFonts.INTER));
     pinnedAdapter = new PinnedMessageAdapter(
@@ -274,7 +276,13 @@ public final class ChatView extends View {
     bottomInset = nextBottom;
     imeInset = Math.max(0, ime);
     imeVisible = visible;
-    if (visible && imeInset > bottomInset) lastKeyboardHeight = imeInset - bottomInset;
+    if (visible && imeInset > bottomInset) {
+      int measuredKeyboardHeight = imeInset - bottomInset;
+      if (lastKeyboardHeight != measuredKeyboardHeight) {
+        lastKeyboardHeight = measuredKeyboardHeight;
+        KeyboardHeightCache.record(getContext(), measuredKeyboardHeight);
+      }
+    }
     if (getWidth() <= 0) return;
     if (structureChanged || input == null || list == null) build();
     else applyKeyboardInsets();
@@ -755,7 +763,9 @@ public final class ChatView extends View {
   }
 
   public int getEmojiPanelHeight() {
-    return lastKeyboardHeight > 0 ? lastKeyboardHeight : Math.round(px(308f));
+    // Android does not expose an IME's height while it is hidden. Use a normal keyboard-sized
+    // first-open value, then use (and remember) the device's exact measured IME height.
+    return lastKeyboardHeight > 0 ? lastKeyboardHeight : KeyboardHeightCache.get(getContext());
   }
 
   public int getEmojiPanelBottomInset() { return bottomInset; }

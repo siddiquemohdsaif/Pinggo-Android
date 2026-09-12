@@ -16,7 +16,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase;
                 PresenceEntity.class,
                 TransferEntity.class
         },
-        version = 24,
+        version = 27,
         exportSchema = false
 )
 public abstract class PingGoDatabase extends RoomDatabase {
@@ -145,6 +145,22 @@ public abstract class PingGoDatabase extends RoomDatabase {
             db.execSQL("ALTER TABLE `messages` ADD COLUMN `groupReceiptsJson` TEXT");
         }
     };
+    private static final Migration MIGRATION_24_25 = new Migration(24, 25) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE `calls` ADD COLUMN `conference` INTEGER NOT NULL DEFAULT 0");
+        }
+    };
+    private static final Migration MIGRATION_25_26 = new Migration(25, 26) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE `calls` ADD COLUMN `participantIdsJson` TEXT");
+        }
+    };
+    private static final Migration MIGRATION_26_27 = new Migration(26, 27) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE `chats` ADD COLUMN `lastCallParticipantIdsJson` TEXT");
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `callParticipantIdsJson` TEXT");
+        }
+    };
 
     public static PingGoDatabase getInstance(Context context) {
         if (instance != null) {
@@ -163,7 +179,8 @@ public abstract class PingGoDatabase extends RoomDatabase {
                                 MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
                                 MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18,
                                 MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22,
-                                MIGRATION_22_23, MIGRATION_23_24)
+                                MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25,
+                                MIGRATION_25_26, MIGRATION_26_27)
                         .fallbackToDestructiveMigration()
                         .build();
             }

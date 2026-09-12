@@ -205,7 +205,7 @@ public final class VideoCallController {
     audioClient = null; audio = ChannelState.CLOSED;
     if (videoClient != null) videoClient.release("terminate:" + reason); videoClient = null;
     video = ChannelState.CLOSED; signaling = ChannelState.CONNECTED;
-    repository.setCallEventListener(null); state = CallState.ENDED;
+    repository.clearCallEventListener(preAcceptListener); state = CallState.ENDED;
     Log.d(TAG, "terminated callId=" + callId + " reason=" + reason + " notifyServer=" + notifyServer);
     listener.onFinished(reason, terminationMessage(reason));
   }

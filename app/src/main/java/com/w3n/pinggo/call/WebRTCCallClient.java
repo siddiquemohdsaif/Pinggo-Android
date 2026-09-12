@@ -53,6 +53,7 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
   private String callId, chatId, localUserId, remoteUserId, mediaType = "audio";
   private JsonObject lastLocalDescriptionEvent;
   private boolean remoteDescriptionSet, ended;
+  private int localCandidateCount, remoteCandidateCount;
 
   public WebRTCCallClient(Context context, ChatRepository repository, Listener listener) {
     this.context = context.getApplicationContext();
@@ -133,6 +134,7 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
       factory = PeerConnectionFactory.builder().setAudioDeviceModule(audioDeviceModule).createPeerConnectionFactory();
       PeerConnection.RTCConfiguration config = new PeerConnection.RTCConfiguration(Collections.singletonList(
           PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()));
+      logConnection("rtc_initialized", "iceServers=1 turnServers=0 mediaType=" + mediaType);
       config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
       peerConnection = factory.createPeerConnection(config, observer);
       if (peerConnection == null) throw new IllegalStateException("Could not create PeerConnection.");
@@ -149,6 +151,9 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
 
   private final PeerConnection.Observer observer = new PeerConnection.Observer() {
     @Override public void onIceCandidate(IceCandidate candidate) {
+      localCandidateCount++;
+      logConnection("local_ice_candidate", "index=" + localCandidateCount
+          + " type=" + candidateType(candidate.sdp));
       JsonObject value = new JsonObject();
       value.addProperty("sdpMid", candidate.sdpMid);
       value.addProperty("sdpMLineIndex", candidate.sdpMLineIndex);
@@ -260,9 +265,13 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
     IceCandidate candidate = new IceCandidate(JsonParserUtil.getString(value, "sdpMid"),
         value.has("sdpMLineIndex") ? value.get("sdpMLineIndex").getAsInt() : 0,
         JsonParserUtil.getString(value, "candidate"));
+    remoteCandidateCount++;
+    logConnection("remote_ice_candidate", "index=" + remoteCandidateCount
+        + " type=" + candidateType(candidate.sdp) + " queued=" + !remoteDescriptionSet);
     rtcThread.execute(() -> { if (remoteDescriptionSet) peerConnection.addIceCandidate(candidate); else pendingCandidates.add(candidate); });
   }
   private void flushCandidates() {
+    logConnection("remote_ice_flush", "count=" + pendingCandidates.size());
     for (IceCandidate candidate : pendingCandidates) peerConnection.addIceCandidate(candidate);
     pendingCandidates.clear();
   }
@@ -311,15 +320,19 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
   }
   private void notifyState(String state) { context.getMainExecutor().execute(() -> listener.onState(state)); }
   private void fail(String error) {
+    if (ended) return;
     logConnection("failure", "message=" + error);
     Log.e(TAG, "failure callId=" + callId + " message=" + error);
-    context.getMainExecutor().execute(() -> listener.onError(error)); close(false);
+    context.getMainExecutor().execute(() -> listener.onError(error));
+    // A local ICE/SDP failure is terminal for this call. Notify signaling before disposing the
+    // peer so the server releases both participants and an immediate retry is not reported busy.
+    endCall("connection_failed");
   }
   public void close(boolean notifyRemote) {
     if (ended) return; ended = true;
     Log.d(TAG, "close callId=" + callId + " notifyRemote=" + notifyRemote);
     if (notifyRemote) send("call_end", null, null);
-    repository.setCallEventListener(null);
+    repository.clearCallEventListener(this);
     rtcThread.execute(() -> {
       if (peerConnection != null) { peerConnection.close(); peerConnection.dispose(); }
       if (audioTrack != null) audioTrack.dispose();
@@ -342,6 +355,14 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
   }
   private static String normalizeText(String value) {
     return value == null ? "" : value.trim();
+  }
+  private static String candidateType(String candidate) {
+    if (candidate == null) return "unknown";
+    String[] parts = candidate.trim().split("\\s+");
+    for (int i = 0; i + 1 < parts.length; i++) {
+      if ("typ".equals(parts[i])) return parts[i + 1];
+    }
+    return "unknown";
   }
   public static String decodeSdp(JsonObject sdp) {
     String encoded = JsonParserUtil.getString(sdp, "descriptionBase64");

@@ -9,6 +9,7 @@ public class AppConfiguration {
 
     private LoginOption loginOption;
     private ArrayList<String> premiumCountryList;
+    private String callEngine;
 
     public AppConfiguration() {
     }
@@ -24,6 +25,11 @@ public class AppConfiguration {
 
     public ArrayList<String> getPremiumCountryList() {
         return premiumCountryList;
+    }
+
+    /** Returns "livekit" only when explicitly enabled by remote app configuration. */
+    public String getCallEngine() {
+        return "livekit".equalsIgnoreCase(callEngine) ? "livekit" : "legacy";
     }
 
     // LoginOption class
