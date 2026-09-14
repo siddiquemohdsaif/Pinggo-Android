@@ -48,6 +48,8 @@ import java.util.concurrent.Executors;
 
 public class NewChatActivity extends AppCompatActivity implements NewChatView.Listener {
   public static final String EXTRA_CREATE_GROUP = "com.w3n.pinggo.EXTRA_CREATE_GROUP";
+  public static final String EXTRA_PRESELECTED_MEMBER_IDS =
+      "com.w3n.pinggo.EXTRA_PRESELECTED_MEMBER_IDS";
   public static final String EXTRA_ADD_TO_GROUP_ID = "com.w3n.pinggo.EXTRA_ADD_TO_GROUP_ID";
   public static final String EXTRA_SELECT_CALL_MEMBERS = "com.w3n.pinggo.EXTRA_SELECT_CALL_MEMBERS";
   public static final String EXTRA_EXCLUDED_MEMBER_IDS = "com.w3n.pinggo.EXTRA_EXCLUDED_MEMBER_IDS";
@@ -95,6 +97,10 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     if (addToGroupId != null && !addToGroupId.trim().isEmpty()) createGroupMode = true;
     if (createGroupMode)
       newChatView.setGroupMode(true);
+    ArrayList<String> preselected = getIntent().getStringArrayListExtra(
+        EXTRA_PRESELECTED_MEMBER_IDS);
+    if (createGroupMode && preselected != null)
+      newChatView.setSelectedMembers(preselected);
     if (selectCallMembers) {
       newChatView.setTitle("Add to call");
       newChatView.setGroupActionLabel("Invite");

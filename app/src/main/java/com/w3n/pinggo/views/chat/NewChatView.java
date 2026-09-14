@@ -18,7 +18,9 @@ import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
+import com.w3n.pinggo.R;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
+import com.w3n.pinggo.views.home.ChatRowRippleComponent;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -37,7 +39,11 @@ public final class NewChatView extends View {
   private final Listener listener;
   private final Bitmap white = colorBitmap(Color.WHITE),
       divider = colorBitmap(0xFFE5EAF0),
-      accent = colorBitmap(ACCENT);
+      accent = colorBitmap(ACCENT),
+      selectionBackground = BitmapFactory.decodeResource(
+          getResources(), R.drawable.chat_selection_background),
+      selectionCheck = BitmapFactory.decodeResource(
+          getResources(), R.drawable.chat_selection_check);
   private ComponentList<Item> list;
   private Text status;
   private Text title;
@@ -82,6 +88,18 @@ public final class NewChatView extends View {
     if (getWidth() > 0) build();
   }
 
+  /** Seeds group selection when this screen is opened from the Chats selection toolbar. */
+  public void setSelectedMembers(List<String> memberIds) {
+    selectedMembers.clear();
+    if (memberIds != null) {
+      for (String memberId : memberIds) {
+        String normalized = memberId == null ? "" : memberId.trim();
+        if (!normalized.isEmpty()) selectedMembers.add(normalized);
+      }
+    }
+    if (getWidth() > 0) build();
+  }
+
   public void setGroupActionLabel(String value) {
     groupActionLabel = value == null || value.trim().isEmpty() ? "Create" : value.trim();
     if (getWidth() > 0) build();
@@ -100,7 +118,9 @@ public final class NewChatView extends View {
 
   private void applyFilter() {
     List<Item> visible = new ArrayList<>();
-    boolean inviteDividerAdded = false;
+    List<Item> selected = new ArrayList<>();
+    List<Item> available = new ArrayList<>();
+    List<Item> inviteItems = new ArrayList<>();
     for (Item item : sourceItems) {
       if (item.type == Item.DIVIDER) continue;
       String name = item.displayName == null || item.displayName.trim().isEmpty()
@@ -109,11 +129,19 @@ public final class NewChatView extends View {
           || item.phoneNumber.toLowerCase(Locale.ROOT).contains(searchQuery)
           || name.toLowerCase(Locale.ROOT).contains(searchQuery);
       if (!matches) continue;
-      if (item.type == Item.INVITE && !inviteDividerAdded) {
-        visible.add(Item.divider("Invite"));
-        inviteDividerAdded = true;
-      }
-      visible.add(item);
+      if (item.type == Item.INVITE) inviteItems.add(item);
+      else if (groupMode && selectedMembers.contains(item.phoneNumber)) selected.add(item);
+      else available.add(item);
+    }
+    if (groupMode && !selected.isEmpty()) {
+      visible.add(Item.divider("Selected"));
+      visible.addAll(selected);
+    }
+    if (groupMode && !available.isEmpty()) visible.add(Item.divider("Chats"));
+    visible.addAll(available);
+    if (!inviteItems.isEmpty()) {
+      visible.add(Item.divider("Invite"));
+      visible.addAll(inviteItems);
     }
     adapter.submit(visible);
     statusMessage = adapter.getItemCount() == 0 ? "No contacts found." : "";
@@ -168,8 +196,8 @@ public final class NewChatView extends View {
                     getContext(), "contacts", new RectF(0, listTop, w, getHeight() - bottomInset))
                 .setOrientation(ComponentList.Orientation.VERTICAL)
                 .setItemSizeProvider(
-                    (item, position) -> item.type == Item.DIVIDER ? px(143f) : px(209f))
-                .setPaddingPx(px(33f), px(11f), px(33f), px(66f))
+                    (item, position) -> item.type == Item.DIVIDER ? px(112f) : px(185f))
+                .setPaddingPx(0, px(11f), 0, px(66f))
                 .setAdapter(adapter)
                 .setClipToBounds(true)
                 .setOverscrollEnabled(false)
@@ -177,6 +205,7 @@ public final class NewChatView extends View {
                     (componentList, item, position) -> {
                       if (item.type == Item.FOUND && groupMode) {
                         if (!selectedMembers.add(item.phoneNumber)) selectedMembers.remove(item.phoneNumber);
+                        applyFilter();
                         build();
                       } else if (item.type == Item.FOUND) listener.onOpenChat(item);
                       else if (item.type == Item.INVITE) listener.onInvite(item.phoneNumber);
@@ -219,7 +248,7 @@ public final class NewChatView extends View {
 
   public void release() {
     layers.release();
-    recycle(white, divider, accent);
+    recycle(white, divider, accent, selectionBackground, selectionCheck);
   }
 
   private final class ItemAdapter extends ComponentList.Adapter<Item> {
@@ -261,32 +290,38 @@ public final class NewChatView extends View {
             text(
                 s.id("label"),
                 "",
-                new RectF(px(22f), 0, w, h),
+                new RectF(px(50f), 0, w, h),
                 sp(14),
                 SECONDARY,
                 FontVariation.BOLD));
         return;
       }
+      row.add(new Image.Builder(getContext(), s.id("selection_background"),
+          selectionBackground, new RectF(0, 0, w, h)).setScaleType(Image.ScaleType.FIT_XY));
+      row.add(new ChatRowRippleComponent(s.id("row_ripple"), new RectF(0, 0, w, h)));
       row.add(
           new Image.Builder(
                   getContext(),
                   s.id("avatar"),
                   avatar("?"),
-                  new RectF(px(22f), px(27.5f), px(176f), px(181.5f)))
+                  new RectF(px(50f), px(27f), px(182f), px(159f)))
               .setScaleType(Image.ScaleType.CENTER_CROP));
+      row.add(new Image.Builder(getContext(), s.id("selection_check"), selectionCheck,
+          new RectF(px(128f), px(111f), px(184f), px(167f)))
+          .setScaleType(Image.ScaleType.FIT_XY));
       row.add(
           text(
               s.id("name"),
               "",
-              new RectF(px(220f), px(19.25f), w - px(209f), px(110f)),
-              sp(17),
+              new RectF(px(220f), px(38f), w - px(230f), px(92f)),
+              sp(16),
               PRIMARY,
-              FontVariation.SEMI_BOLD));
+              FontVariation.MEDIUM));
       row.add(
           text(
               s.id("detail"),
               "",
-              new RectF(px(220f), px(104.5f), w - px(209f), px(187f)),
+              new RectF(px(220f), px(103f), w - px(210f), px(157f)),
               sp(14),
               SECONDARY,
               FontVariation.REGULAR));
@@ -296,7 +331,7 @@ public final class NewChatView extends View {
                   s.id("invite"),
                   accent,
                   "Invite",
-                  new RectF(w - px(198f), px(46.75f), w - px(11f), px(162.25f)))
+                  new RectF(w - px(210f), px(39f), w - px(42f), px(146f)))
               .setImageScaleType(Image.ScaleType.FIT_XY)
               .setCornerRadiusPx(px(33f))
               .setFont(NativeFonts.INTER)
@@ -311,7 +346,8 @@ public final class NewChatView extends View {
                   }));
       row.add(
           new Image.Builder(
-                  getContext(), s.id("divider"), divider, new RectF(px(220f), h - px(2.75f), w, h))
+                  getContext(), s.id("divider"), divider,
+                  new RectF(px(220f), h - Math.max(1f, px(1f)), w, h))
               .setScaleType(Image.ScaleType.FIT_XY));
     }
 
@@ -322,14 +358,17 @@ public final class NewChatView extends View {
         return;
       }
       holder.find("avatar", Image.class).setBitmap(photo(value));
+      boolean selected = groupMode && selectedMembers.contains(value.phoneNumber);
+      holder.find("selection_background", Image.class).setVisible(selected);
+      holder.find("selection_check", Image.class).setVisible(selected);
       String displayName = value.displayName == null || value.displayName.trim().isEmpty()
           ? DeviceContactResolver.cachedNameOrPhone(value.phoneNumber) : value.displayName;
       holder.find("name", Text.class).setText(displayName);
       holder
           .find("detail", Text.class)
           .setText(value.type == Item.FOUND
-              ? (groupMode && selectedMembers.contains(value.phoneNumber)
-                  ? "Selected for group" : groupMode ? "Tap to select" : "Tap to chat")
+              ? (selected
+                  ? "Selected" : groupMode ? "Tap to select" : "Tap to chat")
               : "Not on PingGo");
       holder
           .find("invite", Button.class)

@@ -13,7 +13,7 @@ import com.ogfa.nativeviews.component.Component;
 import com.ogfa.nativeviews.component.ComponentHost;
 
 /** Touch-origin ripple overlay used by recycled rows in the chat list. */
-final class ChatRowRippleComponent implements Component {
+public final class ChatRowRippleComponent implements Component {
   private static final Handler MAIN = new Handler(Looper.getMainLooper());
   private static final long EXPAND_DURATION_MS = 260L;
   private static final long FADE_DURATION_MS = 150L;
@@ -57,7 +57,7 @@ final class ChatRowRippleComponent implements Component {
     }
   };
 
-  ChatRowRippleComponent(String id, RectF initialBounds) {
+  public ChatRowRippleComponent(String id, RectF initialBounds) {
     this.id = id;
     dispatchPendingClick = () -> {
       Runnable action = pendingClickAction;

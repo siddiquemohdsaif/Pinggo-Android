@@ -480,10 +480,38 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
 
     @Override
     public void onBulkGroup(List<Chat> chats) {
+        ArrayList<String> preselectedMembers = new ArrayList<>();
+        if (chats != null) {
+            for (Chat chat : chats) {
+                if (chat == null || chat.getChatId() == null
+                        || chat.getChatId().startsWith("grp_"))
+                    continue;
+                // Chat is a presentation model: getPhoneNumber() contains the resolved
+                // contact label on the home screen. Group membership needs the canonical
+                // account id kept by the Room entity instead.
+                String memberId = "";
+                for (ChatEntity entity : latestChatEntities) {
+                    if (entity != null && chat.getChatId().equals(entity.chatId)) {
+                        memberId = normalizeAccountId(entity.otherUserId);
+                        break;
+                    }
+                }
+                if (!memberId.isEmpty() && !preselectedMembers.contains(memberId))
+                    preselectedMembers.add(memberId);
+            }
+        }
+        if (preselectedMembers.isEmpty()) {
+            Toast.makeText(this, "Select at least one direct chat for the group",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Intent intent = new Intent(this, NewChatActivity.class);
+        intent.putExtra(NewChatActivity.EXTRA_CREATE_GROUP, true);
+        intent.putStringArrayListExtra(
+                NewChatActivity.EXTRA_PRESELECTED_MEMBER_IDS, preselectedMembers);
+        startActivity(intent);
         if (homeView != null)
             homeView.clearChatSelection();
-        Toast.makeText(this, "Create group with " + chats.size() + " selected chats",
-                Toast.LENGTH_SHORT).show();
     }
 
     @Override
