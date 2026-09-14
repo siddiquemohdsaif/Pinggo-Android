@@ -3,9 +3,14 @@ package com.w3n.pinggo.views;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Matrix;
+import android.graphics.RectF;
 import android.view.Gravity;
+import android.view.MotionEvent;
+import android.view.ScaleGestureDetector;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewConfiguration;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.Toast;
@@ -22,7 +27,7 @@ import java.util.Arrays;
 /** Complete full-screen image-message overlay. */
 public final class ImagePreviewView extends NativeMediaScreenView {
   private static final int HEADER_COLOR = 0xFF4B565E;
-  private final ImageView image;
+  private final ZoomableImageView image;
   private final NativeMediaTopBarView header;
   private final NativeReplyComposerView composer;
   private final ConversationMenuDialogView menu;
@@ -37,8 +42,7 @@ public final class ImagePreviewView extends NativeMediaScreenView {
     menu = new ConversationMenuDialogView(context,
         Arrays.asList("Show in chat", "Download", "Share", "Delete", "View in gallery"),
         this::onMenuOptionSelected);
-    image = new ImageView(context);
-    image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+    image = new ZoomableImageView(context);
     addView(image, match());
     loading = new NativeProgressOverlay(context);
     addView(loading, match());
@@ -96,13 +100,13 @@ public final class ImagePreviewView extends NativeMediaScreenView {
 
   private void load(String source) {
     MediaPreviewCache.Thumbnail immediate = MediaPreviewCache.anyMemoryThumbnail(source, false);
-    if (immediate != null) image.setImageBitmap(immediate.bitmap);
+    if (immediate != null) image.setPreviewBitmap(immediate.bitmap);
     android.util.DisplayMetrics display = getResources().getDisplayMetrics();
     MediaPreviewCache.loadImageForDisplay(getContext(), source,
         display.widthPixels, display.heightPixels, new MediaPreviewCache.Callback<Bitmap>() {
           @Override public void onSuccess(Bitmap result) {
             loading.setVisibility(GONE);
-            image.setImageBitmap(result);
+            image.setPreviewBitmap(result);
           }
           @Override public void onError() {
             loading.setVisibility(GONE);
@@ -137,6 +141,128 @@ public final class ImagePreviewView extends NativeMediaScreenView {
     void onDelete();
     void onViewInGallery();
     void onReply(String text);
+  }
+
+  /** Fit-center image surface with bounded pinch zoom and one-finger panning. */
+  private static final class ZoomableImageView extends ImageView {
+    private static final float MAX_ZOOM = 4f;
+    private final Matrix transform = new Matrix();
+    private final RectF mappedImage = new RectF();
+    private final ScaleGestureDetector scaleDetector;
+    private final float touchSlop;
+    private float zoom = 1f;
+    private float lastX, lastY, downX, downY;
+    private boolean moved, multiTouch;
+
+    ZoomableImageView(Context context) {
+      super(context);
+      setScaleType(ScaleType.MATRIX);
+      touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
+      scaleDetector = new ScaleGestureDetector(context,
+          new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            @Override public boolean onScaleBegin(ScaleGestureDetector detector) {
+              multiTouch = true;
+              return getDrawable() != null;
+            }
+
+            @Override public boolean onScale(ScaleGestureDetector detector) {
+              float requested = detector.getScaleFactor();
+              if (!Float.isFinite(requested) || requested <= 0f) return false;
+              float next = clamp(zoom * requested, 1f, MAX_ZOOM);
+              float applied = next / zoom;
+              zoom = next;
+              transform.postScale(applied, applied,
+                  detector.getFocusX(), detector.getFocusY());
+              constrainTransform();
+              return true;
+            }
+          });
+    }
+
+    void setPreviewBitmap(Bitmap bitmap) {
+      super.setImageBitmap(bitmap);
+      resetTransform();
+    }
+
+    @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
+      super.onSizeChanged(width, height, oldWidth, oldHeight);
+      resetTransform();
+    }
+
+    @Override public boolean onTouchEvent(MotionEvent event) {
+      scaleDetector.onTouchEvent(event);
+      switch (event.getActionMasked()) {
+        case MotionEvent.ACTION_DOWN:
+          downX = lastX = event.getX();
+          downY = lastY = event.getY();
+          moved = false;
+          multiTouch = false;
+          return true;
+        case MotionEvent.ACTION_POINTER_DOWN:
+          multiTouch = true;
+          return true;
+        case MotionEvent.ACTION_MOVE:
+          float x = event.getX();
+          float y = event.getY();
+          if (Math.abs(x - downX) > touchSlop || Math.abs(y - downY) > touchSlop)
+            moved = true;
+          if (!scaleDetector.isInProgress() && zoom > 1f && event.getPointerCount() == 1) {
+            transform.postTranslate(x - lastX, y - lastY);
+            constrainTransform();
+          }
+          lastX = x;
+          lastY = y;
+          return true;
+        case MotionEvent.ACTION_UP:
+          if (!moved && !multiTouch) performClick();
+          return true;
+        case MotionEvent.ACTION_CANCEL:
+          return true;
+        default:
+          return true;
+      }
+    }
+
+    @Override public boolean performClick() {
+      super.performClick();
+      return true;
+    }
+
+    private void resetTransform() {
+      if (getDrawable() == null || getWidth() <= 0 || getHeight() <= 0) return;
+      float drawableWidth = getDrawable().getIntrinsicWidth();
+      float drawableHeight = getDrawable().getIntrinsicHeight();
+      if (drawableWidth <= 0f || drawableHeight <= 0f) return;
+      float fittedScale = Math.min(getWidth() / drawableWidth, getHeight() / drawableHeight);
+      float dx = (getWidth() - drawableWidth * fittedScale) / 2f;
+      float dy = (getHeight() - drawableHeight * fittedScale) / 2f;
+      transform.reset();
+      transform.postScale(fittedScale, fittedScale);
+      transform.postTranslate(dx, dy);
+      zoom = 1f;
+      setImageMatrix(transform);
+    }
+
+    private void constrainTransform() {
+      if (getDrawable() == null) return;
+      mappedImage.set(0f, 0f, getDrawable().getIntrinsicWidth(),
+          getDrawable().getIntrinsicHeight());
+      transform.mapRect(mappedImage);
+      float dx = mappedImage.width() <= getWidth()
+          ? getWidth() / 2f - mappedImage.centerX()
+          : mappedImage.left > 0f ? -mappedImage.left
+          : mappedImage.right < getWidth() ? getWidth() - mappedImage.right : 0f;
+      float dy = mappedImage.height() <= getHeight()
+          ? getHeight() / 2f - mappedImage.centerY()
+          : mappedImage.top > 0f ? -mappedImage.top
+          : mappedImage.bottom < getHeight() ? getHeight() - mappedImage.bottom : 0f;
+      transform.postTranslate(dx, dy);
+      setImageMatrix(transform);
+    }
+
+    private static float clamp(float value, float minimum, float maximum) {
+      return Math.max(minimum, Math.min(maximum, value));
+    }
   }
 
   private static final class NativeProgressOverlay extends View {

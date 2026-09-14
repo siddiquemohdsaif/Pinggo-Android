@@ -114,7 +114,7 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
             public void handleOnBackPressed() {
                 if (homeMenuDialog != null && homeMenuDialog.dismissIfShowing())
                     return;
-                if (homeView != null && homeView.clearChatSelection())
+                if (homeView != null && homeView.clearSelections())
                     return;
 
                 setEnabled(false);
@@ -356,10 +356,16 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
             boolean outgoing = ownId.equals(normalizeAccountId(callerId));
             boolean missed = call.connectedAt == null || call.connectedAt <= 0;
             Date date = new Date(endedAt > 0 ? endedAt : call.createdAt);
-            calls.add(new CallLog(chatId, call.messageId, otherId,
+            String profilePath = chat == null ? null : chat.localProfilePhotoPath;
+            if ((profilePath == null || profilePath.trim().isEmpty())
+                    && !chatId.startsWith("grp_")) {
+                profilePath = ChatProfilePhotoStore.getLocalPath(this, otherId);
+            }
+            calls.add(new CallLog(chatId, call.callId, call.messageId, otherId,
                     contact, rowTime.format(date), fullTime.format(date),
                     formatCallDuration(duration),
-                    "video".equals(call.mediaType), outgoing, missed, call.conference));
+                    "video".equals(call.mediaType), outgoing, missed, call.conference,
+                    profilePath));
         }
         if (homeView != null)
             homeView.submitCalls(calls);
@@ -414,6 +420,10 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         intent.putExtra(CallDetailActivity.EXTRA_DURATION, callLog.getDuration());
         intent.putExtra(CallDetailActivity.EXTRA_IS_VIDEO_CALL, callLog.isVideoCall());
         intent.putExtra(CallDetailActivity.EXTRA_IS_CONFERENCE, callLog.isConference());
+        intent.putExtra(CallDetailActivity.EXTRA_IS_OUTGOING, callLog.isOutgoing());
+        intent.putExtra(CallDetailActivity.EXTRA_IS_MISSED, callLog.isMissed());
+        intent.putExtra(CallDetailActivity.EXTRA_PROFILE_PATH,
+                callLog.getLocalProfilePhotoPath());
         startActivity(intent);
     }
 
@@ -492,6 +502,46 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         getWindow().setStatusBarColor(selected
                 ? SELECTION_STATUS_BAR_COLOR
                 : HOME_SYSTEM_BAR_COLOR);
+    }
+
+    @Override
+    public void onCallSelectionChanged(boolean selected) {
+        getWindow().setStatusBarColor(selected
+                ? SELECTION_STATUS_BAR_COLOR : HOME_SYSTEM_BAR_COLOR);
+    }
+
+    @Override
+    public void onBulkDeleteCalls(List<CallLog> calls) {
+        if (calls == null || calls.isEmpty()) return;
+        List<String> callIds = new ArrayList<>();
+        for (CallLog call : calls) {
+            if (call != null && call.getCallId() != null && !call.getCallId().trim().isEmpty())
+                callIds.add(call.getCallId());
+        }
+        if (callIds.isEmpty()) return;
+        if (homeView != null) homeView.clearCallSelection();
+        AppFunctionManager.getInstance().deleteCallLogs(callIds,
+                new AppFunctionManager.Callback() {
+                    @Override public void onSuccess(Object object) {
+                        String uid = LoginStateManager.getInstance().getUID(HomeActivity.this);
+                        if (callRepository != null) callRepository.deleteCachedCalls(uid, callIds);
+                        if (object instanceof JsonObject && repository != null) {
+                            JsonArray deleted = ((JsonObject) object).getAsJsonArray("deleted");
+                            if (deleted != null) for (JsonElement element : deleted) {
+                                if (!element.isJsonObject()) continue;
+                                JsonElement message = element.getAsJsonObject().get("message");
+                                if (message != null && message.isJsonObject())
+                                    repository.cacheServerMessage(message.getAsJsonObject());
+                            }
+                        }
+                        Toast.makeText(HomeActivity.this, "Call log deleted",
+                                Toast.LENGTH_SHORT).show();
+                    }
+                    @Override public void onError(String error) {
+                        Toast.makeText(HomeActivity.this, "Call log could not be deleted",
+                                Toast.LENGTH_SHORT).show();
+                    }
+                });
     }
 
     private void applyBulkSetting(List<Chat> chats, String setting, long value,

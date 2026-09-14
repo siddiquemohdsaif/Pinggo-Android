@@ -948,7 +948,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       deletedNotice.bind(
           positiveRect(bodyLeft + NOTICE_LEFT_PX, headingTop,
               bodyRight - NOTICE_PADDING_PX, headingTop + metrics.textHeight),
-          "This Message was deleted", NOTICE_ICON_SIZE_PX, NOTICE_TEXT_GAP_PX);
+          deletedNoticeText(model), NOTICE_ICON_SIZE_PX, NOTICE_TEXT_GAP_PX);
     } else {
       deletedNotice.hide();
     }
@@ -1158,7 +1158,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       float noticeHeight = Math.max(NOTICE_ICON_SIZE_PX,
           (float) Math.ceil(noticeFont.descent - noticeFont.ascent));
       float noticeWidth = NOTICE_ICON_SIZE_PX + NOTICE_TEXT_GAP_PX
-          + noticePaint.measureText("This Message was deleted");
+          + noticePaint.measureText(deletedNoticeText(model));
       float minimumBodyWidth = 170f * MESSAGE_SCALE;
       float maximumBubbleWidth = availableWidth * .80f;
       float bodyWidth = Math.max(minimumBodyWidth,
@@ -1332,6 +1332,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         !deleted && message.forwardedFrom != null && !message.forwardedFrom.isEmpty(),
         !deleted && message.pinned,
         deleted,
+        deleted && isCallType(message.messageType),
         own && !deleted,
         own,
         groupSender,
@@ -1740,6 +1741,11 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     return message != null && message.deletedText != null;
   }
 
+  private static String deletedNoticeText(MessageRenderModel model) {
+    return model != null && model.deletedCall
+        ? "Call log was deleted" : "This Message was deleted";
+  }
+
   private int indexOfMessageKeyFrom(String key, int startIndex) {
     for (int index = Math.max(0, startIndex); index < messages.size(); index++) {
       if (key.equals(messageKey(messages.get(index), index))) return index;
@@ -2003,7 +2009,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   }
 
   private ReplyContent replyContent(MessageEntity message, MessageRenderModel model) {
-    if (model.deleted) return ReplyContent.text("This Message was deleted");
+    if (model.deleted) return ReplyContent.text(deletedNoticeText(model));
     if ("image".equals(model.mediaType) || "video".equals(model.mediaType)) {
       return ReplyContent.media(model.mediaType, model.attachmentSource);
     }

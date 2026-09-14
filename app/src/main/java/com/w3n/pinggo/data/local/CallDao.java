@@ -12,6 +12,9 @@ public interface CallDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     void upsertAll(List<CallEntity> calls);
 
+    @Query("DELETE FROM calls WHERE ownerId = :ownerId AND callId IN (:callIds)")
+    void deleteCalls(String ownerId, List<String> callIds);
+
     @Query("SELECT * FROM calls WHERE ownerId = :ownerId "
             + "ORDER BY endedAt DESC, callId DESC")
     LiveData<List<CallEntity>> observeCalls(String ownerId);

@@ -2,10 +2,13 @@ package com.w3n.pinggo.views.call;
 
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.BitmapShader;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
 import android.view.MotionEvent;
 import android.view.View;
@@ -46,6 +49,10 @@ public final class CallDetailView extends View {
   private final Bitmap videoIncomingIcon = drawableBitmap(R.drawable.chat_video_incoming);
   private final Bitmap videoOutgoingIcon = drawableBitmap(R.drawable.chat_video_outgoing);
   private final Bitmap videoMissedIcon = drawableBitmap(R.drawable.chat_video_missed);
+  private final Bitmap voiceActionIcon = drawableBitmap(R.drawable.ic_call, Color.WHITE);
+  private final Bitmap videoActionIcon = drawableBitmap(R.drawable.ic_video_call, Color.WHITE);
+  private final Bitmap messageActionIcon = drawableBitmap(R.drawable.ic_chat, Color.WHITE);
+  private final Bitmap profile;
   private final HistoryAdapter adapter = new HistoryAdapter();
   private ComponentList<CallLog> list;
   private Text status;
@@ -60,6 +67,7 @@ public final class CallDetailView extends View {
       String dateTime,
       String duration,
       boolean video,
+      String profilePath,
       Listener listener) {
     super(context);
     this.name = name;
@@ -67,6 +75,7 @@ public final class CallDetailView extends View {
     this.dateTime = dateTime;
     this.duration = duration;
     this.video = video;
+    profile = loadProfile(profilePath, name);
     this.listener = listener;
     setBackgroundColor(0xFFF7F9FB);
     setClickable(true);
@@ -132,7 +141,7 @@ public final class CallDetailView extends View {
         Text.Alignment.START);
     float avatarTop = top + px(154f);
     float avatarSize = px(220f);
-    content.add(new Image.Builder(getContext(), "profile", avatar(name),
+    content.add(new Image.Builder(getContext(), "profile", profile,
         new RectF(w / 2f - avatarSize / 2f, avatarTop,
             w / 2f + avatarSize / 2f, avatarTop + avatarSize))
         .setScaleType(Image.ScaleType.CENTER_CROP));
@@ -144,16 +153,16 @@ public final class CallDetailView extends View {
     float gap = px(35f);
     float groupWidth = actionSize * 3f + gap * 2f;
     float actionLeft = (w - groupWidth) / 2f;
-    addButton("voice", accent, "Voice", new RectF(actionLeft, actionTop,
-        actionLeft + actionSize, actionTop + actionSize), Color.WHITE,
-        id -> listener.onVoiceCall());
-    addButton("video", accent, "Video", new RectF(actionLeft + actionSize + gap, actionTop,
-        actionLeft + actionSize * 2f + gap, actionTop + actionSize), Color.WHITE,
+    addIconButton("voice", voiceActionIcon, new RectF(actionLeft, actionTop,
+        actionLeft + actionSize, actionTop + actionSize), id -> listener.onVoiceCall());
+    addIconButton("video", videoActionIcon,
+        new RectF(actionLeft + actionSize + gap, actionTop,
+            actionLeft + actionSize * 2f + gap, actionTop + actionSize),
         id -> listener.onVideoCall());
-    addButton("message", accent, "Message",
+    addIconButton("message", messageActionIcon,
         new RectF(actionLeft + (actionSize + gap) * 2f, actionTop,
             actionLeft + actionSize * 3f + gap * 2f, actionTop + actionSize),
-        Color.WHITE, id -> listener.onMessage());
+        id -> listener.onMessage());
     float listTop = actionTop + actionSize + px(44f);
     list = content.add(new ComponentList.Builder<CallLog>(getContext(), "call_history",
         new RectF(0f, listTop, w, getHeight() - bottomInset))
@@ -269,6 +278,17 @@ public final class CallDetailView extends View {
             .setOnClickListener(click));
   }
 
+  private void addIconButton(String id, Bitmap icon, RectF rect,
+                             Button.OnClickListener click) {
+    addButton(id, accent, "", rect, Color.WHITE, click);
+    float iconSize = Math.min(rect.width(), rect.height()) * .42f;
+    float centerX = rect.centerX(), centerY = rect.centerY();
+    content.add(new Image.Builder(getContext(), id + "_icon", icon,
+        new RectF(centerX - iconSize / 2f, centerY - iconSize / 2f,
+            centerX + iconSize / 2f, centerY + iconSize / 2f))
+        .setScaleType(Image.ScaleType.FIT_CENTER));
+  }
+
   @Override
   protected void onDraw(Canvas canvas) {
     super.onDraw(canvas);
@@ -292,7 +312,33 @@ public final class CallDetailView extends View {
   public void release() {
     layers.release();
     recycle(white, accent, divider, phoneIncomingIcon, phoneOutgoingIcon, phoneMissedIcon,
-        videoIncomingIcon, videoOutgoingIcon, videoMissedIcon);
+        videoIncomingIcon, videoOutgoingIcon, videoMissedIcon, voiceActionIcon,
+        videoActionIcon, messageActionIcon, profile);
+  }
+
+  private Bitmap loadProfile(String path, String fallbackName) {
+    Bitmap source = path == null || path.trim().isEmpty() ? null : BitmapFactory.decodeFile(path);
+    if (source == null) return avatar(fallbackName);
+    Bitmap cropped = circleCrop(source);
+    if (source != cropped && !source.isRecycled()) source.recycle();
+    return cropped;
+  }
+
+  private static Bitmap circleCrop(Bitmap source) {
+    int size = Math.min(source.getWidth(), source.getHeight());
+    Bitmap result = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+    Canvas canvas = new Canvas(result);
+    Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    BitmapShader shader = new BitmapShader(source, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+    android.graphics.Matrix matrix = new android.graphics.Matrix();
+    float scale = Math.max(size / (float) source.getWidth(), size / (float) source.getHeight());
+    matrix.setScale(scale, scale);
+    matrix.postTranslate((size - source.getWidth() * scale) / 2f,
+        (size - source.getHeight() * scale) / 2f);
+    shader.setLocalMatrix(matrix);
+    paint.setShader(shader);
+    canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint);
+    return result;
   }
 
   private Bitmap avatar(String value) {
@@ -329,8 +375,14 @@ public final class CallDetailView extends View {
   }
 
   private Bitmap drawableBitmap(int resource) {
+    return drawableBitmap(resource, null);
+  }
+
+  private Bitmap drawableBitmap(int resource, Integer tint) {
     Drawable drawable = ContextCompat.getDrawable(getContext(), resource);
     if (drawable == null) return colorBitmap(Color.TRANSPARENT);
+    drawable = drawable.mutate();
+    if (tint != null) drawable.setTint(tint);
     int width = Math.max(1, drawable.getIntrinsicWidth());
     int height = Math.max(1, drawable.getIntrinsicHeight());
     Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);

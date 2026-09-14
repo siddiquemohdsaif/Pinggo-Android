@@ -10,6 +10,7 @@ import retrofit2.Call;
 import retrofit2.Callback;
 import retrofit2.Response;
 import com.google.gson.JsonObject;
+import java.util.List;
 
 public final class CallLogHandler {
   private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
@@ -52,6 +53,29 @@ public final class CallLogHandler {
         @Override public void onResponse(Call<JsonObject> call, Response<JsonObject> response) {
           if (response.isSuccessful() && response.body() != null) callback.onSuccess(response.body());
           else callback.onError("Unable to load call history.");
+        }
+        @Override public void onFailure(Call<JsonObject> call, Throwable error) {
+          callback.onError(error.getMessage());
+        }
+      });
+    } catch (JSONException error) {
+      callback.onError(error.getMessage());
+    }
+  }
+
+  public static void deleteCallLogs(AppRestAPI api, List<String> callIds,
+                                    AppFunctionManager.Callback callback) {
+    try {
+      JSONObject body = new JSONObject();
+      org.json.JSONArray ids = new org.json.JSONArray();
+      if (callIds != null) for (String callId : callIds) {
+        if (callId != null && !callId.trim().isEmpty()) ids.put(callId.trim());
+      }
+      body.put("callIds", ids);
+      api.deleteCallLogs(RequestBody.create(body.toString(), JSON)).enqueue(new Callback<JsonObject>() {
+        @Override public void onResponse(Call<JsonObject> call, Response<JsonObject> response) {
+          if (response.isSuccessful() && response.body() != null) callback.onSuccess(response.body());
+          else callback.onError("Unable to delete call log.");
         }
         @Override public void onFailure(Call<JsonObject> call, Throwable error) {
           callback.onError(error.getMessage());

@@ -61,6 +61,12 @@ public final class CallRepository {
         if (!calls.isEmpty()) ioExecutor.execute(() -> dao.upsertAll(calls));
     }
 
+    public void deleteCachedCalls(String ownerId, List<String> callIds) {
+        String owner = normalize(ownerId);
+        if (owner.isEmpty() || callIds == null || callIds.isEmpty()) return;
+        ioExecutor.execute(() -> dao.deleteCalls(owner, callIds));
+    }
+
     private static String string(JsonObject value, String key) {
         JsonElement element = value.get(key);
         return element == null || element.isJsonNull() ? "" : element.getAsString();

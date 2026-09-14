@@ -25,6 +25,7 @@ final class ChatMessageAdapterModels {
     final boolean forwarded;
     final boolean pinned;
     final boolean deleted;
+    final boolean deletedCall;
     final boolean showDelivery;
     final boolean own;
     final boolean groupSender;
@@ -44,6 +45,7 @@ final class ChatMessageAdapterModels {
         boolean forwarded,
         boolean pinned,
         boolean deleted,
+        boolean deletedCall,
         boolean showDelivery,
         boolean own,
         boolean groupSender,
@@ -60,6 +62,7 @@ final class ChatMessageAdapterModels {
       this.forwarded = forwarded;
       this.pinned = pinned;
       this.deleted = deleted;
+      this.deletedCall = deletedCall;
       this.showDelivery = showDelivery;
       this.own = own;
       this.groupSender = groupSender;

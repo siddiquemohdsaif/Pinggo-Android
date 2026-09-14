@@ -89,6 +89,7 @@ public final class HomeView extends ZLayerViewGroup {
     private boolean showingChats = true;
     private boolean showingMeet;
     private List<Chat> selectedChats = new ArrayList<>();
+    private List<CallLog> selectedCalls = new ArrayList<>();
 
     public HomeView(@NonNull Context context, @NonNull Listener listener) {
         super(context);
@@ -108,11 +109,17 @@ public final class HomeView extends ZLayerViewGroup {
         chatsView.setOnNewGroupListener(listener::onNewGroup);
         callsView = new CallsView(context, listener::onOpenCall, listener::onStartCall,
                 listener::onLoadMoreCalls);
+        callsView.setOnSelectionChangedListener(calls -> {
+            selectedCalls = calls == null ? new ArrayList<>() : new ArrayList<>(calls);
+            listener.onCallSelectionChanged(!selectedCalls.isEmpty());
+            if (getWidth() > 0) buildScreen();
+            invalidate();
+        });
         meetsView = new MeetsView(context);
         bottomNavigationView = new BottomNavigationView(context, new BottomNavigationView.Listener() {
-            @Override public void onChatsSelected() { showChats(); }
+            @Override public void onChatsSelected() { clearCallSelection(); showChats(); }
             @Override public void onCallsSelected() { clearChatSelection(); showCalls(); }
-            @Override public void onMeetSelected() { clearChatSelection(); showMeet(); }
+            @Override public void onMeetSelected() { clearSelections(); showMeet(); }
         });
         addView(chatsView);
         addView(callsView);
@@ -219,7 +226,7 @@ public final class HomeView extends ZLayerViewGroup {
         float searchTop = figmaTop + 183f * scale;
 
         backgroundLayer.add(image("background", backgroundBitmap, new RectF(0, 0, width, height)));
-        if (selectedChats.isEmpty()) {
+        if (selectedChats.isEmpty() && selectedCalls.isEmpty()) {
             logo = contentLayer.add(image("logo", logoBitmap,
                     new RectF(52f * scale, figmaTop + 28f * scale,
                             179f * scale, figmaTop + 155f * scale))
@@ -320,13 +327,20 @@ public final class HomeView extends ZLayerViewGroup {
                 transparentBitmap, "", new RectF(30f * scale, top + 40f * scale,
                         121f * scale, top + 131f * scale))
                 .setImageScaleType(Image.ScaleType.FIT_XY).setRippleEnabled(true).setWaitForRippleBeforeClick(true)
-                .setOnClickListener(id -> clearChatSelection()));
-        contentLayer.add(text("selection_count", String.valueOf(selectedChats.size()),
+                .setOnClickListener(id -> clearSelections()));
+        boolean selectingCalls = !selectedCalls.isEmpty();
+        int selectionCount = selectingCalls ? selectedCalls.size() : selectedChats.size();
+        contentLayer.add(text("selection_count", String.valueOf(selectionCount),
                 new RectF(165f * scale, top + 57f * scale,
                         300f * scale, top + 117f * scale), 50f * scale, SECONDARY,
                 FontVariation.MEDIUM));
-        addSelectionButton("selection_group", selectionGroupBitmap,
-                612f, 51f, top, scale,
+        if (selectingCalls) {
+            addSelectionButton("selection_delete", selectionDeleteBitmap,
+                    960f, 40f, top, scale,
+                    () -> listener.onBulkDeleteCalls(new ArrayList<>(selectedCalls)));
+            return;
+        }
+        addSelectionButton("selection_group", selectionGroupBitmap, 612f, 51f, top, scale,
                 () -> listener.onBulkGroup(new ArrayList<>(selectedChats)));
         boolean allPinned = !selectedChats.isEmpty();
         for (Chat chat : selectedChats) allPinned &= chat.isPinned();
@@ -356,6 +370,14 @@ public final class HomeView extends ZLayerViewGroup {
 
     public boolean clearChatSelection() {
         return chatsView.clearSelection();
+    }
+
+    public boolean clearCallSelection() { return callsView.clearSelection(); }
+
+    public boolean clearSelections() {
+        boolean chatsCleared = clearChatSelection();
+        boolean callsCleared = clearCallSelection();
+        return chatsCleared || callsCleared;
     }
 
     private void showCalls() {
@@ -516,7 +538,9 @@ public final class HomeView extends ZLayerViewGroup {
         void onBulkPin(List<Chat> chats);
         void onBulkMute(List<Chat> chats);
         void onBulkDelete(List<Chat> chats);
+        void onBulkDeleteCalls(List<CallLog> calls);
         void onChatSelectionChanged(boolean selected);
+        void onCallSelectionChanged(boolean selected);
     }
 
 }

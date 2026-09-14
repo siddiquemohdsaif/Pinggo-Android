@@ -679,6 +679,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
             nextMessageCursor = stalled ? null : newCursor;
             messageNetworkHasMore = !stalled && hasMore && !returnedCursor.isEmpty();
             messagePageLoading = false;
+            if (loadedCount <= 0 && chatView != null)
+              chatView.setInitialMessagesLoading(false);
             inFlightMessageCursor = null;
             if (!requestedCursor.isEmpty() && loadedCount > 0) {
               // Reveal the next Room window only after the corresponding server
@@ -716,6 +718,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
             if (requestGeneration != messagePageRequestGeneration)
               return;
             messagePageLoading = false;
+            if (chatView != null) chatView.setInitialMessagesLoading(false);
             olderPageRevealPending = false;
             inFlightMessageCursor = null;
             Log.e(TESTING_TAG, "message_list source=routes phase=activity_error chatId="
@@ -981,7 +984,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     messagePreparationExecutor.execute(() -> {
       long preparationStartedNanos = SystemClock.elapsedRealtimeNanos();
       ChatView.PreparedMessages prepared = view.prepareMessages(messagesToPrepare, availableWidth);
-      profiler.operation(
+      recordProfilerOperation(
           "prepare_visible",
           preparationStartedNanos,
           "count=" + messagesToPrepare.size());
@@ -1001,6 +1004,13 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
           applyPrepared.run();
       });
     });
+  }
+
+  /** Background preparation may finish while this activity is being destroyed. */
+  private void recordProfilerOperation(String name, long startedNanos, String fields) {
+    ChatPerformanceProfiler currentProfiler = profiler;
+    if (currentProfiler != null)
+      currentProfiler.operation(name, startedNanos, fields);
   }
 
   /**
@@ -1045,6 +1055,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     boolean changed = backgroundPreparation == null
         ? chatView.submitMessages(latestMessages)
         : chatView.submitPreparedMessages(backgroundPreparation);
+    if (!latestMessages.isEmpty()) chatView.setInitialMessagesLoading(false);
     if (!latestMessages.isEmpty()) {
       MessageEntity newest = latestMessages.get(latestMessages.size() - 1);
       Log.d("PingGoMessageTrace", "stage=chat_view_submitted"
@@ -1097,7 +1108,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       if (view == null)
         return;
       ChatView.PreparedMessages prepared = view.prepareMessages(targetMessages, availableWidth);
-      profiler.operation(
+      recordProfilerOperation(
           "prepare_chunk",
           preparationStartedNanos,
           "count=" + (preparedEnd - firstToPrepare)

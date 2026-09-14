@@ -2,13 +2,17 @@ package com.w3n.pinggo.views.home;
 
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.BitmapShader;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 
 import androidx.core.content.ContextCompat;
 
@@ -22,12 +26,16 @@ import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.modals.CallLog;
+import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /** Scrollable call list implemented with native-views-release.aar components. */
 public final class CallsView extends View {
@@ -51,11 +59,21 @@ public final class CallsView extends View {
     private final Bitmap videoIncomingBitmap = drawableBitmap(R.drawable.chat_video_incoming);
     private final Bitmap videoOutgoingBitmap = drawableBitmap(R.drawable.chat_video_outgoing);
     private final Bitmap videoMissedBitmap = drawableBitmap(R.drawable.chat_video_missed);
-    private final Map<String, Bitmap> avatarCache = new HashMap<>();
+    private final Bitmap selectionBackgroundBitmap = drawableBitmap(R.drawable.chat_selection_background);
+    private final Bitmap selectionCheckBitmap = drawableBitmap(R.drawable.chat_selection_check);
+    private final Map<String, Bitmap> avatarCache = new ConcurrentHashMap<>();
+    private final Set<String> avatarLoads = ConcurrentHashMap.newKeySet();
+    private final ExecutorService avatarExecutor = Executors.newFixedThreadPool(2);
+    private final Set<String> selectedCallIds = new java.util.LinkedHashSet<>();
+    private OnSelectionChangedListener selectionChangedListener;
     private ComponentList<CallLog> list;
     private Text emptyText;
     private Progress paginationProgress;
     private boolean paginationLoading;
+    private float paginationGestureStartY;
+    private boolean paginationGestureMovedUp;
+    private boolean paginationRequestedForGesture;
+    private final Runnable paginationAfterFling = this::loadNextPageIfNeeded;
 
     public CallsView(Context context, OnCallClickListener clickListener,
                      OnCallStartListener callStartListener, Runnable loadMoreListener) {
@@ -78,6 +96,37 @@ public final class CallsView extends View {
         post(this::loadAllPagesForSearch);
     }
 
+    public void setOnSelectionChangedListener(OnSelectionChangedListener listener) {
+        selectionChangedListener = listener;
+    }
+
+    public boolean clearSelection() {
+        if (selectedCallIds.isEmpty()) return false;
+        selectedCallIds.clear();
+        adapter.notifyDataSetChanged();
+        notifySelectionChanged();
+        return true;
+    }
+
+    private boolean isSelecting() { return !selectedCallIds.isEmpty(); }
+
+    private void toggleSelection(CallLog call) {
+        String id = call.getCallId();
+        if (id == null || id.trim().isEmpty()) return;
+        if (!selectedCallIds.add(id)) selectedCallIds.remove(id);
+        adapter.notifyDataSetChanged();
+        notifySelectionChanged();
+    }
+
+    private void notifySelectionChanged() {
+        if (selectionChangedListener == null) return;
+        List<CallLog> selected = new ArrayList<>();
+        for (CallLog call : adapter.all) {
+            if (selectedCallIds.contains(call.getCallId())) selected.add(call);
+        }
+        selectionChangedListener.onSelectionChanged(selected);
+    }
+
     public void setPaginationLoading(boolean loading) {
         paginationLoading = loading;
         updateVisibility();
@@ -95,7 +144,7 @@ public final class CallsView extends View {
         list = listLayer.add(new ComponentList.Builder<CallLog>(getContext(), "call_component_list",
                 new RectF(0, 0, width, height)).setOrientation(ComponentList.Orientation.VERTICAL)
                 .setItemSize(185f * figmaConfig.getScale(width))
-                .setPaddingPx(0, 0, 0, 155f * figmaConfig.getScale(width))
+                .setPaddingPx(0, 0, 0, 0)
                 .setAdapter(adapter).setClipToBounds(true).setScrollEnabled(true)
                 .setOverscrollEnabled(false)
                 .setOnItemClickListener((componentList, call, position) ->
@@ -133,26 +182,51 @@ public final class CallsView extends View {
 
     @Override protected void onDraw(Canvas canvas) { super.onDraw(canvas); layers.draw(canvas); }
     @Override public boolean onTouchEvent(MotionEvent event) {
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            removeCallbacks(paginationAfterFling);
+            paginationGestureStartY = event.getY();
+            paginationGestureMovedUp = false;
+            paginationRequestedForGesture = false;
+        } else if (action == MotionEvent.ACTION_MOVE
+                && event.getY() - paginationGestureStartY
+                < -ViewConfiguration.get(getContext()).getScaledTouchSlop()) {
+            paginationGestureMovedUp = true;
+        }
         boolean handled = layers.onTouchEvent(event);
-        if (handled) post(this::loadNextPageIfNeeded);
+        if (handled && paginationGestureMovedUp && !paginationRequestedForGesture) {
+            if (action == MotionEvent.ACTION_MOVE) post(paginationAfterFling);
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                postDelayed(paginationAfterFling, 120L);
+                postDelayed(paginationAfterFling, 450L);
+                postDelayed(paginationAfterFling, 900L);
+            }
+        }
         return handled || super.onTouchEvent(event);
     }
 
     private void loadNextPageIfNeeded() {
-        if (list != null && adapter.getItemCount() > 0
+        if (!paginationRequestedForGesture && list != null && adapter.getItemCount() > 0
                 && list.getLastVisiblePosition() >= adapter.getItemCount() - 3
-                && loadMoreListener != null) loadMoreListener.run();
+                && loadMoreListener != null) {
+            paginationRequestedForGesture = true;
+            loadMoreListener.run();
+        }
     }
 
     public void release() {
+        removeCallbacks(paginationAfterFling);
         layers.release();
         if (!dividerBitmap.isRecycled()) dividerBitmap.recycle();
         recycle(phoneIncomingBitmap, phoneOutgoingBitmap, phoneMissedBitmap,
-                videoIncomingBitmap, videoOutgoingBitmap, videoMissedBitmap);
+                videoIncomingBitmap, videoOutgoingBitmap, videoMissedBitmap,
+                selectionBackgroundBitmap, selectionCheckBitmap);
         for (Bitmap bitmap : avatarCache.values()) {
             if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
         }
         avatarCache.clear();
+        avatarLoads.clear();
+        avatarExecutor.shutdownNow();
     }
 
     private final class CallAdapter extends ComponentList.Adapter<CallLog> {
@@ -180,6 +254,7 @@ public final class CallsView extends View {
         }
         @Override public int getItemCount() { return calls.size(); }
         @Override public CallLog getItem(int position) { return calls.get(position); }
+        int indexOf(CallLog call) { return calls.indexOf(call); }
         @Override public long getItemId(int position) {
             CallLog call = calls.get(position);
             String key = call.getContactName() + '|' + call.getFullCalledDateTime();
@@ -191,11 +266,18 @@ public final class CallsView extends View {
             float height = scope.height();
             float scale = figmaConfig.getScale(getWidth());
             ZLayer row = item.addLayer("row");
+            row.add(new Image.Builder(getContext(), scope.id("selection_background"),
+                    selectionBackgroundBitmap, new RectF(0, 0, width, height))
+                    .setScaleType(Image.ScaleType.FIT_XY));
             row.add(new ChatRowRippleComponent(scope.id("row_ripple"),
                     new RectF(0f, 0f, width, height)));
             row.add(new Image.Builder(getContext(), scope.id("avatar"), cachedAvatar("?"),
                     new RectF(50f * scale, 27f * scale, 182f * scale, 159f * scale))
                     .setScaleType(Image.ScaleType.CENTER_CROP));
+            row.add(new Image.Builder(getContext(), scope.id("selection_check"),
+                    selectionCheckBitmap,
+                    new RectF(128f * scale, 111f * scale, 184f * scale, 167f * scale))
+                    .setScaleType(Image.ScaleType.FIT_XY));
             row.add(rowText(scope.id("name"), new RectF(220f * scale, 14f * scale,
                     width - 210f * scale, 108f * scale), 36f * scale, PRIMARY,
                     FontVariation.MEDIUM).setWrapEnabled(true));
@@ -213,10 +295,14 @@ public final class CallsView extends View {
                     .setScaleType(Image.ScaleType.FIT_XY));
         }
         @Override public void onBindItem(ComponentList.Item item, CallLog call, int position) {
+            boolean selected = selectedCallIds.contains(call.getCallId());
+            item.find("selection_background", Image.class).setVisible(selected);
+            item.find("selection_check", Image.class).setVisible(selected);
             item.find("row_ripple", ChatRowRippleComponent.class).bind(
                     new RectF(0f, 0f, item.getScope().width(), item.getScope().height()),
-                    () -> clickListener.onCallClick(call), null);
-            item.find("avatar", Image.class).setBitmap(cachedAvatar(call.getContactName()));
+                    () -> { if (isSelecting()) toggleSelection(call); else clickListener.onCallClick(call); },
+                    () -> toggleSelection(call));
+            bindAvatar(item, call);
             item.find("name", Text.class).setText(call.getContactName());
             String duration = call.getDuration() == null ? "" : call.getDuration().trim();
             String details = call.getCalledTime() == null ? "" : call.getCalledTime().trim();
@@ -234,9 +320,55 @@ public final class CallsView extends View {
             item.find("call_ripple", ChatRowRippleComponent.class).bind(
                     new RectF(item.getScope().width() - 176f * scale, 20f * scale,
                             item.getScope().width(), 165f * scale),
-                    () -> callStartListener.onCallStart(call, call.isVideoCall()), null);
+                    () -> { if (isSelecting()) toggleSelection(call);
+                        else callStartListener.onCallStart(call, call.isVideoCall()); },
+                    () -> toggleSelection(call));
             item.find("divider", Image.class).setVisible(position < calls.size() - 1);
         }
+    }
+
+    private void bindAvatar(ComponentList.Item item, CallLog call) {
+        String path = call.getLocalProfilePhotoPath();
+        if ((path == null || path.trim().isEmpty()) && !call.isGroupCall()) {
+            path = ChatProfilePhotoStore.getLocalPath(getContext(), call.getPhoneNumber());
+        }
+        int size = Math.max(1, Math.round(px(132f)));
+        String cacheKey = (path == null ? "" : path) + "@" + size;
+        Bitmap cached = avatarCache.get(cacheKey);
+        if (cached != null && !cached.isRecycled()) {
+            item.find("avatar", Image.class).setBitmap(cached);
+            return;
+        }
+        item.find("avatar", Image.class).setBitmap(cachedAvatar(call.getContactName()));
+        if (path == null || path.trim().isEmpty() || !avatarLoads.add(cacheKey)) return;
+        final String imagePath = path;
+        avatarExecutor.execute(() -> {
+            Bitmap source = BitmapFactory.decodeFile(imagePath);
+            Bitmap cropped = source == null ? null : circleCrop(source, size);
+            if (source != null && source != cropped && !source.isRecycled()) source.recycle();
+            if (cropped != null) avatarCache.put(cacheKey, cropped);
+            avatarLoads.remove(cacheKey);
+            if (cropped != null) post(() -> {
+                int position = adapter.indexOf(call);
+                if (position >= 0) adapter.notifyItemChanged(position);
+            });
+        });
+    }
+
+    private static Bitmap circleCrop(Bitmap source, int size) {
+        Bitmap result = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(result);
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        BitmapShader shader = new BitmapShader(source, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+        float scale = Math.max(size / (float) source.getWidth(), size / (float) source.getHeight());
+        android.graphics.Matrix matrix = new android.graphics.Matrix();
+        matrix.setScale(scale, scale);
+        matrix.postTranslate((size - source.getWidth() * scale) / 2f,
+                (size - source.getHeight() * scale) / 2f);
+        shader.setLocalMatrix(matrix);
+        paint.setShader(shader);
+        canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint);
+        return result;
     }
 
     private Text.Builder rowText(String id, RectF bounds, float size, int color,
@@ -314,6 +446,9 @@ public final class CallsView extends View {
     }
 
     public interface OnCallClickListener { void onCallClick(CallLog callLog); }
+    public interface OnSelectionChangedListener {
+        void onSelectionChanged(List<CallLog> selectedCalls);
+    }
     public interface OnCallStartListener {
         void onCallStart(CallLog callLog, boolean video);
     }

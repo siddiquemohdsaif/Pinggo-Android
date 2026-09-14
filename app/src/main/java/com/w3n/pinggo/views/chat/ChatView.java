@@ -121,7 +121,7 @@ public final class ChatView extends View {
   private Text status, replyText, searchMatchCount;
   private ComposerReplyPreviewComponent composerReplyPreview;
   private Image olderLoadingBackground, attachmentPreviewBackground;
-  private Progress olderProgress;
+  private Progress olderProgress, initialMessagesProgress;
   private TextField input;
   private TextField searchInput;
   private Button send, attachmentPreviewRemove, attachmentPreviewSend;
@@ -153,9 +153,10 @@ public final class ChatView extends View {
   private int searchMatchIndex = -1;
   private final ChatComposerState composer = new ChatComposerState();
   private boolean loadingOlderMessages, canLoadOlderMessages = true;
+  private boolean initialMessagesLoading = true;
   private String pendingPinnedScrollMessageId;
   private String pendingReplyScrollMessageId;
-  private String statusValue = "Loading messages...";
+  private String statusValue = "";
   private final List<MessageEntity> pinnedMessages = new ArrayList<>();
   private int pinnedMessageIndex;
   private float headerBottom, baseListBottom;
@@ -311,10 +312,12 @@ public final class ChatView extends View {
   }
 
   public void showStatus(String value) {
+    initialMessagesLoading = false;
     statusValue = value == null ? "" : value;
     adapter.submit(new ArrayList<>());
     if (status != null) status.setText(statusValue).setVisible(!statusValue.isEmpty());
     if (list != null) list.setVisible(false);
+    updateInitialMessagesProgress();
     invalidate();
   }
 
@@ -616,6 +619,12 @@ public final class ChatView extends View {
     loadingOlderMessages = loading;
     canLoadOlderMessages = canLoad;
     updateOlderLoadingChrome();
+  }
+
+  /** Shows the centered spinner only while the initial timeline is still empty. */
+  public void setInitialMessagesLoading(boolean loading) {
+    initialMessagesLoading = loading;
+    updateInitialMessagesProgress();
   }
 
   public String getDraft() {
@@ -958,6 +967,24 @@ public final class ChatView extends View {
             SECONDARY,
             FontVariation.REGULAR,
             Text.Alignment.CENTER);
+    float initialProgressSize = px(62f);
+    float initialProgressLeft = (w - initialProgressSize) / 2f;
+    float initialProgressTop = messageListTop
+        + Math.max(0f, listBottom - messageListTop - initialProgressSize) / 2f;
+    initialMessagesProgress =
+        overlay.add(
+            new Progress.Builder(
+                    getContext(), "initial_message_progress",
+                    new RectF(initialProgressLeft, initialProgressTop,
+                        initialProgressLeft + initialProgressSize,
+                        initialProgressTop + initialProgressSize))
+                .setStyle(Progress.Style.CIRCULAR)
+                .setMode(Progress.Mode.INDETERMINATE)
+                .setProgressColor(ACCENT)
+                .setTrackColor(0x22019CC4)
+                .setThickness(px(6f))
+                .setIndeterminateDuration(850L));
+    updateInitialMessagesProgress();
     float olderLoadingHeight = olderLoadingHeight();
     float olderLoadingTop = headerBottom + pinnedTabHeight();
     olderLoadingBackground =
@@ -1500,6 +1527,12 @@ public final class ChatView extends View {
     if (olderProgress != null) olderProgress.setVisible(visible);
     if (list != null) applyKeyboardInsets();
     else invalidate();
+  }
+
+  private void updateInitialMessagesProgress() {
+    boolean visible = initialMessagesLoading && adapter.getItemCount() == 0;
+    if (initialMessagesProgress != null) initialMessagesProgress.setVisible(visible);
+    invalidate();
   }
 
   private boolean shouldShowOlderLoading() {

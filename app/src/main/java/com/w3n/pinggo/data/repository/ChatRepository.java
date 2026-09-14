@@ -1517,6 +1517,14 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         deleteOwnMessages(chatId, Collections.singletonList(messageId));
     }
 
+    public void cacheServerMessage(JsonObject message) {
+        if (message == null) return;
+        ioExecutor.execute(() -> {
+            MessageEntity entity = toMessageEntity(message);
+            if (entity != null) messageDao.upsert(entity);
+        });
+    }
+
     public void deleteOwnMessages(String chatId, List<String> messageIds) {
         String senderId = currentUserId == null || currentUserId.isEmpty()
                 ? normalizeAccountId(LoginStateManager.getInstance().getUID(appContext))

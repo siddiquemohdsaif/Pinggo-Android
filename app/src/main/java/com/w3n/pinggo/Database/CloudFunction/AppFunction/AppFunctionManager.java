@@ -147,6 +147,10 @@ public class AppFunctionManager {
     CallLogHandler.getCallLogs(appApi, phoneNumber, chatId, pageSize, cursor, callback);
   }
 
+  public void deleteCallLogs(java.util.List<String> callIds, Callback callback) {
+    CallLogHandler.deleteCallLogs(appApi, callIds, callback);
+  }
+
   public void getChatList(String phoneNumber, int pageSize, String cursor, Callback callback) {
     ChatHandler.getChatList(appApi, phoneNumber, pageSize, cursor, callback);
   }
