@@ -503,14 +503,15 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         boolean video = "video".equals(model.mediaType);
         Boolean portrait = attachmentPortrait(message);
         if (portrait == null) {
-          portrait = MediaPreviewCache.prepareOrientation(
-              context, model.attachmentSource, video);
+          // Timeline preparation must never download/open every uncached media
+          // attachment before messages can render. Use metadata already learned
+          // by the preview cache; the visible media component resolves missing
+          // orientation asynchronously and reports it through
+          // onMediaOrientationAvailable().
+          portrait = MediaPreviewCache.cachedPortrait(model.attachmentSource, video);
         }
         if (portrait != null) {
-          Boolean previous = mediaPortraits.put(model.attachmentSource, portrait);
-          if (previous == null || previous != portrait) {
-            synchronized (metricsCache) { metricsCache.clear(); }
-          }
+          mediaPortraits.put(model.attachmentSource, portrait);
         }
       }
       metrics(model, availableWidth);
@@ -518,18 +519,18 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
   }
 
   void indexReplyTargets(List<MessageEntity> values) {
-    boolean changed = false;
     for (MessageEntity message : values) {
       if (message.messageId == null) continue;
       MessageRenderModel model = renderModel(message);
       ReplyContent preview = replyContent(message, model);
       String sender = String.valueOf(message.senderId);
-      ReplyContent oldPreview = replyContents.put(message.messageId, preview);
-      String oldSender = replySenders.put(message.messageId, sender);
-      changed |= oldPreview == null || !preview.signature.equals(oldPreview.signature)
-          || !sender.equals(oldSender);
+      replyContents.put(message.messageId, preview);
+      replySenders.put(message.messageId, sender);
     }
-    if (changed) synchronized (metricsCache) { metricsCache.clear(); }
+    // MetricKey already includes the resolved reply signature and sender. New or
+    // changed reply targets therefore miss only their affected cache entries;
+    // clearing every measured row here made older-page rendering remeasure the
+    // complete existing timeline.
   }
 
   ReplyContent replyPreviewContent(MessageEntity message) {
@@ -1016,7 +1017,9 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         ? "" : replySenderLabel(replySenders.get(model.repliedMessageId));
     MetricKey cacheKey = new MetricKey(
         model.stableMessageId,
-        model.contentVersion ^ stableId(replyValue.signature) ^ stableId(replySender),
+        model.contentVersion ^ stableId(replyValue.signature) ^ stableId(replySender)
+            ^ (Boolean.TRUE.equals(mediaPortraits.get(model.attachmentSource))
+                ? 0x4F1BBCDDL : 0L),
         Float.floatToIntBits(availableWidth));
     MessageMetrics cached;
     synchronized (metricsCache) {
@@ -1733,7 +1736,8 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     if (source == null || source.isEmpty()) return;
     Boolean previous = mediaPortraits.put(source, portrait);
     if (previous != null && previous == portrait) return;
-    synchronized (metricsCache) { metricsCache.clear(); }
+    // Orientation participates in MetricKey, so only rows using this source are
+    // remeasured. Existing text and media rows retain their cached metrics.
     if (mediaMetricsListener != null) mediaMetricsListener.onMediaMetricsChanged();
   }
 

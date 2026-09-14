@@ -4,6 +4,7 @@ import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.util.Log;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.ViewGroup;
@@ -53,6 +54,7 @@ import java.util.Map;
  * Hosts the AAR-native home surface and owns lifecycle, data, and navigation.
  */
 public class HomeActivity extends AppCompatActivity implements HomeView.Listener {
+    private static final String TESTING_TAG = "PARVEZ_TESTING";
     private static final int SELECTION_STATUS_BAR_COLOR = 0xFFE9EDF0;
     private static final int HOME_SYSTEM_BAR_COLOR = 0xFFF7F9FB;
     private HomeView homeView;
@@ -177,18 +179,28 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
     }
 
     private void loadChats() {
+        long loadStartedAt = SystemClock.elapsedRealtime();
+        Log.d(TESTING_TAG, "home_chat_progress phase=loading_started");
         homeView.showChatLoading();
         repository = ChatRepository.getInstance(this);
         // Covers a fresh login completed after Application.onCreate().
         repository.connect();
         repository.observeChats().observe(this, entities -> {
+            long renderStartedNanos = SystemClock.elapsedRealtimeNanos();
+            int count = entities == null ? 0 : entities.size();
+            Log.d(TESTING_TAG, "home_chat_render phase=room_observed count=" + count
+                    + " loadElapsedMs=" + (SystemClock.elapsedRealtime() - loadStartedAt));
             latestChatEntities = entities == null ? new ArrayList<>() : entities;
             homeView.submitChats(toChats(entities));
+            Log.d(TESTING_TAG, "home_chat_render phase=view_submitted count=" + count
+                    + " durationMs="
+                    + ((SystemClock.elapsedRealtimeNanos() - renderStartedNanos) / 1_000_000L));
             submitCachedCalls(latestCallEntities);
             repository.acknowledgePendingIncomingDeliveries();
         });
         String uid = LoginStateManager.getInstance().getUID(this);
         if (uid != null && !uid.trim().isEmpty()) {
+            Log.d(TESTING_TAG, "home_chat_progress phase=initial_request accountReady=true");
             repository.ensureChatListLoaded(normalizeAccountId(uid));
             callRepository = CallRepository.getInstance(this);
             callRepository.observeCalls(uid).observe(this, calls -> {

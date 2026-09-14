@@ -100,7 +100,6 @@ public final class ChatInfoActivity extends AppCompatActivity {
   private Long mediaCursor;
   private boolean mediaLoading;
   private boolean mediaHasMore = true;
-  private boolean mediaLoadingStored = true;
 
   @Override
   protected void onCreate(Bundle state) {
@@ -451,23 +450,8 @@ public final class ChatInfoActivity extends AppCompatActivity {
       return;
     mediaLoading = true;
     showMediaProgressTile();
-    if (mediaLoadingStored) {
-      repository.loadStoredMedia(chatId, 12, mediaCursor, (values, next, more) -> {
-        mediaLoading = false;
-        removeMediaProgressTile();
-        for (MessageEntity value : values)
-          addMediaTile(mediaRecord(value));
-        if (!values.isEmpty())
-          mediaCursor = values.get(values.size() - 1).sentTime;
-        if (!more)
-          mediaLoadingStored = false;
-        updateMediaEmptyState(false);
-        if (mediaRow.getChildCount() == 0 && mediaHasMore)
-          loadMedia();
-      });
-      return;
-    }
-    api.getChatMedia(userId, chatId, 12, mediaCursor, new AppFunctionManager.Callback() {
+    api.getChatMedia(userId, chatId, 10, mediaCursor, "media",
+        new AppFunctionManager.Callback() {
       @Override
       public void onSuccess(Object result) {
         runOnUiThread(() -> {
@@ -496,7 +480,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
           removeMediaProgressTile();
         });
       }
-    });
+        });
   }
 
   private JsonObject mediaRecord(MessageEntity message) {

@@ -41,13 +41,14 @@ public final class VideoPreviewView extends NativeMediaScreenView {
   private MediaPlayer player;
   private float speed = 1f;
   private boolean released;
+  private boolean userSeeking;
   private final Runnable update = new Runnable() {
     @Override public void run() {
       if (released) return;
       int duration = video.getDuration();
       if (duration > 0) {
         seek.setMax(duration);
-        if (!seek.isPressed()) seek.setProgress(video.getCurrentPosition());
+        if (!userSeeking) seek.setProgress(video.getCurrentPosition());
       }
       handler.postDelayed(this, 250);
     }
@@ -84,6 +85,9 @@ public final class VideoPreviewView extends NativeMediaScreenView {
         LayoutParams.MATCH_PARENT, dp(78), Gravity.BOTTOM);
     controlsParams.bottomMargin = dp(84);
     addView(controls, controlsParams);
+    // The controls view spans the full width and overlaps the seek bar vertically.
+    // Keep the seek bar above it so its transparent center cannot consume scrub gestures.
+    seek.bringToFront();
     header = new NativeMediaTopBarView(context, senderId, sentTime, true,
         new NativeMediaTopBarView.Listener() {
           @Override public void onBack() { listener.onClose(); }
@@ -128,8 +132,15 @@ public final class VideoPreviewView extends NativeMediaScreenView {
       @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
         if (fromUser) video.seekTo(progress);
       }
-      @Override public void onStartTrackingTouch(SeekBar bar) {}
-      @Override public void onStopTrackingTouch(SeekBar bar) {}
+      @Override public void onStartTrackingTouch(SeekBar bar) {
+        userSeeking = true;
+      }
+      @Override public void onStopTrackingTouch(SeekBar bar) {
+        video.seekTo(bar.getProgress());
+        userSeeking = false;
+        handler.removeCallbacks(update);
+        handler.post(update);
+      }
     });
     video.setOnPreparedListener(prepared -> {
       player = prepared;

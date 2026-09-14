@@ -72,11 +72,18 @@ public class ChatHandler {
     public static void getMedia(AppRestAPI appApi, String chatId, String phoneNumber,
                                 int pageSize, Long before,
                                 AppFunctionManager.Callback callback) {
+        getMedia(appApi, chatId, phoneNumber, pageSize, before, "all", callback);
+    }
+
+    public static void getMedia(AppRestAPI appApi, String chatId, String phoneNumber,
+                                int pageSize, Long before, String category,
+                                AppFunctionManager.Callback callback) {
         JSONObject body = new JSONObject();
         try {
             body.put("chatId", chatId);
             body.put("phoneNumber", normalizePhoneNumber(phoneNumber));
             body.put("pageSize", pageSize);
+            body.put("category", category == null ? "all" : category);
             if (before != null) body.put("before", before);
         } catch (JSONException error) {
             handleJsonError(error, callback);

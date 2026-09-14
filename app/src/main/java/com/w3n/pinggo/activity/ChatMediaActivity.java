@@ -67,7 +67,6 @@ public final class ChatMediaActivity extends AppCompatActivity {
   private Long cursor;
   private boolean loading;
   private boolean hasMore = true;
-  private boolean loadingStored = true;
   private LinearLayout content;
   private TextView mediaTab;
   private TextView docsTab;
@@ -163,20 +162,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
       return;
     loading = true;
     showPageProgress();
-    if (loadingStored) {
-      repository.loadStoredMedia(chatId, 30, cursor, (values, next, more) -> {
-        loading = false;
-        for (MessageEntity value : values)
-          addRecord(record(value));
-        if (!values.isEmpty())
-          cursor = values.get(values.size() - 1).sentTime;
-        if (!more)
-          loadingStored = false;
-        render();
-      });
-      return;
-    }
-    AppFunctionManager.getInstance().getChatMedia(userId, chatId, 30, cursor,
+    AppFunctionManager.getInstance().getChatMedia(userId, chatId, 20, cursor,
         new AppFunctionManager.Callback() {
           @Override
           public void onSuccess(Object result) {
@@ -355,8 +341,10 @@ public final class ChatMediaActivity extends AppCompatActivity {
         continue;
       ImageView image = images.get(transfer.attachmentId);
       MessageEntity message = messages.get(transfer.attachmentId);
-      if (image != null && message != null)
+      if (image != null && message != null) {
+        image.setImageResource(android.R.drawable.ic_menu_gallery);
         thumbnail(image, Uri.parse(transfer.localUri), message);
+      }
     }
   }
 

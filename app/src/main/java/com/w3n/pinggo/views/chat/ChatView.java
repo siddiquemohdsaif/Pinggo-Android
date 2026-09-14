@@ -59,6 +59,7 @@ public final class ChatView extends View {
       new com.ogfa.nativeviews.component.FigmaConfig(1080f);
   private static final int PRIMARY = 0xFF000E1A, SECONDARY = 0xFF687382, ACCENT = 0xFF019CC4;
   private static final int MAX_VISIBLE_COMPOSER_LINES = 7;
+  private static final int OLDER_MESSAGE_PREFETCH_REMAINING = 10;
   private final ZLayerGroup layers = new ZLayerGroup(this);
   private final ZLayer bg = layers.addLayer("background"),
       content = layers.addLayer("content"),
@@ -1908,7 +1909,9 @@ public final class ChatView extends View {
     if (list == null || adapter.getItemCount() == 0
         || olderLoadRequestedForGesture || loadingOlderMessages || !canLoadOlderMessages) return;
     // Begin before position zero so Room/network latency is hidden by the remaining rows.
-    if (list.getFirstVisiblePosition() <= 5) {
+    // Message pages contain 50 rows. Start loading when the user has traversed about
+    // 40 of them, leaving ten rendered rows to cover Room/network latency.
+    if (list.getFirstVisiblePosition() <= OLDER_MESSAGE_PREFETCH_REMAINING) {
       olderLoadRequestedForGesture = true;
       listener.onLoadOlderMessages();
     }

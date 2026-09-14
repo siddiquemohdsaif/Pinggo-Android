@@ -218,7 +218,12 @@ public class AppFunctionManager {
 
   public void getChatMedia(String userId, String chatId, int pageSize, Long before,
                            Callback callback) {
-    ChatHandler.getMedia(appApi, chatId, userId, pageSize, before, callback);
+    getChatMedia(userId, chatId, pageSize, before, "all", callback);
+  }
+
+  public void getChatMedia(String userId, String chatId, int pageSize, Long before,
+                           String category, Callback callback) {
+    ChatHandler.getMedia(appApi, chatId, userId, pageSize, before, category, callback);
   }
 
   public void getGroupMessages(String userId, String groupId, int pageSize, String cursor,

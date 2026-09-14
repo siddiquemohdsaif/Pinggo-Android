@@ -41,6 +41,7 @@ import com.google.gson.JsonParser;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.R;
+import com.w3n.pinggo.Util.PhoneNumberFormatter;
 import com.w3n.pinggo.activity.NewChatActivity;
 import com.w3n.pinggo.data.local.ChatEntity;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
@@ -55,6 +56,8 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.LinkedHashSet;
 import java.util.Objects;
@@ -67,11 +70,13 @@ import java.util.concurrent.Executors;
 public final class ChatsView extends View {
     private static final float FIGMA_WIDTH = 1080f;
     private static final String PERF_TAG = "ChatsViewPerf";
+    private static final String TESTING_TAG = "PARVEZ_TESTING";
     private static final int PRIMARY = 0xFF000E1A;
     private static final int SECONDARY = 0xFF687382;
     private static final int UNREAD_PREVIEW = 0xFF855C5C;
     private static final int ACCENT = 0xFF019CC4;
     private static final int PAGE_SIZE = 20;
+    private static final int PAGINATION_PREFETCH_REMAINING = 10;
     private int visibleChatCount = PAGE_SIZE;
 
     private final ZLayerGroup layers = new ZLayerGroup(this);
@@ -116,7 +121,9 @@ public final class ChatsView extends View {
     private final Bitmap videoOutgoingBitmap = resourceBitmap(R.drawable.chat_video_outgoing);
     private final Bitmap videoMissedBitmap = resourceBitmap(R.drawable.chat_video_missed);
     private ChatListState chatListState = ChatListState.initial();
-    private final Observer<List<ChatEntity>> observer = entities -> post(() -> submit(toChats(entities)));
+    private long renderGeneration;
+    private boolean loggedInitialProgress;
+    private boolean loggedPaginationProgress;
     private final Observer<ChatListState> listStateObserver = state -> post(() -> {
         chatListState = state == null ? ChatListState.initial() : state;
         visibleChatCount = chatListState.isFirstPageLoaded()
@@ -126,6 +133,11 @@ public final class ChatsView extends View {
                     + " confirmed=" + chatListState.getConfirmedChatCount()
                     + " visible=" + visibleChatCount);
         }
+        Log.d(TESTING_TAG, "chat_progress phase=state status=" + chatListState.getStatus()
+                + " cached=" + chatListState.getCachedChatCount()
+                + " confirmed=" + chatListState.getConfirmedChatCount()
+                + " visibleLimit=" + visibleChatCount
+                + " firstPageLoaded=" + chatListState.isFirstPageLoaded());
         adapter.applyVisibleDiff(adapter.filteredChats());
         updateVisibility();
         loadAllPagesForSearch();
@@ -152,7 +164,8 @@ public final class ChatsView extends View {
     private final ExecutorService avatarExecutor = Executors.newFixedThreadPool(2);
     private final Set<String> avatarLoads = Collections.synchronizedSet(new LinkedHashSet<>());
     // Do not recycle on eviction: a visible native Image may still hold the bitmap.
-    private final LruCache<String, Bitmap> avatarCache = new LruCache<>(48);
+    // Holds both decoded photos and generated placeholders for the 50-row cache.
+    private final LruCache<String, Bitmap> avatarCache = new LruCache<>(128);
     private final Paint ellipsizePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final SimpleDateFormat timeFormatter =
             new SimpleDateFormat("hh:mm a", Locale.getDefault());
@@ -168,17 +181,64 @@ public final class ChatsView extends View {
     private boolean paginationGestureMovedUp;
     private final Runnable paginationAfterFling = this::loadNextPageIfNeeded;
     private long previousFrameNanos;
+    private boolean scrollTraceActive;
+    private long scrollTraceStartedAtMs;
+    private long lastTouchEventAtMs;
+    private long lastViewportChangeAtMs;
+    private long lastViewportLogAtMs;
+    private int lastTracedFirstVisible = -1;
+    private int lastTracedLastVisible = -1;
+    private float lastTracedScrollOffset;
+    private boolean viewportStallLogged;
+    private long scrollTraceGeneration;
     private final Choreographer.FrameCallback frameProfiler =
             new Choreographer.FrameCallback() {
         @Override public void doFrame(long frameTimeNanos) {
             if (!frameProfilerRunning) return;
+            long nowMs = SystemClock.elapsedRealtime();
+            int firstVisible = list == null ? -1 : list.getFirstVisiblePosition();
+            int lastVisible = list == null ? -1 : list.getLastVisiblePosition();
+            float scrollOffset = list == null ? 0f : list.getScrollOffset();
             if (previousFrameNanos != 0L) {
                 long frameMs = (frameTimeNanos - previousFrameNanos) / 1_000_000L;
                 if (frameMs >= 24L) {
                     Log.w(PERF_TAG, "slowFrame=" + frameMs + "ms firstVisible="
-                            + (list == null ? -1 : list.getFirstVisiblePosition())
-                            + " lastVisible=" + (list == null ? -1 : list.getLastVisiblePosition())
+                            + firstVisible + " lastVisible=" + lastVisible
                             + " items=" + adapter.getItemCount());
+                    if (scrollTraceActive) {
+                        Log.w(TESTING_TAG, "chat_scroll phase=slow_frame durationMs=" + frameMs
+                                + " firstVisible=" + firstVisible
+                                + " lastVisible=" + lastVisible
+                                + " offset=" + Math.round(scrollOffset)
+                                + " sinceLastTouchMs=" + (nowMs - lastTouchEventAtMs)
+                                + " pageStatus=" + chatListState.getStatus());
+                    }
+                }
+            }
+            if (scrollTraceActive) {
+                if (firstVisible != lastTracedFirstVisible || lastVisible != lastTracedLastVisible
+                        || Math.abs(scrollOffset - lastTracedScrollOffset) >= 0.5f) {
+                    if (nowMs - lastViewportLogAtMs >= 100L) {
+                        Log.d(TESTING_TAG, "chat_scroll phase=viewport_changed firstVisible="
+                                + firstVisible + " lastVisible=" + lastVisible
+                                + " offset=" + Math.round(scrollOffset)
+                                + " elapsedMs=" + (nowMs - scrollTraceStartedAtMs));
+                        lastViewportLogAtMs = nowMs;
+                    }
+                    lastTracedFirstVisible = firstVisible;
+                    lastTracedLastVisible = lastVisible;
+                    lastTracedScrollOffset = scrollOffset;
+                    lastViewportChangeAtMs = nowMs;
+                    viewportStallLogged = false;
+                } else if (!viewportStallLogged && nowMs - lastViewportChangeAtMs >= 120L
+                        && nowMs - lastTouchEventAtMs <= 80L) {
+                    viewportStallLogged = true;
+                    Log.w(TESTING_TAG, "chat_scroll phase=viewport_stalled durationMs="
+                            + (nowMs - lastViewportChangeAtMs)
+                            + " firstVisible=" + firstVisible + " lastVisible=" + lastVisible
+                            + " offset=" + Math.round(scrollOffset)
+                            + " items=" + adapter.getItemCount()
+                            + " pageStatus=" + chatListState.getStatus());
                 }
             }
             previousFrameNanos = frameTimeNanos;
@@ -207,7 +267,31 @@ public final class ChatsView extends View {
     }
 
     public void submit(List<Chat> chats) {
+        long generation = ++renderGeneration;
+        long startedNanos = SystemClock.elapsedRealtimeNanos();
+        int incomingCount = chats == null ? 0 : chats.size();
+        int previousVisibleCount = adapter.chatCount();
+        Log.d(TESTING_TAG, "chat_render phase=submit_started generation=" + generation
+                + " incoming=" + incomingCount
+                + " previousVisible=" + previousVisibleCount
+                + " visibleLimit=" + visibleChatCount);
         adapter.submit(chats, adapter.query);
+        if (getWidth() > 0) prefetchAvatars(adapter.all);
+        long appliedMs = (SystemClock.elapsedRealtimeNanos() - startedNanos) / 1_000_000L;
+        Log.d(TESTING_TAG, "chat_render phase=adapter_applied generation=" + generation
+                + " stored=" + adapter.all.size()
+                + " visible=" + adapter.chatCount()
+                + " changedBy=" + (adapter.chatCount() - previousVisibleCount)
+                + " durationMs=" + appliedMs);
+        postOnAnimation(() -> {
+            if (generation != renderGeneration) return;
+            long frameMs = (SystemClock.elapsedRealtimeNanos() - startedNanos) / 1_000_000L;
+            Log.d(TESTING_TAG, "chat_render phase=frame_presented generation=" + generation
+                    + " visible=" + adapter.chatCount()
+                    + " firstVisible=" + (list == null ? -1 : list.getFirstVisiblePosition())
+                    + " lastVisible=" + (list == null ? -1 : list.getLastVisiblePosition())
+                    + " durationMs=" + frameMs);
+        });
         showStatus(adapter.getItemCount() == 0 ? getResources().getString(
                 R.string.start_new_conversation) : "");
         post(this::loadAllPagesForSearch);
@@ -263,7 +347,6 @@ public final class ChatsView extends View {
     private void startObserving() {
         if (observing) return;
         observing = true;
-        repository.observeChats().observeForever(observer);
         repository.observeChatListState().observeForever(listStateObserver);
     }
 
@@ -286,7 +369,6 @@ public final class ChatsView extends View {
         frameProfilerRunning = false;
         Choreographer.getInstance().removeFrameCallback(frameProfiler);
         if (observing) {
-            repository.observeChats().removeObserver(observer);
             repository.observeChatListState().removeObserver(listStateObserver);
             observing = false;
         }
@@ -424,6 +506,7 @@ public final class ChatsView extends View {
                 .setMaxLines(1));
         refreshErrorText.setVisible(false);
         updateVisibility();
+        prefetchAvatars(adapter.all);
     }
 
     private void showStatus(String message) {
@@ -448,9 +531,24 @@ public final class ChatsView extends View {
                 && state == ChatListState.Status.ERROR_WITHOUT_CACHE;
         boolean errorWithCache = adapter.hasChats()
                 && state == ChatListState.Status.ERROR_WITH_CACHE;
+        boolean paginationLoading = state == ChatListState.Status.PAGINATING && hasChats;
+        if (loggedInitialProgress != initialLoading) {
+            loggedInitialProgress = initialLoading;
+            Log.d(TESTING_TAG, "chat_progress phase=initial_"
+                    + (initialLoading ? "shown" : "hidden")
+                    + " status=" + state + " cached=" + adapter.all.size()
+                    + " visible=" + adapter.chatCount());
+        }
+        if (loggedPaginationProgress != paginationLoading) {
+            loggedPaginationProgress = paginationLoading;
+            Log.d(TESTING_TAG, "chat_progress phase=pagination_"
+                    + (paginationLoading ? "shown" : "hidden")
+                    + " status=" + state + " cached=" + adapter.all.size()
+                    + " visible=" + adapter.chatCount());
+        }
         list.setRegion(new RectF(0, 0, getWidth(), getHeight()));
         list.setVisible(hasChats).setEnabled(hasChats);
-        if (paginationStarted && hasChats) {
+        if (paginationStarted && hasChats && adapter.query.isEmpty()) {
             // The footer is inserted just beyond the old content extent. Reveal
             // it inside ComponentList's viewport, which already ends above the
             // HomeView bottom navigation bar.
@@ -506,14 +604,40 @@ public final class ChatsView extends View {
         else getContext().startActivity(new Intent(getContext(), NewChatActivity.class));
     }
 
-    @Override protected void onDraw(Canvas canvas) { super.onDraw(canvas); layers.draw(canvas); }
+    @Override protected void onDraw(Canvas canvas) {
+        long startedNanos = SystemClock.elapsedRealtimeNanos();
+        super.onDraw(canvas);
+        layers.draw(canvas);
+        long drawMs = (SystemClock.elapsedRealtimeNanos() - startedNanos) / 1_000_000L;
+        if (scrollTraceActive && drawMs >= 8L) {
+            Log.w(TESTING_TAG, "chat_scroll phase=slow_draw durationMs=" + drawMs
+                    + " firstVisible=" + (list == null ? -1 : list.getFirstVisiblePosition())
+                    + " lastVisible=" + (list == null ? -1 : list.getLastVisiblePosition()));
+        }
+    }
     @Override public boolean onTouchEvent(MotionEvent event) {
+        long nowMs = SystemClock.elapsedRealtime();
+        long touchGapMs = lastTouchEventAtMs == 0L ? 0L : nowMs - lastTouchEventAtMs;
+        lastTouchEventAtMs = nowMs;
         if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
             removeCallbacks(paginationAfterFling);
             loadingGestureStartY = event.getY();
             loadingGestureBlocked = false;
             paginationRequestedForGesture = false;
             paginationGestureMovedUp = false;
+            scrollTraceActive = true;
+            scrollTraceStartedAtMs = nowMs;
+            lastViewportChangeAtMs = nowMs;
+            lastViewportLogAtMs = nowMs;
+            lastTracedFirstVisible = list == null ? -1 : list.getFirstVisiblePosition();
+            lastTracedLastVisible = list == null ? -1 : list.getLastVisiblePosition();
+            lastTracedScrollOffset = list == null ? 0f : list.getScrollOffset();
+            scrollTraceGeneration++;
+            viewportStallLogged = false;
+            Log.d(TESTING_TAG, "chat_scroll phase=gesture_started firstVisible="
+                    + lastTracedFirstVisible + " lastVisible=" + lastTracedLastVisible
+                    + " offset=" + Math.round(lastTracedScrollOffset)
+                    + " items=" + adapter.getItemCount());
         } else if (event.getActionMasked() == MotionEvent.ACTION_MOVE
                 && !loadingGestureBlocked && isChatPageLoading()
                 && event.getY() - loadingGestureStartY
@@ -524,10 +648,22 @@ public final class ChatsView extends View {
             cancel.recycle();
             loadingGestureBlocked = true;
         }
+        if (event.getActionMasked() == MotionEvent.ACTION_MOVE && touchGapMs >= 40L) {
+            Log.w(TESTING_TAG, "chat_scroll phase=touch_gap durationMs=" + touchGapMs
+                    + " firstVisible=" + (list == null ? -1 : list.getFirstVisiblePosition())
+                    + " lastVisible=" + (list == null ? -1 : list.getLastVisiblePosition()));
+        }
         if (loadingGestureBlocked) {
             if (event.getActionMasked() == MotionEvent.ACTION_UP
                     || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                Log.d(TESTING_TAG, "chat_scroll phase=gesture_finished action=blocked"
+                        + " durationMs=" + (nowMs - scrollTraceStartedAtMs)
+                        + " pageStatus=" + chatListState.getStatus());
                 loadingGestureBlocked = false;
+                long finishedGeneration = scrollTraceGeneration;
+                postDelayed(() -> {
+                    if (finishedGeneration == scrollTraceGeneration) scrollTraceActive = false;
+                }, 2_000L);
             }
             return true;
         }
@@ -548,6 +684,20 @@ public final class ChatsView extends View {
             postDelayed(paginationAfterFling, 900L);
             postDelayed(paginationAfterFling, 1_500L);
         }
+        if (event.getActionMasked() == MotionEvent.ACTION_UP
+                || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+            Log.d(TESTING_TAG, "chat_scroll phase=gesture_finished action="
+                    + (event.getActionMasked() == MotionEvent.ACTION_UP ? "up" : "cancel")
+                    + " handled=" + handled + " blocked=" + loadingGestureBlocked
+                    + " durationMs=" + (nowMs - scrollTraceStartedAtMs)
+                    + " firstVisible=" + (list == null ? -1 : list.getFirstVisiblePosition())
+                    + " lastVisible=" + (list == null ? -1 : list.getLastVisiblePosition())
+                    + " paginationRequested=" + paginationRequestedForGesture);
+            long finishedGeneration = scrollTraceGeneration;
+            postDelayed(() -> {
+                if (finishedGeneration == scrollTraceGeneration) scrollTraceActive = false;
+            }, 2_000L);
+        }
         return handled || super.onTouchEvent(event);
     }
 
@@ -560,8 +710,15 @@ public final class ChatsView extends View {
 
     private void loadNextPageIfNeeded() {
         if (paginationRequestedForGesture || list == null || adapter.chatCount() == 0) return;
-        if (list.getLastVisiblePosition() >= adapter.chatCount() - 3) {
+        int prefetchPosition = Math.max(0,
+                adapter.chatCount() - PAGINATION_PREFETCH_REMAINING);
+        if (list.getLastVisiblePosition() >= prefetchPosition) {
             paginationRequestedForGesture = true;
+            Log.d(TESTING_TAG, "chat_scroll phase=pagination_requested firstVisible="
+                    + list.getFirstVisiblePosition() + " lastVisible="
+                    + list.getLastVisiblePosition() + " chats=" + adapter.chatCount()
+                    + " prefetchPosition=" + prefetchPosition
+                    + " status=" + chatListState.getStatus());
             if (isDebugBuild()) {
                 Log.d(PERF_TAG, "paginationCheck lastVisible=" + list.getLastVisiblePosition()
                         + " items=" + adapter.getItemCount());
@@ -575,7 +732,6 @@ public final class ChatsView extends View {
         typingBaselines.clear();
         typingTimeouts.clear();
         if (observing) {
-            repository.observeChats().removeObserver(observer);
             repository.observeChatListState().removeObserver(listStateObserver);
         }
         observing = false;
@@ -600,6 +756,8 @@ public final class ChatsView extends View {
         private static final int TYPE_PAGINATION = 1;
         private final List<Chat> all = new ArrayList<>();
         private final List<Chat> chats = new ArrayList<>();
+        private final Map<ComponentList.Item, RowBindingState> rowBindings =
+                new IdentityHashMap<>();
         private String query = "";
         private boolean paginationLoading;
 
@@ -642,12 +800,37 @@ public final class ChatsView extends View {
             int count = Math.min(visibleChatCount, all.size());
             for (int index = 0; index < count; index++) {
                 Chat chat = all.get(index);
-                String name = chat.getContactName() == null ? "" : chat.getContactName();
-                if (query.isEmpty() || name.toLowerCase(Locale.US).contains(query)) {
+                if (query.isEmpty() || matchesQuery(chat)) {
                     filtered.add(chat);
                 }
             }
             return filtered;
+        }
+        private boolean matchesQuery(Chat chat) {
+            boolean call = "voice_call".equals(chat.getLastMessageType())
+                    || "video_call".equals(chat.getLastMessageType());
+            return containsQuery(chat.getContactName())
+                    || phoneMatchesQuery(chat.getPhoneNumber())
+                    || containsQuery(chat.getLastMessage())
+                    || containsQuery(chat.getLastMessageAttachmentName())
+                    || (call && containsQuery(formatCallPreview(chat.getLastMessage(),
+                    "video_call".equals(chat.getLastMessageType()))));
+        }
+        private boolean containsQuery(String value) {
+            return value != null && value.toLowerCase(Locale.US).contains(query);
+        }
+        private boolean phoneMatchesQuery(String value) {
+            if (value == null || !isPhoneLikeQuery(query)) return false;
+            String queryDigits = PhoneNumberFormatter.digitsOnly(query);
+            String phoneDigits = PhoneNumberFormatter.digitsOnly(value);
+            return !queryDigits.isEmpty() && phoneDigits.contains(queryDigits);
+        }
+        private boolean isPhoneLikeQuery(String value) {
+            if (value == null || value.isEmpty()) return false;
+            for (int index = 0; index < value.length(); index++) {
+                if (Character.isLetter(value.charAt(index))) return false;
+            }
+            return true;
         }
         private void applyVisibleDiff(List<Chat> updated) {
             String previousLastChatId = chats.isEmpty()
@@ -709,6 +892,8 @@ public final class ChatsView extends View {
                     && Objects.equals(first.getLastMessageType(), second.getLastMessageType())
                     && Objects.equals(first.getLastMessageAttachmentName(),
                     second.getLastMessageAttachmentName())
+                    && Objects.equals(first.getLastCallParticipantIdsJson(),
+                    second.getLastCallParticipantIdsJson())
                     && first.getUnreadCount() == second.getUnreadCount()
                     && first.isPinned() == second.isPinned()
                     && first.isMuted() == second.isMuted()
@@ -730,8 +915,17 @@ public final class ChatsView extends View {
             return -1;
         }
         void notifyChatChanged(String chatId) {
+            invalidateChatBinding(chatId);
             int position = indexOfChat(chatId);
             if (position >= 0) notifyItemChanged(position);
+        }
+        private void invalidateChatBinding(String chatId) {
+            if (chatId == null) return;
+            Iterator<Map.Entry<ComponentList.Item, RowBindingState>> iterator =
+                    rowBindings.entrySet().iterator();
+            while (iterator.hasNext()) {
+                if (Objects.equals(iterator.next().getValue().chatId, chatId)) iterator.remove();
+            }
         }
         @Override public int getItemCount() { return chats.size() + (paginationLoading ? 1 : 0); }
         @Override public Chat getItem(int position) {
@@ -748,6 +942,8 @@ public final class ChatsView extends View {
             return id == null || id.isEmpty() ? position : id.hashCode();
         }
         @Override public void onCreateItem(ComponentList.Item item, int type) {
+            long createStartedNanos = SystemClock.elapsedRealtimeNanos();
+            rowBindings.remove(item);
             ComponentList.ItemScope scope = item.getScope();
             float width = scope.width();
             float height = scope.height();
@@ -766,6 +962,7 @@ public final class ChatsView extends View {
                         .setTrackColor(0x22019CC4)
                         .setThickness(6f)
                         .setIndeterminateDuration(850L));
+                logItemWork("create", type, -1, createStartedNanos);
                 return;
             }
             ZLayer row = item.addLayer("row");
@@ -876,13 +1073,21 @@ public final class ChatsView extends View {
             row.add(new Image.Builder(getContext(), scope.id("divider"), dividerBitmap,
                     new RectF(220f * scale, height - Math.max(1f, scale), width, height))
                     .setScaleType(Image.ScaleType.FIT_XY));
+            logItemWork("create", type, -1, createStartedNanos);
         }
         @Override public void onBindItem(ComponentList.Item item, Chat chat, int position) {
             if (getItemViewType(position) == TYPE_PAGINATION) return;
+            boolean selected = selectedChatIds.contains(chat.getChatId());
+            boolean typing = typingBaselines.containsKey(chat.getChatId());
+            RowBindingState previousBinding = rowBindings.get(item);
+            if (previousBinding != null
+                    && previousBinding.matches(chat, position, selected, typing)) {
+                if (previousBinding.restoreAvatar(item)) return;
+                rowBindings.remove(item);
+            }
             long bindStarted = SystemClock.elapsedRealtimeNanos();
             Trace.beginSection("ChatsView.bindRow");
             bindAvatar(item, chat);
-            boolean selected = selectedChatIds.contains(chat.getChatId());
             item.find("selection_background", Image.class).setVisible(selected);
             item.find("selection_check", Image.class).setVisible(selected);
             item.find("row_ripple", ChatRowRippleComponent.class).bind(
@@ -927,10 +1132,12 @@ public final class ChatsView extends View {
                 }
             }
             hideMessageComponents(item);
-            if (typingBaselines.containsKey(chat.getChatId())) {
+            if (typing) {
                 item.find("received_message", Text.class).setText("typing...")
                         .setTextColor(0xFF009FC8).setVisible(true);
                 item.find("divider", Image.class).setVisible(position < chats.size() - 1);
+                rowBindings.put(item, new RowBindingState(
+                        item, chat, position, selected, true));
                 finishBindProfile(bindStarted, position, chat.getChatId());
                 return;
             }
@@ -1004,7 +1211,76 @@ public final class ChatsView extends View {
                         .setTextColor(previewColor).setVisible(true);
             }
             item.find("divider", Image.class).setVisible(position < chats.size() - 1);
+            rowBindings.put(item, new RowBindingState(
+                    item, chat, position, selected, false));
             finishBindProfile(bindStarted, position, chat.getChatId());
+        }
+
+        @Override public void onItemRecycled(ComponentList.Item item) {
+            rowBindings.remove(item);
+        }
+
+        private final class RowBindingState {
+            private final String chatId;
+            private final int contentHash;
+            private final int position;
+            private final boolean selected;
+            private final boolean typing;
+            private final Bitmap avatarBitmap;
+
+            private RowBindingState(ComponentList.Item item, Chat chat, int position,
+                                    boolean selected, boolean typing) {
+                this.chatId = chat.getChatId();
+                this.contentHash = rowContentHash(chat);
+                this.position = position;
+                this.selected = selected;
+                this.typing = typing;
+                this.avatarBitmap = item.find("avatar", Image.class).getBitmap();
+            }
+
+            private boolean matches(Chat next, int nextPosition, boolean nextSelected,
+                                    boolean nextTyping) {
+                return position == nextPosition
+                        && selected == nextSelected
+                        && typing == nextTyping
+                        && contentHash == rowContentHash(next);
+            }
+
+            private boolean restoreAvatar(ComponentList.Item item) {
+                if (avatarBitmap == null || avatarBitmap.isRecycled()) return false;
+                Image avatarImage = item.find("avatar", Image.class);
+                boolean bitmapChanged = avatarImage.getBitmap() != avatarBitmap;
+                boolean visibilityChanged = !avatarImage.isVisible();
+                if (bitmapChanged) avatarImage.setBitmap(avatarBitmap);
+                if (visibilityChanged) avatarImage.setVisible(true);
+                if (bitmapChanged || visibilityChanged) {
+                    Log.d(TESTING_TAG, "chat_scroll phase=avatar_restored chat=" + chatId
+                            + " position=" + position + " bitmapChanged=" + bitmapChanged
+                            + " visibilityChanged=" + visibilityChanged);
+                }
+                return true;
+            }
+        }
+
+        private int rowContentHash(Chat chat) {
+            return Objects.hash(chat.getChatId(), chat.getContactName(),
+                    chat.getProfilePhotoUrl(), chat.getLocalProfilePhotoPath(),
+                    chat.getLastMessage(), chat.getLastMessageTime(),
+                    chat.isLastMessageOutgoing(), chat.getLastMessageDeliveredTime(),
+                    chat.getLastMessageReadTime(), chat.getLastMessageStatus(),
+                    chat.getLastMessageType(), chat.getLastMessageAttachmentName(),
+                    chat.getLastCallParticipantIdsJson(), chat.getUnreadCount(),
+                    chat.isPinned(), chat.isMuted(), chat.isArchived(),
+                    chat.isOnline(), chat.getLastSeen());
+        }
+
+        private void logItemWork(String phase, int type, int position, long startedNanos) {
+            long elapsedMs = (SystemClock.elapsedRealtimeNanos() - startedNanos) / 1_000_000L;
+            if (elapsedMs >= 4L) {
+                Log.w(TESTING_TAG, "chat_scroll phase=item_" + phase
+                        + " durationMs=" + elapsedMs + " type=" + type
+                        + " position=" + position);
+            }
         }
 
         private void hideMessageComponents(ComponentList.Item item) {
@@ -1070,13 +1346,9 @@ public final class ChatsView extends View {
 
     private void bindAvatar(ComponentList.Item item, Chat chat) {
         long started = SystemClock.elapsedRealtimeNanos();
-        String path = chat.getLocalProfilePhotoPath();
-        boolean groupChat = chat.getChatId() != null && chat.getChatId().startsWith("grp_");
-        if (!groupChat && (path == null || path.trim().isEmpty())) {
-            path = ChatProfilePhotoStore.getLocalPath(getContext(), chat.getPhoneNumber());
-        }
+        String path = resolveAvatarPath(chat);
         int size = avatarPixelSize();
-        final String cacheKey = (path == null ? "" : path) + "@" + size;
+        String cacheKey = avatarCacheKey(path, size);
         Bitmap cached = avatarCache.get(cacheKey);
         if (cached != null && !cached.isRecycled()) {
             item.find("avatar", Image.class).setBitmap(cached);
@@ -1090,12 +1362,47 @@ public final class ChatsView extends View {
             avatarCache.put(placeholderKey, placeholder);
         }
         item.find("avatar", Image.class).setBitmap(placeholder);
-        if (path == null || path.trim().isEmpty() || !avatarLoads.add(cacheKey)) {
+        if (path == null || path.trim().isEmpty()) {
             logAvatarBind(started, "placeholder", chat.getChatId());
             return;
         }
-        final String imagePath = path;
-        final String chatId = chat.getChatId();
+        queueAvatarLoad(chat.getChatId(), path, size, cacheKey);
+        logAvatarBind(started, "queued", chat.getChatId());
+    }
+
+    private void prefetchAvatars(List<Chat> chats) {
+        if (getWidth() <= 0 || chats == null || chats.isEmpty()) return;
+        int size = avatarPixelSize();
+        int queued = 0;
+        for (Chat chat : chats) {
+            String path = resolveAvatarPath(chat);
+            if (path == null || path.trim().isEmpty()) continue;
+            String cacheKey = avatarCacheKey(path, size);
+            Bitmap cached = avatarCache.get(cacheKey);
+            if (cached != null && !cached.isRecycled()) continue;
+            if (queueAvatarLoad(chat.getChatId(), path, size, cacheKey)) queued++;
+        }
+        if (queued > 0) {
+            Log.d(TESTING_TAG, "chat_avatar phase=prefetch_queued count=" + queued
+                    + " totalChats=" + chats.size());
+        }
+    }
+
+    private String resolveAvatarPath(Chat chat) {
+        String path = chat.getLocalProfilePhotoPath();
+        boolean groupChat = chat.getChatId() != null && chat.getChatId().startsWith("grp_");
+        if (!groupChat && (path == null || path.trim().isEmpty())) {
+            path = ChatProfilePhotoStore.getLocalPath(getContext(), chat.getPhoneNumber());
+        }
+        return path;
+    }
+
+    private String avatarCacheKey(String path, int size) {
+        return (path == null ? "" : path) + "@" + size;
+    }
+
+    private boolean queueAvatarLoad(String chatId, String imagePath, int size, String cacheKey) {
+        if (!avatarLoads.add(cacheKey)) return false;
         avatarExecutor.execute(() -> {
             long decodeStarted = SystemClock.elapsedRealtimeNanos();
             Trace.beginSection("ChatsView.decodeAvatar");
@@ -1115,7 +1422,7 @@ public final class ChatsView extends View {
                 if (currentPosition >= 0) adapter.notifyItemChanged(currentPosition);
             });
         });
-        logAvatarBind(started, "queued", chat.getChatId());
+        return true;
     }
 
     private void logAvatarBind(long started, String source, String chatId) {
@@ -1129,6 +1436,10 @@ public final class ChatsView extends View {
     private void finishBindProfile(long started, int position, String chatId) {
         Trace.endSection();
         long elapsedMicros = (SystemClock.elapsedRealtimeNanos() - started) / 1_000L;
+        if (elapsedMicros >= 4_000L) {
+            Log.w(TESTING_TAG, "chat_scroll phase=item_bind durationUs=" + elapsedMicros
+                    + " position=" + position + " chat=" + chatId);
+        }
         if (isDebugBuild() && elapsedMicros >= 1_000L) {
             Log.d(PERF_TAG, "rowBind=" + elapsedMicros + "us position=" + position
                     + " chat=" + chatId);

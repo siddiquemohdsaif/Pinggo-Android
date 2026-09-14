@@ -10,6 +10,7 @@ import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
+import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -25,13 +26,17 @@ import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.R;
+import com.w3n.pinggo.Util.PhoneNumberFormatter;
 import com.w3n.pinggo.modals.CallLog;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -39,11 +44,13 @@ import java.util.concurrent.Executors;
 
 /** Scrollable call list implemented with native-views-release.aar components. */
 public final class CallsView extends View {
+    private static final String TESTING_TAG = "PARVEZ_TESTING";
   private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
       new com.ogfa.nativeviews.component.FigmaConfig(1080f);
     private static final int PRIMARY = 0xFF000E1A;
     private static final int SECONDARY = 0xFF687382;
     private static final int ACCENT = 0xFF019CC4;
+    private static final int PAGINATION_PREFETCH_REMAINING = 10;
 
     private final ZLayerGroup layers = new ZLayerGroup(this);
     private final ZLayer listLayer = layers.addLayer("call_list");
@@ -68,8 +75,6 @@ public final class CallsView extends View {
     private OnSelectionChangedListener selectionChangedListener;
     private ComponentList<CallLog> list;
     private Text emptyText;
-    private Progress paginationProgress;
-    private boolean paginationLoading;
     private float paginationGestureStartY;
     private boolean paginationGestureMovedUp;
     private boolean paginationRequestedForGesture;
@@ -86,6 +91,7 @@ public final class CallsView extends View {
 
     public void submitCalls(List<CallLog> calls) {
         adapter.submit(calls);
+        prefetchAvatars(adapter.all);
         updateVisibility();
         post(this::loadAllPagesForSearch);
     }
@@ -102,8 +108,9 @@ public final class CallsView extends View {
 
     public boolean clearSelection() {
         if (selectedCallIds.isEmpty()) return false;
+        Set<String> previousSelection = new java.util.LinkedHashSet<>(selectedCallIds);
         selectedCallIds.clear();
-        adapter.notifyDataSetChanged();
+        for (String callId : previousSelection) adapter.notifyCallChanged(callId);
         notifySelectionChanged();
         return true;
     }
@@ -114,7 +121,7 @@ public final class CallsView extends View {
         String id = call.getCallId();
         if (id == null || id.trim().isEmpty()) return;
         if (!selectedCallIds.add(id)) selectedCallIds.remove(id);
-        adapter.notifyDataSetChanged();
+        adapter.notifyCallChanged(id);
         notifySelectionChanged();
     }
 
@@ -128,8 +135,15 @@ public final class CallsView extends View {
     }
 
     public void setPaginationLoading(boolean loading) {
-        paginationLoading = loading;
+        boolean paginationStarted = adapter.setPaginationLoading(loading && adapter.callCount() > 0);
         updateVisibility();
+        if (paginationStarted && adapter.query.isEmpty()) {
+            post(() -> {
+                if (list != null && adapter.isPaginationLoading()) {
+                    list.scrollToPosition(adapter.getItemCount() - 1);
+                }
+            });
+        }
     }
 
     private void loadAllPagesForSearch() {
@@ -154,29 +168,14 @@ public final class CallsView extends View {
                 .setFont(NativeFonts.INTER).setFontVariations(FontVariation.REGULAR)
                 .setTextSizePx(sp(16)).setTextColor(SECONDARY).setAlignment(Text.Alignment.CENTER)
                 .setVerticalAlignment(Text.VerticalAlignment.CENTER));
-        float progressSize = 44f * figmaConfig.getScale(width);
-        float progressBottom = height - px(34f);
-        paginationProgress = stateLayer.add(new Progress.Builder(getContext(),
-                "call_page_progress",
-                new RectF((width - progressSize) / 2f, progressBottom - progressSize,
-                        (width + progressSize) / 2f, progressBottom))
-                .setStyle(Progress.Style.CIRCULAR)
-                .setMode(Progress.Mode.INDETERMINATE)
-                .setProgressColor(ACCENT)
-                .setTrackColor(0x22019CC4)
-                .setThickness(px(6f))
-                .setIndeterminateDuration(850L)
-                .setVisible(false));
         updateVisibility();
     }
 
     private void updateVisibility() {
         if (list == null || emptyText == null) return;
-        boolean empty = adapter.getItemCount() == 0;
+        boolean empty = adapter.callCount() == 0;
         list.setVisible(!empty).setEnabled(!empty);
         emptyText.setVisible(empty);
-        if (paginationProgress != null)
-            paginationProgress.setVisible(!empty && paginationLoading);
         invalidate();
     }
 
@@ -206,10 +205,16 @@ public final class CallsView extends View {
     }
 
     private void loadNextPageIfNeeded() {
-        if (!paginationRequestedForGesture && list != null && adapter.getItemCount() > 0
-                && list.getLastVisiblePosition() >= adapter.getItemCount() - 3
+        int callCount = adapter.callCount();
+        int prefetchPosition = Math.max(0, callCount - PAGINATION_PREFETCH_REMAINING);
+        if (!paginationRequestedForGesture && list != null && callCount > 0
+                && list.getLastVisiblePosition() >= prefetchPosition
                 && loadMoreListener != null) {
             paginationRequestedForGesture = true;
+            Log.d(TESTING_TAG, "call_scroll phase=pagination_requested firstVisible="
+                    + list.getFirstVisiblePosition() + " lastVisible="
+                    + list.getLastVisiblePosition() + " calls=" + callCount
+                    + " prefetchPosition=" + prefetchPosition);
             loadMoreListener.run();
         }
     }
@@ -230,9 +235,24 @@ public final class CallsView extends View {
     }
 
     private final class CallAdapter extends ComponentList.Adapter<CallLog> {
+        private static final int TYPE_CALL = 0;
+        private static final int TYPE_PAGINATION = 1;
         private final List<CallLog> all = new ArrayList<>();
         private final List<CallLog> calls = new ArrayList<>();
+        private final Map<ComponentList.Item, CallBindingState> rowBindings =
+                new IdentityHashMap<>();
         private String query = "";
+        private boolean paginationLoading;
+        boolean setPaginationLoading(boolean loading) {
+            if (paginationLoading == loading) return false;
+            int footerPosition = calls.size();
+            paginationLoading = loading;
+            if (loading) notifyItemInserted(footerPosition);
+            else notifyItemRemoved(footerPosition);
+            return loading;
+        }
+        boolean isPaginationLoading() { return paginationLoading; }
+        int callCount() { return calls.size(); }
         void submit(List<CallLog> values) {
             all.clear();
             if (values != null) all.addAll(values);
@@ -245,26 +265,96 @@ public final class CallsView extends View {
         private void applyFilter() {
             calls.clear();
             for (CallLog call : all) {
-                String name = call.getContactName() == null ? "" : call.getContactName();
-                String phone = call.getPhoneNumber() == null ? "" : call.getPhoneNumber();
-                if (query.isEmpty() || name.toLowerCase(Locale.US).contains(query)
-                        || phone.toLowerCase(Locale.US).contains(query)) calls.add(call);
+                if (query.isEmpty() || matchesQuery(call)) calls.add(call);
             }
+            if (calls.isEmpty()) paginationLoading = false;
             notifyDataSetChanged();
         }
-        @Override public int getItemCount() { return calls.size(); }
-        @Override public CallLog getItem(int position) { return calls.get(position); }
-        int indexOf(CallLog call) { return calls.indexOf(call); }
+        private boolean matchesQuery(CallLog call) {
+            return containsQuery(call.getContactName())
+                    || phoneMatchesQuery(call.getPhoneNumber())
+                    || containsQuery(call.getCalledTime())
+                    || containsQuery(call.getFullCalledDateTime())
+                    || containsQuery(call.getDuration())
+                    || containsQuery(call.isVideoCall() ? "video call" : "voice call")
+                    || containsQuery(call.isConference() ? "conference call" : "")
+                    || containsQuery(call.isMissed() ? "missed call" : "")
+                    || containsQuery(call.isOutgoing() ? "outgoing call" : "incoming call");
+        }
+        private boolean containsQuery(String value) {
+            return value != null && value.toLowerCase(Locale.US).contains(query);
+        }
+        private boolean phoneMatchesQuery(String value) {
+            if (value == null || !isPhoneLikeQuery(query)) return false;
+            String queryDigits = PhoneNumberFormatter.digitsOnly(query);
+            String phoneDigits = PhoneNumberFormatter.digitsOnly(value);
+            return !queryDigits.isEmpty() && phoneDigits.contains(queryDigits);
+        }
+        private boolean isPhoneLikeQuery(String value) {
+            if (value == null || value.isEmpty()) return false;
+            for (int index = 0; index < value.length(); index++) {
+                if (Character.isLetter(value.charAt(index))) return false;
+            }
+            return true;
+        }
+        @Override public int getItemCount() { return calls.size() + (paginationLoading ? 1 : 0); }
+        @Override public CallLog getItem(int position) {
+            return position < calls.size() ? calls.get(position) : calls.get(calls.size() - 1);
+        }
+        @Override public int getItemViewType(int position) {
+            return position < calls.size() ? TYPE_CALL : TYPE_PAGINATION;
+        }
+        void notifyCallChanged(String callId) {
+            if (callId == null) return;
+            Iterator<Map.Entry<ComponentList.Item, CallBindingState>> iterator =
+                    rowBindings.entrySet().iterator();
+            while (iterator.hasNext()) {
+                if (Objects.equals(iterator.next().getValue().callId, callId)) iterator.remove();
+            }
+            for (int index = 0; index < calls.size(); index++) {
+                if (Objects.equals(calls.get(index).getCallId(), callId)) notifyItemChanged(index);
+            }
+        }
+        void notifyAvatarChanged(String avatarKey) {
+            Iterator<Map.Entry<ComponentList.Item, CallBindingState>> iterator =
+                    rowBindings.entrySet().iterator();
+            while (iterator.hasNext()) {
+                if (Objects.equals(iterator.next().getValue().avatarKey, avatarKey)) {
+                    iterator.remove();
+                }
+            }
+            for (int position = 0; position < calls.size(); position++) {
+                if (Objects.equals(avatarKeyFor(calls.get(position)), avatarKey)) {
+                    notifyItemChanged(position);
+                }
+            }
+        }
         @Override public long getItemId(int position) {
-            CallLog call = calls.get(position);
-            String key = call.getContactName() + '|' + call.getFullCalledDateTime();
-            return key.hashCode();
+            if (position >= calls.size()) return Long.MIN_VALUE;
+            return callKey(calls.get(position)).hashCode();
         }
         @Override public void onCreateItem(ComponentList.Item item, int type) {
+            rowBindings.remove(item);
             ComponentList.ItemScope scope = item.getScope();
             float width = scope.width();
             float height = scope.height();
             float scale = figmaConfig.getScale(getWidth());
+            if (type == TYPE_PAGINATION) {
+                float progressSize = 44f * scale;
+                ZLayer footer = item.addLayer("pagination_footer");
+                footer.add(new Progress.Builder(getContext(), scope.id("progress"),
+                        new RectF((width - progressSize) / 2f,
+                                (height - progressSize) / 2f,
+                                (width + progressSize) / 2f,
+                                (height + progressSize) / 2f))
+                        .setStyle(Progress.Style.CIRCULAR)
+                        .setMode(Progress.Mode.INDETERMINATE)
+                        .setProgressColor(ACCENT)
+                        .setTrackColor(0x22019CC4)
+                        .setThickness(6f)
+                        .setIndeterminateDuration(850L));
+                return;
+            }
             ZLayer row = item.addLayer("row");
             row.add(new Image.Builder(getContext(), scope.id("selection_background"),
                     selectionBackgroundBitmap, new RectF(0, 0, width, height))
@@ -295,7 +385,13 @@ public final class CallsView extends View {
                     .setScaleType(Image.ScaleType.FIT_XY));
         }
         @Override public void onBindItem(ComponentList.Item item, CallLog call, int position) {
+            if (getItemViewType(position) == TYPE_PAGINATION) return;
             boolean selected = selectedCallIds.contains(call.getCallId());
+            CallBindingState previousBinding = rowBindings.get(item);
+            if (previousBinding != null && previousBinding.matches(call, position, selected)) {
+                if (previousBinding.restoreAvatar(item)) return;
+                rowBindings.remove(item);
+            }
             item.find("selection_background", Image.class).setVisible(selected);
             item.find("selection_check", Image.class).setVisible(selected);
             item.find("row_ripple", ChatRowRippleComponent.class).bind(
@@ -324,24 +420,101 @@ public final class CallsView extends View {
                         else callStartListener.onCallStart(call, call.isVideoCall()); },
                     () -> toggleSelection(call));
             item.find("divider", Image.class).setVisible(position < calls.size() - 1);
+            rowBindings.put(item, new CallBindingState(item, call, position, selected));
+        }
+
+        @Override public void onItemRecycled(ComponentList.Item item) {
+            rowBindings.remove(item);
+        }
+
+        private final class CallBindingState {
+            private final String callId;
+            private final String key;
+            private final int contentHash;
+            private final int position;
+            private final boolean selected;
+            private final Bitmap avatarBitmap;
+            private final String avatarKey;
+
+            private CallBindingState(ComponentList.Item item, CallLog call, int position,
+                                     boolean selected) {
+                this.callId = call.getCallId();
+                this.key = callKey(call);
+                this.contentHash = callContentHash(call);
+                this.position = position;
+                this.selected = selected;
+                this.avatarBitmap = item.find("avatar", Image.class).getBitmap();
+                this.avatarKey = avatarKeyFor(call);
+            }
+
+            private boolean matches(CallLog call, int nextPosition, boolean nextSelected) {
+                return position == nextPosition && selected == nextSelected
+                        && Objects.equals(key, callKey(call))
+                        && contentHash == callContentHash(call);
+            }
+
+            private boolean restoreAvatar(ComponentList.Item item) {
+                if (avatarBitmap == null || avatarBitmap.isRecycled()) return false;
+                Image avatarImage = item.find("avatar", Image.class);
+                boolean bitmapChanged = avatarImage.getBitmap() != avatarBitmap;
+                boolean visibilityChanged = !avatarImage.isVisible();
+                if (bitmapChanged) avatarImage.setBitmap(avatarBitmap);
+                if (visibilityChanged) avatarImage.setVisible(true);
+                if (bitmapChanged || visibilityChanged) {
+                    Log.d(TESTING_TAG, "call_scroll phase=avatar_restored key=" + key
+                            + " position=" + position);
+                }
+                return true;
+            }
         }
     }
 
     private void bindAvatar(ComponentList.Item item, CallLog call) {
-        String path = call.getLocalProfilePhotoPath();
-        if ((path == null || path.trim().isEmpty()) && !call.isGroupCall()) {
-            path = ChatProfilePhotoStore.getLocalPath(getContext(), call.getPhoneNumber());
-        }
+        String path = resolveAvatarPath(call);
         int size = Math.max(1, Math.round(px(132f)));
-        String cacheKey = (path == null ? "" : path) + "@" + size;
+        String cacheKey = avatarCacheKey(path, size);
         Bitmap cached = avatarCache.get(cacheKey);
         if (cached != null && !cached.isRecycled()) {
             item.find("avatar", Image.class).setBitmap(cached);
             return;
         }
         item.find("avatar", Image.class).setBitmap(cachedAvatar(call.getContactName()));
-        if (path == null || path.trim().isEmpty() || !avatarLoads.add(cacheKey)) return;
-        final String imagePath = path;
+        if (path == null || path.trim().isEmpty()) return;
+        queueAvatarLoad(callKey(call), path, size, cacheKey);
+    }
+
+    private void prefetchAvatars(List<CallLog> calls) {
+        if (calls == null || calls.isEmpty()) return;
+        int size = Math.max(1, Math.round(px(132f)));
+        int queued = 0;
+        for (CallLog call : calls) {
+            String path = resolveAvatarPath(call);
+            if (path == null || path.trim().isEmpty()) continue;
+            String cacheKey = avatarCacheKey(path, size);
+            Bitmap cached = avatarCache.get(cacheKey);
+            if (cached != null && !cached.isRecycled()) continue;
+            if (queueAvatarLoad(callKey(call), path, size, cacheKey)) queued++;
+        }
+        if (queued > 0) {
+            Log.d(TESTING_TAG, "call_avatar phase=prefetch_queued count=" + queued
+                    + " totalCalls=" + calls.size());
+        }
+    }
+
+    private String resolveAvatarPath(CallLog call) {
+        String path = call.getLocalProfilePhotoPath();
+        if ((path == null || path.trim().isEmpty()) && !call.isGroupCall()) {
+            path = ChatProfilePhotoStore.getLocalPath(getContext(), call.getPhoneNumber());
+        }
+        return path;
+    }
+
+    private String avatarCacheKey(String path, int size) {
+        return (path == null ? "" : path) + "@" + size;
+    }
+
+    private boolean queueAvatarLoad(String key, String imagePath, int size, String cacheKey) {
+        if (!avatarLoads.add(cacheKey)) return false;
         avatarExecutor.execute(() -> {
             Bitmap source = BitmapFactory.decodeFile(imagePath);
             Bitmap cropped = source == null ? null : circleCrop(source, size);
@@ -349,10 +522,35 @@ public final class CallsView extends View {
             if (cropped != null) avatarCache.put(cacheKey, cropped);
             avatarLoads.remove(cacheKey);
             if (cropped != null) post(() -> {
-                int position = adapter.indexOf(call);
-                if (position >= 0) adapter.notifyItemChanged(position);
+                adapter.notifyAvatarChanged(cacheKey);
             });
+            Log.d(TESTING_TAG, "call_avatar phase=decode_complete success="
+                    + (cropped != null) + " key=" + key);
         });
+        return true;
+    }
+
+    private String callKey(CallLog call) {
+        if (call == null) return "";
+        if (call.getCallId() != null && !call.getCallId().isEmpty()) {
+            return "call:" + call.getCallId();
+        }
+        if (call.getMessageId() != null && !call.getMessageId().isEmpty()) {
+            return "message:" + call.getMessageId();
+        }
+        return "fallback:" + call.getChatId() + '|' + call.getPhoneNumber() + '|'
+                + call.getFullCalledDateTime();
+    }
+
+    private int callContentHash(CallLog call) {
+        return Objects.hash(callKey(call), call.getContactName(), call.getCalledTime(),
+                call.getFullCalledDateTime(), call.getDuration(), call.isVideoCall(),
+                call.isOutgoing(), call.isMissed(), call.isConference(),
+                call.getLocalProfilePhotoPath());
+    }
+
+    private String avatarKeyFor(CallLog call) {
+        return avatarCacheKey(resolveAvatarPath(call), Math.max(1, Math.round(px(132f))));
     }
 
     private static Bitmap circleCrop(Bitmap source, int size) {
