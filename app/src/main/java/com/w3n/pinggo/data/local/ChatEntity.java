@@ -2,9 +2,13 @@ package com.w3n.pinggo.data.local;
 
 import androidx.annotation.NonNull;
 import androidx.room.Entity;
+import androidx.room.Index;
 import androidx.room.PrimaryKey;
 
-@Entity(tableName = "chats")
+@Entity(tableName = "chats", indices = {
+        @Index(value = {"pinned", "lastMessageTime", "updatedAt"}),
+        @Index("otherUserId")
+})
 public class ChatEntity {
     @PrimaryKey
     @NonNull

@@ -11,7 +11,10 @@ import androidx.room.PrimaryKey;
         indices = {
                 @Index("chatId"),
                 @Index("clientMessageId"),
-                @Index("sentTime")
+                @Index("sentTime"),
+                @Index(value = {"chatId", "invisible", "sentTime", "messageId"}),
+                @Index(value = {"receiverId", "invisible", "deliveredTime", "readTime"}),
+                @Index(value = {"senderId", "status", "clientMessageId"})
         }
 )
 public class MessageEntity {

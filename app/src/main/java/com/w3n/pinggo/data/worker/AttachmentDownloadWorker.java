@@ -23,6 +23,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.security.MessageDigest;
+import java.util.concurrent.Semaphore;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -32,6 +33,7 @@ import okhttp3.ResponseBody;
 public class AttachmentDownloadWorker extends Worker {
     public static final String KEY_TRANSFER_ID = "transferId";
     private static final long MAX_SIZE = 25L * 1024L * 1024L;
+    private static final Semaphore NETWORK_SLOTS = new Semaphore(2, true);
     private final Context context;
     private final TransferDao transfers;
     private final MessageDao messages;
@@ -45,6 +47,20 @@ public class AttachmentDownloadWorker extends Worker {
     }
 
     @NonNull @Override public Result doWork() {
+        boolean acquired = false;
+        try {
+            NETWORK_SLOTS.acquire();
+            acquired = true;
+            return runTransfer();
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return Result.retry();
+        } finally {
+            if (acquired) NETWORK_SLOTS.release();
+        }
+    }
+
+    private Result runTransfer() {
         String id = getInputData().getString(KEY_TRANSFER_ID);
         TransferEntity transfer = id == null ? null : transfers.find(id);
         if (transfer == null || transfer.remoteUrl == null) return Result.failure();

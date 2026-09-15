@@ -192,7 +192,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private int historySyncRetryAttempts;
     private Runnable historySyncRetryTask;
-    private final ChatWebSocketClient socketClient;
+    private final ChatRealtimeGateway realtimeGateway;
     private EventListener eventListener;
     private DeviceEventListener deviceEventListener;
     private String chatListPhoneNumber = "";
@@ -237,7 +237,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         presenceDao = database.presenceDao();
         transferDao = database.transferDao();
         appFunctionManager = AppFunctionManager.getInstance();
-        socketClient = new ChatWebSocketClient(this);
+        realtimeGateway = new ChatRealtimeGateway(appContext, this);
     }
 
     public static ChatRepository getInstance(Context context) {
@@ -379,7 +379,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     public boolean sendCallEvent(JsonObject event) {
         connect();
-        boolean sent = socketClient.send(event);
+        boolean sent = realtimeGateway.send(event);
         if (!sent && event != null) {
             synchronized (pendingCallEvents) {
                 pendingCallEvents.add(event.deepCopy());
@@ -398,7 +398,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             java.util.Iterator<JsonObject> iterator = pendingCallEvents.iterator();
             while (iterator.hasNext()) {
                 JsonObject event = iterator.next();
-                if (!socketClient.send(event)) break;
+                if (!realtimeGateway.send(event)) break;
                 Log.i("PingGoCallTrace", "call_event_retry_sent type="
                         + JsonParserUtil.getString(event, "type") + " callId="
                         + JsonParserUtil.getString(event, "callId"));
@@ -639,7 +639,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         JsonObject event = new JsonObject();
         event.addProperty("type", "active_chat");
         event.addProperty("chatId", activeChatId);
-        socketClient.send(event);
+        realtimeGateway.send(event);
     }
 
     public LiveData<List<TransferEntity>> observeTransfers(String chatId) {
@@ -714,7 +714,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             return;
         }
         Log.i("PingGoCallTrace", "socket_connect_requested userId=" + currentUserId);
-        socketClient.connect(currentUserId, encryptedCredential,
+        realtimeGateway.connect(currentUserId, encryptedCredential,
                 DeviceIdentityManager.getDeviceId(appContext));
     }
 
@@ -722,7 +722,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         if (historySyncRetryTask != null) mainHandler.removeCallbacks(historySyncRetryTask);
         historySyncRetryTask = null;
         historySyncRetryAttempts = 0;
-        socketClient.disconnect();
+        realtimeGateway.disconnect();
     }
 
     public void sendMessage(String chatId, String receiverId, String text, String repliedMessageId) {
@@ -1117,7 +1117,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             event.addProperty("repliedMessageId", repliedMessageId);
         }
 
-        boolean sentToSocket = socketClient.send(event);
+        boolean sentToSocket = realtimeGateway.send(event);
         if (!sentToSocket) {
             ioExecutor.execute(() -> messageDao.updateStatusByClientMessageId(clientMessageId, MessageStatus.FAILED));
         }
@@ -1381,7 +1381,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         event.addProperty("chatId", chatId);
         event.add("messageIds", ids);
         if (callback != null) pendingSeenCallbacks.put(chatId, callback);
-        if (!socketClient.send(event) && callback != null) {
+        if (!realtimeGateway.send(event) && callback != null) {
             pendingSeenCallbacks.remove(chatId, callback);
             callback.onError("Unable to mark messages read while disconnected.");
         }
@@ -1402,7 +1402,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         event.addProperty("chatId", chatId);
         event.addProperty("markAll", true);
         if (callback != null) pendingSeenCallbacks.put(chatId, callback);
-        if (!socketClient.send(event) && callback != null) {
+        if (!realtimeGateway.send(event) && callback != null) {
             pendingSeenCallbacks.remove(chatId, callback);
             callback.onError("Unable to mark messages read while disconnected.");
         }
@@ -1422,7 +1422,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 ? "group_message_delivered" : "message_delivered");
         event.addProperty("chatId", chatId);
         event.add("messageIds", ids);
-        socketClient.send(event);
+        realtimeGateway.send(event);
     }
 
     /**
@@ -1508,7 +1508,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         event.addProperty("senderId", senderId);
         event.addProperty("text", text);
 
-        if (!socketClient.send(event)) {
+        if (!realtimeGateway.send(event)) {
             notifySocketError("Unable to edit message while socket is disconnected.");
         }
     }
@@ -1554,7 +1554,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             if (pending.size() == 1) event.addProperty("messageId", pending.get(0));
             else event.add("messageIds", jsonIds(pending));
             event.addProperty("senderId", senderId);
-            if (!socketClient.send(event)) {
+            if (!realtimeGateway.send(event)) {
                 notifySocketError("Unable to delete message while socket is disconnected.");
             }
         });
@@ -1580,7 +1580,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         if (ids.size() == 1) event.addProperty("messageId", ids.get(0));
         else event.add("messageIds", jsonIds(ids));
 
-        if (!socketClient.send(event)) {
+        if (!realtimeGateway.send(event)) {
             notifySocketError("Unable to delete message while socket is disconnected.");
         }
     }
@@ -1615,7 +1615,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             event.add("messageIds", jsonIds(pending));
             event.addProperty("pinned", true);
             event.addProperty("pinned_at", pinnedAt);
-            if (!socketClient.send(event)) {
+            if (!realtimeGateway.send(event)) {
                 notifySocketError("Unable to pin messages while socket is disconnected.");
             }
         });
@@ -1651,7 +1651,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             event.addProperty("chatId", chatId);
             event.add("messageIds", jsonIds(pending));
             event.addProperty("pinned", false);
-            if (!socketClient.send(event)) {
+            if (!realtimeGateway.send(event)) {
                 notifySocketError("Unable to unpin messages while socket is disconnected.");
             }
         });
@@ -1678,7 +1678,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         event.addProperty("receiverId", normalizedReceiver);
         event.addProperty("operationId", UUID.randomUUID().toString());
         event.add("messageIds", jsonIds(ids));
-        if (!socketClient.send(event)) {
+        if (!realtimeGateway.send(event)) {
             notifySocketError("Unable to forward messages while socket is disconnected.");
         }
     }
@@ -1716,7 +1716,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         event.addProperty("type", typing ? "typing_start" : "typing_stop");
         event.addProperty("chatId", chatId);
         event.addProperty("receiverId", normalizeAccountId(receiverId));
-        socketClient.send(event);
+        realtimeGateway.send(event);
     }
 
     public void syncAfterReconnect(String phoneNumber) {
@@ -2237,7 +2237,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 String clientId = message.clientMessageId == null
                         ? message.messageId : message.clientMessageId;
                 if (clientId == null || clientId.isEmpty()
-                        || socketClient.isAwaitingMessageAck(clientId)) {
+                        || realtimeGateway.isAwaitingMessageAck(clientId)) {
                     continue;
                 }
                 if (("image".equals(message.messageType)

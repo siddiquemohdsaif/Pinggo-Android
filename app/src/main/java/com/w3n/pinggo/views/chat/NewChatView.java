@@ -20,6 +20,7 @@ import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
+import com.w3n.pinggo.data.cache.ProfileBitmapCache;
 import com.w3n.pinggo.views.home.ChatRowRippleComponent;
 import java.util.ArrayList;
 import java.util.List;
@@ -47,6 +48,7 @@ public final class NewChatView extends View {
   private ComponentList<Item> list;
   private Text status;
   private Text title;
+  private Button groupAction;
   private int topInset, bottomInset;
   private String statusMessage = "Loading contacts...";
   private String titleValue = "New Chat";
@@ -97,12 +99,15 @@ public final class NewChatView extends View {
         if (!normalized.isEmpty()) selectedMembers.add(normalized);
       }
     }
-    if (getWidth() > 0) build();
+    if (getWidth() > 0) {
+      applyFilter();
+      updateGroupAction();
+    }
   }
 
   public void setGroupActionLabel(String value) {
     groupActionLabel = value == null || value.trim().isEmpty() ? "Create" : value.trim();
-    if (getWidth() > 0) build();
+    updateGroupAction();
   }
 
   public void submitItems(List<Item> items) {
@@ -180,7 +185,7 @@ public final class NewChatView extends View {
             PRIMARY,
             FontVariation.BOLD));
     if (groupMode) {
-      addButton(content, "create_group", accent,
+      groupAction = addButton(content, "create_group", accent,
           groupActionLabel + " (" + selectedMembers.size() + ")",
           new RectF(w - px(295f), top + px(15f), w - px(33f), top + px(117f)),
           Color.WHITE, id -> {
@@ -206,7 +211,7 @@ public final class NewChatView extends View {
                       if (item.type == Item.FOUND && groupMode) {
                         if (!selectedMembers.add(item.phoneNumber)) selectedMembers.remove(item.phoneNumber);
                         applyFilter();
-                        build();
+                        updateGroupAction();
                       } else if (item.type == Item.FOUND) listener.onOpenChat(item);
                       else if (item.type == Item.INVITE) listener.onInvite(item.phoneNumber);
                     }));
@@ -235,6 +240,12 @@ public final class NewChatView extends View {
     invalidate();
   }
 
+  private void updateGroupAction() {
+    if (groupAction != null)
+      groupAction.setLabel(groupActionLabel + " (" + selectedMembers.size() + ")");
+    invalidate();
+  }
+
   @Override
   protected void onDraw(Canvas c) {
     super.onDraw(c);
@@ -255,9 +266,40 @@ public final class NewChatView extends View {
     private final List<Item> items = new ArrayList<>();
 
     void submit(List<Item> values) {
-      items.clear();
-      if (values != null) items.addAll(values);
-      notifyDataSetChanged();
+      List<Item> updated = values == null ? new ArrayList<>() : values;
+      for (int target = 0; target < updated.size(); target++) {
+        Item next = updated.get(target);
+        int existing = indexOf(next, target);
+        if (existing < 0) {
+          items.add(target, next);
+          notifyItemInserted(target);
+        } else {
+          if (existing != target) {
+            Item moved = items.remove(existing);
+            items.add(target, moved);
+            notifyItemMoved(existing, target);
+          }
+          Item previous = items.set(target, next);
+          if (!previous.sameContent(next)) notifyItemChanged(target);
+        }
+      }
+      for (int index = items.size() - 1; index >= updated.size(); index--) {
+        items.remove(index);
+        notifyItemRemoved(index);
+      }
+    }
+
+    private int indexOf(Item target, int start) {
+      for (int index = Math.max(0, start); index < items.size(); index++)
+        if (items.get(index).sameIdentity(target)) return index;
+      return -1;
+    }
+
+    int indexOfPhone(String phone) {
+      for (int index = 0; index < items.size(); index++)
+        if (items.get(index).type == Item.FOUND
+            && items.get(index).phoneNumber.equals(phone)) return index;
+      return -1;
     }
 
     @Override
@@ -380,10 +422,13 @@ public final class NewChatView extends View {
 
   private Bitmap photo(Item item) {
     String path = ChatProfilePhotoStore.getLocalPath(getContext(), item.phoneNumber);
-    Bitmap b = BitmapFactory.decodeFile(path);
     String displayName = item.displayName == null || item.displayName.trim().isEmpty()
         ? DeviceContactResolver.cachedNameOrPhone(item.phoneNumber) : item.displayName;
-    return b == null ? avatar(displayName) : b;
+    return ProfileBitmapCache.get().request(path, displayName,
+        Math.max(1, Math.round(px(132f))), ACCENT, () -> {
+          int position = adapter.indexOfPhone(item.phoneNumber);
+          if (position >= 0) adapter.notifyItemChanged(position);
+        });
   }
 
   private Bitmap avatar(String v) {
@@ -412,7 +457,7 @@ public final class NewChatView extends View {
         .setWrapEnabled(false);
   }
 
-  private void addButton(
+  private Button addButton(
       ZLayer l,
       String id,
       Bitmap b,
@@ -420,7 +465,7 @@ public final class NewChatView extends View {
       RectF r,
       int color,
       Button.OnClickListener click) {
-    l.add(
+    return l.add(
         new Button.Builder(getContext(), id, b, label, r)
             .setImageScaleType(Image.ScaleType.FIT_XY)
             .setCornerRadiusPx(px(33f))
@@ -457,10 +502,10 @@ public final class NewChatView extends View {
 
     private Item(int t, String p, String c, String u, String n) {
       type = t;
-      phoneNumber = p;
-      chatId = c;
-      profilePhotoUrl = u;
-      displayName = n;
+      phoneNumber = p == null ? "" : p;
+      chatId = c == null ? "" : c;
+      profilePhotoUrl = u == null ? "" : u;
+      displayName = n == null ? "" : n;
     }
 
     public static Item found(String p, String c, String u) {
@@ -477,6 +522,16 @@ public final class NewChatView extends View {
 
     public static Item divider(String label) {
       return new Item(DIVIDER, label, "", "", "");
+    }
+
+    boolean sameIdentity(Item other) {
+      return other != null && type == other.type && phoneNumber.equals(other.phoneNumber);
+    }
+
+    boolean sameContent(Item other) {
+      return sameIdentity(other) && chatId.equals(other.chatId)
+          && profilePhotoUrl.equals(other.profilePhotoUrl)
+          && displayName.equals(other.displayName);
     }
   }
 

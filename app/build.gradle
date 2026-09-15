@@ -31,9 +31,9 @@ android {
 
     buildTypes {
         release {
-            optimization {
-                enable false
-            }
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
     compileOptions {
@@ -80,3 +80,20 @@ dependencies {
     androidTestImplementation libs.espresso.core
     androidTestImplementation libs.ext.junit
 }
+
+tasks.register('verifyPerformanceConfiguration') {
+    group = 'verification'
+    description = 'Fails CI when release shrinking or the startup baseline profile is removed.'
+    doLast {
+        def buildScript = file('build.gradle').text
+        if (!buildScript.contains('minifyEnabled true') || !buildScript.contains('shrinkResources true')) {
+            throw new GradleException('Release code and resource shrinking must remain enabled.')
+        }
+        def profile = file('src/main/baseline-prof.txt')
+        if (!profile.isFile() || profile.length() == 0L) {
+            throw new GradleException('A non-empty startup baseline profile is required.')
+        }
+    }
+}
+
+tasks.named('check').configure { dependsOn 'verifyPerformanceConfiguration' }

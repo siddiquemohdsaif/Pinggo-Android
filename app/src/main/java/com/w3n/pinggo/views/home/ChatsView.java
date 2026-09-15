@@ -9,8 +9,6 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
-import android.graphics.BitmapShader;
-import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
 import android.view.MotionEvent;
 import android.view.View;
@@ -20,7 +18,6 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.os.Trace;
 import android.util.Log;
-import android.util.LruCache;
 import android.view.Choreographer;
 
 import androidx.lifecycle.Observer;
@@ -47,6 +44,7 @@ import com.w3n.pinggo.data.local.ChatEntity;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
 import com.w3n.pinggo.data.repository.ChatListState;
 import com.w3n.pinggo.data.repository.ChatRepository;
+import com.w3n.pinggo.data.cache.ProfileBitmapCache;
 import com.w3n.pinggo.modals.Chat;
 
 import java.util.ArrayList;
@@ -62,12 +60,10 @@ import java.util.Map;
 import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Set;
-import java.util.Collections;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /** Scrollable chat list implemented with native-views-release.aar components. */
 public final class ChatsView extends View {
+    private boolean released;
     private static final float FIGMA_WIDTH = 1080f;
     private static final String PERF_TAG = "ChatsViewPerf";
     private static final String TESTING_TAG = "PARVEZ_TESTING";
@@ -161,11 +157,6 @@ public final class ChatsView extends View {
     private final Handler typingHandler = new Handler(Looper.getMainLooper());
     private final Map<String, Long> typingBaselines = new HashMap<>();
     private final Map<String, Runnable> typingTimeouts = new HashMap<>();
-    private final ExecutorService avatarExecutor = Executors.newFixedThreadPool(2);
-    private final Set<String> avatarLoads = Collections.synchronizedSet(new LinkedHashSet<>());
-    // Do not recycle on eviction: a visible native Image may still hold the bitmap.
-    // Holds both decoded photos and generated placeholders for the 50-row cache.
-    private final LruCache<String, Bitmap> avatarCache = new LruCache<>(128);
     private final Paint ellipsizePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final SimpleDateFormat timeFormatter =
             new SimpleDateFormat("hh:mm a", Locale.getDefault());
@@ -607,6 +598,7 @@ public final class ChatsView extends View {
     @Override protected void onDraw(Canvas canvas) {
         long startedNanos = SystemClock.elapsedRealtimeNanos();
         super.onDraw(canvas);
+        if (released) return;
         layers.draw(canvas);
         long drawMs = (SystemClock.elapsedRealtimeNanos() - startedNanos) / 1_000_000L;
         if (scrollTraceActive && drawMs >= 8L) {
@@ -728,6 +720,8 @@ public final class ChatsView extends View {
     }
 
     public void release() {
+        if (released) return;
+        released = true;
         typingHandler.removeCallbacksAndMessages(null);
         typingBaselines.clear();
         typingTimeouts.clear();
@@ -735,20 +729,10 @@ public final class ChatsView extends View {
             repository.observeChatListState().removeObserver(listStateObserver);
         }
         observing = false;
-        avatarExecutor.shutdownNow();
-        avatarLoads.clear();
-        avatarCache.evictAll();
         layers.release();
-        recycle(dividerBitmap, actionBitmap, emptyTransparentBitmap,
-                floatingActionBitmap,
-                emptyIllustrationBitmap,
-                emptyStartChatIconBitmap,
-                unreadBadgeBitmap,
-                selectionBackgroundBitmap, selectionCheckBitmap,
-                pinnedBitmap, mutedBitmap, sendingBitmap, deliveredBitmap, sentBitmap, readBitmap);
-        recycle(pictureBitmap, videoBitmap, documentBitmap, locationBitmap, audioBitmap);
-        recycle(phoneIncomingBitmap, phoneOutgoingBitmap, phoneMissedBitmap,
-                videoIncomingBitmap, videoOutgoingBitmap, videoMissedBitmap);
+        // Native Image components and Android display lists can retain these bitmaps for a
+        // final queued frame. Let GC reclaim them with this view instead of recycling pixels
+        // that a renderer may still reference.
     }
 
     private final class ChatAdapter extends ComponentList.Adapter<Chat> {
@@ -1348,43 +1332,24 @@ public final class ChatsView extends View {
         long started = SystemClock.elapsedRealtimeNanos();
         String path = resolveAvatarPath(chat);
         int size = avatarPixelSize();
-        String cacheKey = avatarCacheKey(path, size);
-        Bitmap cached = avatarCache.get(cacheKey);
-        if (cached != null && !cached.isRecycled()) {
-            item.find("avatar", Image.class).setBitmap(cached);
-            logAvatarBind(started, "cache", chat.getChatId());
-            return;
-        }
-        String placeholderKey = "placeholder:" + chat.getContactName() + "@" + size;
-        Bitmap placeholder = avatarCache.get(placeholderKey);
-        if (placeholder == null || placeholder.isRecycled()) {
-            placeholder = avatar(chat.getContactName());
-            avatarCache.put(placeholderKey, placeholder);
-        }
-        item.find("avatar", Image.class).setBitmap(placeholder);
-        if (path == null || path.trim().isEmpty()) {
-            logAvatarBind(started, "placeholder", chat.getChatId());
-            return;
-        }
-        queueAvatarLoad(chat.getChatId(), path, size, cacheKey);
-        logAvatarBind(started, "queued", chat.getChatId());
+        Bitmap avatar = ProfileBitmapCache.get().request(path, chat.getContactName(), size,
+                ACCENT, () -> {
+                    if (released) return;
+                    int position = adapter.indexOfChat(chat.getChatId());
+                    if (position >= 0) adapter.notifyItemChanged(position);
+                });
+        item.find("avatar", Image.class).setBitmap(avatar);
+        logAvatarBind(started, path == null || path.trim().isEmpty()
+                ? "placeholder" : "shared-cache", chat.getChatId());
     }
 
     private void prefetchAvatars(List<Chat> chats) {
         if (getWidth() <= 0 || chats == null || chats.isEmpty()) return;
         int size = avatarPixelSize();
-        int queued = 0;
         for (Chat chat : chats) {
             String path = resolveAvatarPath(chat);
             if (path == null || path.trim().isEmpty()) continue;
-            String cacheKey = avatarCacheKey(path, size);
-            Bitmap cached = avatarCache.get(cacheKey);
-            if (cached != null && !cached.isRecycled()) continue;
-            if (queueAvatarLoad(chat.getChatId(), path, size, cacheKey)) queued++;
-        }
-        if (queued > 0) {
-            Log.d(TESTING_TAG, "chat_avatar phase=prefetch_queued count=" + queued
-                    + " totalChats=" + chats.size());
+            ProfileBitmapCache.get().request(path, chat.getContactName(), size, ACCENT, null);
         }
     }
 
@@ -1395,34 +1360,6 @@ public final class ChatsView extends View {
             path = ChatProfilePhotoStore.getLocalPath(getContext(), chat.getPhoneNumber());
         }
         return path;
-    }
-
-    private String avatarCacheKey(String path, int size) {
-        return (path == null ? "" : path) + "@" + size;
-    }
-
-    private boolean queueAvatarLoad(String chatId, String imagePath, int size, String cacheKey) {
-        if (!avatarLoads.add(cacheKey)) return false;
-        avatarExecutor.execute(() -> {
-            long decodeStarted = SystemClock.elapsedRealtimeNanos();
-            Trace.beginSection("ChatsView.decodeAvatar");
-            Bitmap source = BitmapFactory.decodeFile(imagePath);
-            Bitmap cropped = source == null ? null : circleCrop(source, size);
-            if (source != null && source != cropped && !source.isRecycled()) source.recycle();
-            if (cropped != null) avatarCache.put(cacheKey, cropped);
-            avatarLoads.remove(cacheKey);
-            Trace.endSection();
-            long decodeMs = (SystemClock.elapsedRealtimeNanos() - decodeStarted) / 1_000_000L;
-            if (isDebugBuild()) {
-                Log.d(PERF_TAG, "avatarDecode=" + decodeMs + "ms success="
-                        + (cropped != null) + " chat=" + chatId);
-            }
-            if (cropped != null) post(() -> {
-                int currentPosition = adapter.indexOfChat(chatId);
-                if (currentPosition >= 0) adapter.notifyItemChanged(currentPosition);
-            });
-        });
-        return true;
     }
 
     private void logAvatarBind(long started, String source, String chatId) {
@@ -1448,22 +1385,6 @@ public final class ChatsView extends View {
 
     private int avatarPixelSize() {
         return Math.max(1, Math.round(132f * figmaConfig.getScale(getWidth())));
-    }
-
-    private Bitmap circleCrop(Bitmap source, int size) {
-        Bitmap output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(output);
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        android.graphics.Matrix matrix = new android.graphics.Matrix();
-        float scale = Math.max(size / (float) source.getWidth(), size / (float) source.getHeight());
-        matrix.setScale(scale, scale);
-        matrix.postTranslate((size - source.getWidth() * scale) / 2f,
-                (size - source.getHeight() * scale) / 2f);
-        BitmapShader shader = new BitmapShader(source, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
-        shader.setLocalMatrix(matrix);
-        paint.setShader(shader);
-        canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint);
-        return output;
     }
 
     private Bitmap avatar(String value) {
@@ -1615,10 +1536,6 @@ public final class ChatsView extends View {
         drawable.draw(canvas);
         return bitmap;
     }
-    private static void recycle(Bitmap... values) {
-        for (Bitmap value : values) if (value != null && !value.isRecycled()) value.recycle();
-    }
-
     public interface OnChatClickListener { void onChatClick(Chat chat); }
     public interface OnSelectionChangedListener {
         void onSelectionChanged(List<Chat> selectedChats);

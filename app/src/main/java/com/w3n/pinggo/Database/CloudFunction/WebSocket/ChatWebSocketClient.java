@@ -1,5 +1,7 @@
 package com.w3n.pinggo.Database.CloudFunction.WebSocket;
 
+import android.content.Context;
+import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -7,6 +9,9 @@ import android.util.Log;
 import androidx.annotation.Nullable;
 
 import com.google.gson.JsonObject;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParser;
 import com.w3n.pinggo.Database.CloudFunction.RestApi.APIAuth;
 import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
 
@@ -14,6 +19,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.OkHttpClient;
@@ -25,6 +32,10 @@ import okhttp3.WebSocketListener;
 public class ChatWebSocketClient {
     private static final String TAG = "PingGoChatSocket";
     private static final String MESSAGE_TRACE_TAG = "PingGoMessageTrace";
+    private static final int MAX_PENDING_EVENTS = 128;
+    private static final int MAX_UNACKNOWLEDGED_MESSAGES = 256;
+    private static final String QUEUE_PREFERENCES = "pinggo_realtime_queue_v1";
+    private static final String KEY_UNACKNOWLEDGED = "unacknowledged";
     public interface Listener {
         void onConnected();
 
@@ -39,6 +50,8 @@ public class ChatWebSocketClient {
             .pingInterval(15, TimeUnit.SECONDS)
             .build();
     private final Listener listener;
+    private final SharedPreferences queuePreferences;
+    private final ExecutorService queueIo = Executors.newSingleThreadExecutor();
     private final List<JsonObject> pendingEvents = new ArrayList<>();
     private final Map<String, JsonObject> unacknowledgedMessages = new ConcurrentHashMap<>();
     private final Handler reconnectHandler = new Handler(Looper.getMainLooper());
@@ -49,10 +62,13 @@ public class ChatWebSocketClient {
     private String lastUserId;
     private String lastEncryptedCredential;
     private String lastDeviceId;
+    private String restoredQueueUserId;
     private int reconnectAttempts;
 
-    public ChatWebSocketClient(Listener listener) {
+    public ChatWebSocketClient(Context context, Listener listener) {
         this.listener = listener;
+        queuePreferences = context.getApplicationContext().getSharedPreferences(
+                QUEUE_PREFERENCES, Context.MODE_PRIVATE);
     }
 
     public void connect(String userId, String encryptedCredential, String deviceId) {
@@ -60,6 +76,7 @@ public class ChatWebSocketClient {
         lastEncryptedCredential = encryptedCredential;
         lastDeviceId = deviceId;
         intentionalDisconnect = false;
+        restoreQueueForUser(userId);
         if (connecting || authenticated) return;
         connecting = true;
         Log.d(TAG, "connect url=" + APIAuth.WS_URL + " attempt=" + reconnectAttempts);
@@ -113,7 +130,10 @@ public class ChatWebSocketClient {
                 if ("message_ack".equals(type) || "message_failed".equals(type)
                         || "group_message_ack".equals(type) || "group_message_failed".equals(type)) {
                     String clientMessageId = JsonParserUtil.getString(event, "clientMessageId");
-                    if (!clientMessageId.isEmpty()) unacknowledgedMessages.remove(clientMessageId);
+                    if (!clientMessageId.isEmpty()) {
+                        unacknowledgedMessages.remove(clientMessageId);
+                        persistUnacknowledgedMessages();
+                    }
                 }
                 if ("auth_success".equals(type) && listener != null) {
                     authenticated = true;
@@ -181,7 +201,10 @@ public class ChatWebSocketClient {
         }
         if ("send_message".equals(type) || "send_group_message".equals(type)) {
             String clientMessageId = JsonParserUtil.getString(event, "clientMessageId");
-            if (!clientMessageId.isEmpty()) unacknowledgedMessages.put(clientMessageId, event.deepCopy());
+            if (!clientMessageId.isEmpty()) {
+                putBoundedUnacknowledged(clientMessageId, event.deepCopy());
+                persistUnacknowledgedMessages();
+            }
             if (webSocket == null || !authenticated) {
                 scheduleReconnect();
                 return true;
@@ -189,6 +212,7 @@ public class ChatWebSocketClient {
             return webSocket.send(event.toString());
         }
         if ((webSocket == null || !authenticated) && !"auth".equals(type)) {
+            if (pendingEvents.size() >= MAX_PENDING_EVENTS) pendingEvents.remove(0);
             pendingEvents.add(event.deepCopy());
             Log.d(TAG, "queued type=" + type + " pendingCount=" + pendingEvents.size());
             scheduleReconnect();
@@ -230,6 +254,58 @@ public class ChatWebSocketClient {
         for (Map.Entry<String, JsonObject> entry : new ArrayList<>(unacknowledgedMessages.entrySet())) {
             webSocket.send(entry.getValue().toString());
         }
+    }
+
+    private void putBoundedUnacknowledged(String id, JsonObject event) {
+        if (!unacknowledgedMessages.containsKey(id)
+                && unacknowledgedMessages.size() >= MAX_UNACKNOWLEDGED_MESSAGES) {
+            String oldest = unacknowledgedMessages.keySet().iterator().next();
+            unacknowledgedMessages.remove(oldest);
+        }
+        unacknowledgedMessages.put(id, event);
+    }
+
+    private void restoreQueueForUser(String userId) {
+        String normalized = userId == null ? "" : userId.trim();
+        if (normalized.isEmpty() || normalized.equals(restoredQueueUserId)) return;
+        restoredQueueUserId = normalized;
+        unacknowledgedMessages.clear();
+        queueIo.execute(() -> restoreUnacknowledgedMessages(normalized));
+    }
+
+    private void restoreUnacknowledgedMessages(String userId) {
+        try {
+            JsonArray stored = JsonParser.parseString(
+                    queuePreferences.getString(queueKey(userId), "[]")).getAsJsonArray();
+            if (!userId.equals(restoredQueueUserId)) return;
+            for (JsonElement value : stored) {
+                if (!value.isJsonObject()) continue;
+                JsonObject event = value.getAsJsonObject();
+                String id = JsonParserUtil.getString(event, "clientMessageId");
+                if (!id.isEmpty()) putBoundedUnacknowledged(id, event.deepCopy());
+            }
+            if (authenticated && userId.equals(lastUserId)) resendUnacknowledgedMessages();
+        } catch (RuntimeException error) {
+            queuePreferences.edit().remove(queueKey(userId)).apply();
+        }
+    }
+
+    private void persistUnacknowledgedMessages() {
+        String userId = lastUserId;
+        if (userId == null || userId.trim().isEmpty()) return;
+        List<JsonObject> snapshot = new ArrayList<>();
+        for (JsonObject event : unacknowledgedMessages.values()) snapshot.add(event.deepCopy());
+        queueIo.execute(() -> persistSnapshot(userId, snapshot));
+    }
+
+    private void persistSnapshot(String userId, List<JsonObject> snapshot) {
+        JsonArray stored = new JsonArray();
+        for (JsonObject event : snapshot) stored.add(event);
+        queuePreferences.edit().putString(queueKey(userId), stored.toString()).apply();
+    }
+
+    private static String queueKey(String userId) {
+        return KEY_UNACKNOWLEDGED + "_" + Integer.toHexString(userId.hashCode());
     }
 
     private void scheduleReconnect() {

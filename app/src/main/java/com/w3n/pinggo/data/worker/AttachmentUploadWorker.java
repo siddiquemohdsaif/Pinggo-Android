@@ -32,6 +32,7 @@ import java.io.RandomAccessFile;
 import java.security.MessageDigest;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.Semaphore;
 
 import okhttp3.MediaType;
 import okhttp3.MultipartBody;
@@ -43,6 +44,7 @@ public class AttachmentUploadWorker extends Worker {
     public static final String KEY_TRANSFER_ID = "transferId";
     private static final long CHUNK_SIZE = 3L * 1024L * 1024L;
     private static final long MAX_SIZE = 25L * 1024L * 1024L;
+    private static final Semaphore NETWORK_SLOTS = new Semaphore(2, true);
     private final Context context;
     private final TransferDao transfers;
     private final MessageDao messages;
@@ -56,6 +58,20 @@ public class AttachmentUploadWorker extends Worker {
     }
 
     @NonNull @Override public Result doWork() {
+        boolean acquired = false;
+        try {
+            NETWORK_SLOTS.acquire();
+            acquired = true;
+            return runTransfer();
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return Result.retry();
+        } finally {
+            if (acquired) NETWORK_SLOTS.release();
+        }
+    }
+
+    private Result runTransfer() {
         String transferId = getInputData().getString(KEY_TRANSFER_ID);
         TransferEntity transfer = transferId == null ? null : transfers.find(transferId);
         if (transfer == null) return Result.failure();

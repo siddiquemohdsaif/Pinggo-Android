@@ -1,6 +1,7 @@
 package com.w3n.pinggo.call;
 
 import android.content.Context;
+import android.media.MediaRecorder;
 import android.os.SystemClock;
 import android.util.Log;
 import android.util.Base64;
@@ -26,6 +27,9 @@ import org.webrtc.RtpReceiver;
 import org.webrtc.SdpObserver;
 import org.webrtc.SessionDescription;
 import org.webrtc.audio.JavaAudioDeviceModule;
+import org.webrtc.audio.AudioProcessingOptions;
+import org.webrtc.audio.AudioProcessingOptionsResult;
+import org.webrtc.audio.AudioProcessingState;
 
 /** Owns one WebRTC audio session and exchanges SDP/ICE through ChatRepository. */
 public final class WebRTCCallClient implements ChatRepository.CallEventListener {
@@ -130,7 +134,12 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
     try {
       PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(context)
           .setEnableInternalTracer(false).createInitializationOptions());
-      audioDeviceModule = JavaAudioDeviceModule.builder(context).createAudioDeviceModule();
+      audioDeviceModule = JavaAudioDeviceModule.builder(context)
+          .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+          .setUseHardwareNoiseSuppressor(true)
+          .setUseHardwareAcousticEchoCanceler(true)
+          .setUseLowLatency(true)
+          .createAudioDeviceModule();
       factory = PeerConnectionFactory.builder().setAudioDeviceModule(audioDeviceModule).createPeerConnectionFactory();
       PeerConnection.RTCConfiguration config = new PeerConnection.RTCConfiguration(Collections.singletonList(
           PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()));
@@ -140,6 +149,16 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
       if (peerConnection == null) throw new IllegalStateException("Could not create PeerConnection.");
       audioSource = factory.createAudioSource(audioConstraints());
       audioTrack = factory.createAudioTrack("pinggo_audio", audioSource);
+      AudioProcessingOptionsResult processingResult = audioTrack.setAudioProcessingOptions(
+          AudioProcessingOptions.communication());
+      if (!processingResult.isSuccess())
+        throw new IllegalStateException("WebRTC APM configuration failed: "
+            + processingResult.code);
+      AudioProcessingState processingState = factory.getAudioProcessingState();
+      if (!processingState.hasAudioProcessingModule)
+        throw new IllegalStateException("WebRTC APM is unavailable on this device.");
+      logConnection("audio_processing", "configured=" + processingResult.isSuccess()
+          + " result=" + processingResult.code + " state=" + processingState);
       audioTrack.setEnabled(true);
       peerConnection.addTrack(audioTrack, Collections.singletonList("pinggo_stream"));
       return true;

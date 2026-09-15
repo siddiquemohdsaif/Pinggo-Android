@@ -17,7 +17,6 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
-import android.media.MediaRecorder;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
@@ -67,6 +66,7 @@ import com.w3n.pinggo.views.chat.ChatPerformanceProfiler;
 import com.w3n.pinggo.views.chat.ConversationMenuDialogView;
 import com.w3n.pinggo.views.chat.EmojiDrawerView;
 import com.w3n.pinggo.call.ActiveCallRegistry;
+import com.w3n.pinggo.call.WebRtcAudioMessageRecorder;
 import com.w3n.pinggo.views.common.NativePromptDialogView;
 import com.w3n.pinggo.views.ImagePreviewView;
 import com.w3n.pinggo.views.NativeMediaScreenView;
@@ -220,7 +220,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private ChatEntity currentChatDetails;
   private String profilePhotoPath;
   private boolean typingStarted, peerTyping, locationPending, attachmentSending;
-  private MediaRecorder audioRecorder;
+  private WebRtcAudioMessageRecorder audioRecorder;
   private File recordedAudioFile;
   private long audioRecordingStartedAt;
   private final List<Integer> audioRecordingSamples = new ArrayList<>();
@@ -1522,18 +1522,9 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       return;
     }
     File output = new File(audioDirectory,
-        "AUD_" + System.currentTimeMillis() + ".m4a");
-    MediaRecorder recorder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-        ? new MediaRecorder(this)
-        : new MediaRecorder();
+        "AUD_" + System.currentTimeMillis() + ".wav");
+    WebRtcAudioMessageRecorder recorder = new WebRtcAudioMessageRecorder(this, output);
     try {
-      recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
-      recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
-      recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
-      recorder.setAudioSamplingRate(44_100);
-      recorder.setAudioEncodingBitRate(128_000);
-      recorder.setOutputFile(output.getAbsolutePath());
-      recorder.prepare();
       recorder.start();
       audioRecorder = recorder;
       recordedAudioFile = output;
@@ -1542,11 +1533,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       stopTyping.run();
       chatView.startAudioRecording();
       typingHandler.post(updateAudioRecordingTime);
-    } catch (IOException | RuntimeException error) {
-      try {
-        recorder.release();
-      } catch (RuntimeException ignored) {
-      }
+    } catch (Exception error) {
+      recorder.cancel();
       if (output.exists())
         output.delete();
       Toast.makeText(this, "Unable to start audio recording.", Toast.LENGTH_SHORT).show();
@@ -1564,7 +1552,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void finishAudioRecording(boolean sendRecording) {
-    MediaRecorder recorder = audioRecorder;
+    WebRtcAudioMessageRecorder recorder = audioRecorder;
     File output = recordedAudioFile;
     long duration = audioRecordingStartedAt == 0L
         ? 0L
@@ -1580,17 +1568,9 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         chatView.stopAudioRecording();
       return;
     }
-    boolean stopped = false;
-    try {
-      recorder.stop();
-      stopped = true;
-    } catch (RuntimeException ignored) {
-    } finally {
-      try {
-        recorder.release();
-      } catch (RuntimeException ignored) {
-      }
-    }
+    boolean stopped = sendRecording && recorder.stop();
+    if (!sendRecording)
+      recorder.cancel();
     if (chatView != null)
       chatView.stopAudioRecording();
     if (!sendRecording || !stopped || duration < 500L || output == null || !output.isFile()) {

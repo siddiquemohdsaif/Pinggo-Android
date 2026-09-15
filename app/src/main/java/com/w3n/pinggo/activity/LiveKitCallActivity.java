@@ -41,6 +41,7 @@ import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.call.ActiveCallRegistry;
+import com.w3n.pinggo.call.PingGoLiveKitAudio;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.data.repository.ChatRepository;
@@ -48,7 +49,6 @@ import com.w3n.pinggo.views.call.VideoActiveCallView;
 import com.w3n.pinggo.views.call.VoiceActiveCallView;
 import io.livekit.android.LiveKit;
 import io.livekit.android.ConnectOptions;
-import io.livekit.android.LiveKitOverrides;
 import io.livekit.android.RoomOptions;
 import io.livekit.android.renderer.SurfaceViewRenderer;
 import io.livekit.android.room.Room;
@@ -184,7 +184,7 @@ public final class LiveKitCallActivity extends AppCompatActivity
     if (!isVideo()) applySpeakerRoute(false);
     updateAudioState();
     room = LiveKit.INSTANCE.create(
-        getApplicationContext(), new RoomOptions(), new LiveKitOverrides());
+        getApplicationContext(), new RoomOptions(), PingGoLiveKitAudio.createOverrides());
     Log.i(TAG, "activity_created callId=" + callId() + " chatId=" + chatId()
         + " media=" + mediaType() + " incoming=" + incoming());
     ChatRepository.getInstance(this).setCallEventListener(this);

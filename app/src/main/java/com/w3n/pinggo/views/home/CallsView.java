@@ -3,12 +3,10 @@ package com.w3n.pinggo.views.home;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.BitmapShader;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
-import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
 import android.util.Log;
 import android.view.MotionEvent;
@@ -29,6 +27,7 @@ import com.w3n.pinggo.R;
 import com.w3n.pinggo.Util.PhoneNumberFormatter;
 import com.w3n.pinggo.modals.CallLog;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
+import com.w3n.pinggo.data.cache.ProfileBitmapCache;
 
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
@@ -38,9 +37,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /** Scrollable call list implemented with native-views-release.aar components. */
 public final class CallsView extends View {
@@ -68,9 +64,6 @@ public final class CallsView extends View {
     private final Bitmap videoMissedBitmap = drawableBitmap(R.drawable.chat_video_missed);
     private final Bitmap selectionBackgroundBitmap = drawableBitmap(R.drawable.chat_selection_background);
     private final Bitmap selectionCheckBitmap = drawableBitmap(R.drawable.chat_selection_check);
-    private final Map<String, Bitmap> avatarCache = new ConcurrentHashMap<>();
-    private final Set<String> avatarLoads = ConcurrentHashMap.newKeySet();
-    private final ExecutorService avatarExecutor = Executors.newFixedThreadPool(2);
     private final Set<String> selectedCallIds = new java.util.LinkedHashSet<>();
     private OnSelectionChangedListener selectionChangedListener;
     private ComponentList<CallLog> list;
@@ -226,12 +219,6 @@ public final class CallsView extends View {
         recycle(phoneIncomingBitmap, phoneOutgoingBitmap, phoneMissedBitmap,
                 videoIncomingBitmap, videoOutgoingBitmap, videoMissedBitmap,
                 selectionBackgroundBitmap, selectionCheckBitmap);
-        for (Bitmap bitmap : avatarCache.values()) {
-            if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
-        }
-        avatarCache.clear();
-        avatarLoads.clear();
-        avatarExecutor.shutdownNow();
     }
 
     private final class CallAdapter extends ComponentList.Adapter<CallLog> {
@@ -263,12 +250,39 @@ public final class CallsView extends View {
             applyFilter();
         }
         private void applyFilter() {
-            calls.clear();
+            List<CallLog> updated = new ArrayList<>();
             for (CallLog call : all) {
-                if (query.isEmpty() || matchesQuery(call)) calls.add(call);
+                if (query.isEmpty() || matchesQuery(call)) updated.add(call);
             }
-            if (calls.isEmpty()) paginationLoading = false;
-            notifyDataSetChanged();
+            for (int target = 0; target < updated.size(); target++) {
+                CallLog next = updated.get(target);
+                int existing = indexOfCallFrom(callKey(next), target);
+                if (existing < 0) {
+                    calls.add(target, next);
+                    notifyItemInserted(target);
+                } else {
+                    if (existing != target) {
+                        CallLog moved = calls.remove(existing);
+                        calls.add(target, moved);
+                        notifyItemMoved(existing, target);
+                    }
+                    CallLog previous = calls.set(target, next);
+                    if (callContentHash(previous) != callContentHash(next)) notifyItemChanged(target);
+                }
+            }
+            for (int index = calls.size() - 1; index >= updated.size(); index--) {
+                calls.remove(index);
+                notifyItemRemoved(index);
+            }
+            if (calls.isEmpty() && paginationLoading) {
+                paginationLoading = false;
+                notifyItemRemoved(0);
+            }
+        }
+        private int indexOfCallFrom(String key, int start) {
+            for (int index = Math.max(0, start); index < calls.size(); index++)
+                if (Objects.equals(callKey(calls.get(index)), key)) return index;
+            return -1;
         }
         private boolean matchesQuery(CallLog call) {
             return containsQuery(call.getContactName())
@@ -361,7 +375,9 @@ public final class CallsView extends View {
                     .setScaleType(Image.ScaleType.FIT_XY));
             row.add(new ChatRowRippleComponent(scope.id("row_ripple"),
                     new RectF(0f, 0f, width, height)));
-            row.add(new Image.Builder(getContext(), scope.id("avatar"), cachedAvatar("?"),
+            Bitmap fallbackAvatar = ProfileBitmapCache.get().request(
+                    null, "?", Math.max(1, Math.round(132f * scale)), ACCENT, null);
+            row.add(new Image.Builder(getContext(), scope.id("avatar"), fallbackAvatar,
                     new RectF(50f * scale, 27f * scale, 182f * scale, 159f * scale))
                     .setScaleType(Image.ScaleType.CENTER_CROP));
             row.add(new Image.Builder(getContext(), scope.id("selection_check"),
@@ -473,31 +489,18 @@ public final class CallsView extends View {
         String path = resolveAvatarPath(call);
         int size = Math.max(1, Math.round(px(132f)));
         String cacheKey = avatarCacheKey(path, size);
-        Bitmap cached = avatarCache.get(cacheKey);
-        if (cached != null && !cached.isRecycled()) {
-            item.find("avatar", Image.class).setBitmap(cached);
-            return;
-        }
-        item.find("avatar", Image.class).setBitmap(cachedAvatar(call.getContactName()));
-        if (path == null || path.trim().isEmpty()) return;
-        queueAvatarLoad(callKey(call), path, size, cacheKey);
+        Bitmap avatar = ProfileBitmapCache.get().request(path, call.getContactName(), size,
+                ACCENT, () -> adapter.notifyAvatarChanged(cacheKey));
+        item.find("avatar", Image.class).setBitmap(avatar);
     }
 
     private void prefetchAvatars(List<CallLog> calls) {
         if (calls == null || calls.isEmpty()) return;
         int size = Math.max(1, Math.round(px(132f)));
-        int queued = 0;
         for (CallLog call : calls) {
             String path = resolveAvatarPath(call);
             if (path == null || path.trim().isEmpty()) continue;
-            String cacheKey = avatarCacheKey(path, size);
-            Bitmap cached = avatarCache.get(cacheKey);
-            if (cached != null && !cached.isRecycled()) continue;
-            if (queueAvatarLoad(callKey(call), path, size, cacheKey)) queued++;
-        }
-        if (queued > 0) {
-            Log.d(TESTING_TAG, "call_avatar phase=prefetch_queued count=" + queued
-                    + " totalCalls=" + calls.size());
+            ProfileBitmapCache.get().request(path, call.getContactName(), size, ACCENT, null);
         }
     }
 
@@ -511,23 +514,6 @@ public final class CallsView extends View {
 
     private String avatarCacheKey(String path, int size) {
         return (path == null ? "" : path) + "@" + size;
-    }
-
-    private boolean queueAvatarLoad(String key, String imagePath, int size, String cacheKey) {
-        if (!avatarLoads.add(cacheKey)) return false;
-        avatarExecutor.execute(() -> {
-            Bitmap source = BitmapFactory.decodeFile(imagePath);
-            Bitmap cropped = source == null ? null : circleCrop(source, size);
-            if (source != null && source != cropped && !source.isRecycled()) source.recycle();
-            if (cropped != null) avatarCache.put(cacheKey, cropped);
-            avatarLoads.remove(cacheKey);
-            if (cropped != null) post(() -> {
-                adapter.notifyAvatarChanged(cacheKey);
-            });
-            Log.d(TESTING_TAG, "call_avatar phase=decode_complete success="
-                    + (cropped != null) + " key=" + key);
-        });
-        return true;
     }
 
     private String callKey(CallLog call) {
@@ -553,22 +539,6 @@ public final class CallsView extends View {
         return avatarCacheKey(resolveAvatarPath(call), Math.max(1, Math.round(px(132f))));
     }
 
-    private static Bitmap circleCrop(Bitmap source, int size) {
-        Bitmap result = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(result);
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        BitmapShader shader = new BitmapShader(source, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
-        float scale = Math.max(size / (float) source.getWidth(), size / (float) source.getHeight());
-        android.graphics.Matrix matrix = new android.graphics.Matrix();
-        matrix.setScale(scale, scale);
-        matrix.postTranslate((size - source.getWidth() * scale) / 2f,
-                (size - source.getHeight() * scale) / 2f);
-        shader.setLocalMatrix(matrix);
-        paint.setShader(shader);
-        canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint);
-        return result;
-    }
-
     private Text.Builder rowText(String id, RectF bounds, float size, int color,
                                  FontVariation variation) {
         return new Text.Builder(getContext(), id, "", bounds).setFont(NativeFonts.INTER)
@@ -592,15 +562,6 @@ public final class CallsView extends View {
         canvas.drawText(label, size / 2f,
                 size / 2f - (metrics.ascent + metrics.descent) / 2f, paint);
         return bitmap;
-    }
-
-    private Bitmap cachedAvatar(String value) {
-        String key = value == null ? "" : value.trim().toLowerCase(Locale.US);
-        Bitmap cached = avatarCache.get(key);
-        if (cached != null && !cached.isRecycled()) return cached;
-        Bitmap created = avatar(value);
-        avatarCache.put(key, created);
-        return created;
     }
 
     private Bitmap callIcon(CallLog call) {

@@ -25,7 +25,8 @@ public final class ChatHeaderComponent {
   private final Bitmap statusBarBackground;
   private final Bitmap headerBackground;
   private final Bitmap transparent;
-  private final Bitmap profile;
+  private Bitmap profile;
+  private Image profileImage;
   private final Bitmap back;
   private final Bitmap voiceCall;
   private final Bitmap videoCall;
@@ -108,7 +109,7 @@ public final class ChatHeaderComponent {
         new RectF(51f * scale, top + 60f * scale, 102f * scale, top + 111f * scale),
         new RectF(25f * scale, top + 34f * scale, 128f * scale, top + 137f * scale),
         id -> listener.onBack());
-    Image profileImage = content.add(new Image.Builder(context, "profile", profile,
+    profileImage = content.add(new Image.Builder(context, "profile", profile,
         new RectF(152f * scale, top + 34f * scale, 254f * scale, top + 136f * scale))
         .setScaleType(Image.ScaleType.CENTER_CROP));
     profileImage.setVisible(profileVisible);
@@ -152,6 +153,13 @@ public final class ChatHeaderComponent {
 
   void setProfileVisible(boolean visible) {
     profileVisible = visible;
+    if (profileImage != null) profileImage.setVisible(visible);
+  }
+
+  void setProfile(Bitmap value) {
+    if (value == null) return;
+    profile = value;
+    if (profileImage != null) profileImage.setBitmap(value);
   }
 
   void setCallActionsVisible(boolean visible) { callActionsVisible = visible; }

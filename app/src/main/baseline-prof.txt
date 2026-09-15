@@ -1,0 +1,8 @@
+HSPLcom/w3n/pinggo/AppContextProvider;->onCreate()V
+HSPLcom/w3n/pinggo/activity/SplashScreenActivity;->onCreate(Landroid/os/Bundle;)V
+HSPLcom/w3n/pinggo/activity/HomeActivity;->onCreate(Landroid/os/Bundle;)V
+HSPLcom/w3n/pinggo/data/local/PingGoDatabase;->getInstance(Landroid/content/Context;)Lcom/w3n/pinggo/data/local/PingGoDatabase;
+HSPLcom/w3n/pinggo/data/repository/ChatRepository;->getInstance(Landroid/content/Context;)Lcom/w3n/pinggo/data/repository/ChatRepository;
+HSPLcom/w3n/pinggo/data/repository/ChatRepository;->connect()V
+HSPLcom/w3n/pinggo/views/home/ChatsView;-><init>(Landroid/content/Context;)V
+HSPLcom/w3n/pinggo/views/chat/NewChatView;-><init>(Landroid/content/Context;)V

@@ -16,7 +16,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase;
                 PresenceEntity.class,
                 TransferEntity.class
         },
-        version = 27,
+        version = 28,
         exportSchema = false
 )
 public abstract class PingGoDatabase extends RoomDatabase {
@@ -161,6 +161,17 @@ public abstract class PingGoDatabase extends RoomDatabase {
             db.execSQL("ALTER TABLE `messages` ADD COLUMN `callParticipantIdsJson` TEXT");
         }
     };
+    private static final Migration MIGRATION_27_28 = new Migration(27, 28) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_messages_chatId_invisible_sentTime_messageId` ON `messages` (`chatId`, `invisible`, `sentTime`, `messageId`)");
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_messages_receiverId_invisible_deliveredTime_readTime` ON `messages` (`receiverId`, `invisible`, `deliveredTime`, `readTime`)");
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_messages_senderId_status_clientMessageId` ON `messages` (`senderId`, `status`, `clientMessageId`)");
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_chats_pinned_lastMessageTime_updatedAt` ON `chats` (`pinned`, `lastMessageTime`, `updatedAt`)");
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_chats_otherUserId` ON `chats` (`otherUserId`)");
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_transfers_status_updatedTime` ON `transfers` (`status`, `updatedTime`)");
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_transfers_chatId` ON `transfers` (`chatId`)");
+        }
+    };
 
     public static PingGoDatabase getInstance(Context context) {
         if (instance != null) {
@@ -180,7 +191,7 @@ public abstract class PingGoDatabase extends RoomDatabase {
                                 MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18,
                                 MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22,
                                 MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25,
-                                MIGRATION_25_26, MIGRATION_26_27)
+                                MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28)
                         .fallbackToDestructiveMigration()
                         .build();
             }

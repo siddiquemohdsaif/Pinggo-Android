@@ -5,7 +5,10 @@ import androidx.room.Entity;
 import androidx.room.Index;
 import androidx.room.PrimaryKey;
 
-@Entity(tableName = "transfers", indices = {@Index("clientMessageId"), @Index("attachmentId")})
+@Entity(tableName = "transfers", indices = {
+        @Index("clientMessageId"), @Index("attachmentId"),
+        @Index(value = {"status", "updatedTime"}), @Index("chatId")
+})
 public class TransferEntity {
     @PrimaryKey @NonNull public String transferId;
     public String clientMessageId;

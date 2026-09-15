@@ -20,6 +20,7 @@ import com.ogfa.nativeviews.text.FontVariation;
 import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.w3n.pinggo.data.cache.MediaPreviewCache;
+import com.w3n.pinggo.data.cache.ProfileBitmapCache;
 import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.local.MessageTypeCodec;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
@@ -432,8 +433,16 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
           notifyItemRangeChanged(changedStart, changedEnd - changedStart + 1);
         }
       } else {
-        // Apply an uncommon reorder/removal as one rebuild instead of one rebuild per row.
-        notifyDataSetChanged();
+        // Rebind the affected range without invalidating unrelated list chrome.
+        int common = Math.min(oldCount, nextMessages.size());
+        if (common > 0) notifyItemRangeChanged(0, common);
+        if (nextMessages.size() > oldCount) {
+          notifyItemRangeInserted(oldCount, nextMessages.size() - oldCount);
+        } else if (oldCount > nextMessages.size()) {
+          for (int index = oldCount - 1; index >= nextMessages.size(); index--) {
+            notifyItemRemoved(index);
+          }
+        }
       }
     } else {
       for (int index = 0; index < nextMessages.size(); index++) {
@@ -989,16 +998,15 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     replySenders.clear();
     replyContents.clear();
     mediaPrefetches.clear();
-    for (Bitmap avatar : senderAvatars.values()) {
-      if (avatar != null && avatar != transparent && !avatar.isRecycled()) avatar.recycle();
-    }
+    // Profile bitmaps are owned by the process-wide cache and may be shared by
+    // another visible screen. Never recycle them from an adapter.
     senderAvatars.clear();
     boundRows.clear();
     measurementTools.remove();
   }
 
   void refreshMeasuredRows() {
-    notifyDataSetChanged();
+    if (!messages.isEmpty()) notifyItemRangeChanged(0, messages.size());
   }
 
   private MessageMetrics metrics(MessageEntity message, float availableWidth) {
@@ -1552,7 +1560,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     if (!searchQuery.equals(next)) {
       searchQuery = next;
       boundRows.clear();
-      notifyDataSetChanged();
+      if (!messages.isEmpty()) notifyItemRangeChanged(0, messages.size());
     }
     if (next.isEmpty()) return -1;
     for (int index = 0; index < messages.size(); index++) {
@@ -1859,8 +1867,13 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     Bitmap cached = senderAvatars.get(senderId);
     if (cached != null && !cached.isRecycled()) return cached;
     String path = ChatProfilePhotoStore.getLocalPath(context, senderId);
-    Bitmap avatar = ChatProfileBitmap.load(
-        context, path, senderLabel, Math.round(NOTICE_ICON_SIZE_PX), ACCENT);
+    Bitmap avatar = ProfileBitmapCache.get().request(path, senderLabel,
+        Math.round(NOTICE_ICON_SIZE_PX), ACCENT, () -> {
+          senderAvatars.remove(senderId);
+          for (int index = 0; index < messages.size(); index++)
+            if (senderId.equals(normalize(messages.get(index).senderId)))
+              notifyItemChanged(index);
+        });
     senderAvatars.put(senderId, avatar);
     return avatar;
   }

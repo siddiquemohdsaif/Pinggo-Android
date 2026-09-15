@@ -35,6 +35,7 @@ import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.data.cache.MediaPreviewCache;
 import com.w3n.pinggo.data.cache.KeyboardHeightCache;
+import com.w3n.pinggo.data.cache.ProfileBitmapCache;
 import com.w3n.pinggo.data.local.MessageEntity;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.res.ResourcesCompat;
@@ -117,7 +118,7 @@ public final class ChatView extends View {
   private final String chatName, currentUser;
   private final boolean groupChat;
   private final ChatSelectionController selection = new ChatSelectionController();
-  private final Bitmap profile;
+  private Bitmap profile;
   private ComponentList<MessageEntity> list;
   private Text status, replyText, searchMatchCount;
   private ComposerReplyPreviewComponent composerReplyPreview;
@@ -259,7 +260,10 @@ public final class ChatView extends View {
                 name,
                 groupChat),
             selection.ids());
-    profile = ChatProfileBitmap.load(c, photoPath, name, Math.round(px(132f)), ACCENT);
+    int profileSize = Math.round(px(132f));
+    profile = ProfileBitmapCache.get().request(
+        photoPath, name, profileSize, ACCENT,
+        () -> applyLoadedProfile(photoPath, name, profileSize));
     adapter.setChatProfile(profile);
     chatHeader = new ChatHeaderComponent(
         c, chatName, listener, chatStatusBarBackground, headerBackground, transparent,
@@ -268,6 +272,15 @@ public final class ChatView extends View {
     setBackgroundColor(0xFFF7F9FB);
     setClickable(true);
     setFocusableInTouchMode(true);
+  }
+
+  private void applyLoadedProfile(String photoPath, String name, int profileSize) {
+    Bitmap loaded = ProfileBitmapCache.get().request(
+        photoPath, name, profileSize, ACCENT, null);
+    profile = loaded;
+    adapter.setChatProfile(loaded);
+    chatHeader.setProfile(loaded);
+    invalidate();
   }
 
   public void setInsets(int top, int bottom, int ime, boolean visible) {
@@ -1960,7 +1973,7 @@ public final class ChatView extends View {
     layers.release();
     adapter.release();
     recycle(
-        white, transparent, divider, accent, attachmentOption, profile,
+        white, transparent, divider, accent, attachmentOption,
         conversationBackground, headerBackground, microphoneIcon, sendIcon, emojiIcon,
         attachmentIcon, cameraIcon, backIcon, voiceCallIcon, videoCallIcon, moreIcon,
         selectionBackground, selectionStatusBarBackground, messageSelectionBackground,
@@ -1971,6 +1984,9 @@ public final class ChatView extends View {
         documentIcon, deletedMessageIcon, forwardedMessageIcon,
         callPhoneIncomingIcon, callPhoneOutgoingIcon, callPhoneMissedIcon,
         callVideoIncomingIcon, callVideoOutgoingIcon, callVideoMissedIcon);
+    // profile is owned by ProfileBitmapCache and can simultaneously be displayed by
+    // ChatsView, CallsView, or message rows. Recycling it here corrupts those views.
+    profile = null;
   }
 
   private static String normalize(String v) {
