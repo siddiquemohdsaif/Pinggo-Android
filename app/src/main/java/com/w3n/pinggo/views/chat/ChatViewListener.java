@@ -29,6 +29,7 @@ public interface ChatViewListener {
   void onDeleteSelected(List<MessageEntity> messages);
   void onMessageInfoSelected(MessageEntity message);
   void onMessageSelectionChanged(boolean selected);
+  void onVisibleMessagesChanged(List<MessageEntity> messagesBottomFirst);
   void onLoadOlderMessages();
   void onReplyTargetRequested(String messageId);
   void onBlockedDeleteChat();

@@ -40,7 +40,6 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.Util.PhoneNumberFormatter;
 import com.w3n.pinggo.activity.NewChatActivity;
-import com.w3n.pinggo.data.local.ChatEntity;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
 import com.w3n.pinggo.data.repository.ChatListState;
 import com.w3n.pinggo.data.repository.ChatRepository;
@@ -74,6 +73,8 @@ public final class ChatsView extends View {
     private static final int PAGE_SIZE = 20;
     private static final int PAGINATION_PREFETCH_REMAINING = 10;
     private int visibleChatCount = PAGE_SIZE;
+    private int startupRevealLimit = Integer.MAX_VALUE;
+    private boolean startupRevealCompleted;
 
     private final ZLayerGroup layers = new ZLayerGroup(this);
     private final FigmaConfig figmaConfig = new FigmaConfig(FIGMA_WIDTH);
@@ -171,6 +172,21 @@ public final class ChatsView extends View {
     private boolean paginationRequestedForGesture;
     private boolean paginationGestureMovedUp;
     private final Runnable paginationAfterFling = this::loadNextPageIfNeeded;
+    private final Runnable revealNextStartupRows = new Runnable() {
+        @Override public void run() {
+            if (released || startupRevealCompleted) return;
+            int target = Math.min(visibleChatCount, adapter.all.size());
+            // The first frame has already created the holders needed by the
+            // viewport. Publish the off-screen rows together; ComponentList will
+            // create their holders only when they enter the visible region.
+            startupRevealLimit = target;
+            adapter.applyVisibleDiff(adapter.filteredChats());
+            Log.d(TESTING_TAG, "chat_render phase=startup_reveal visible="
+                    + adapter.chatCount() + " target=" + target);
+            startupRevealCompleted = true;
+            startupRevealLimit = Integer.MAX_VALUE;
+        }
+    };
     private long previousFrameNanos;
     private boolean scrollTraceActive;
     private long scrollTraceStartedAtMs;
@@ -258,6 +274,12 @@ public final class ChatsView extends View {
     }
 
     public void submit(List<Chat> chats) {
+        String own = currentPhoneNumber();
+        List<Chat> visible = new ArrayList<>();
+        if (chats != null) for (Chat chat : chats) {
+            if (chat != null && ChatListMembership.visible(chat.getChatId(), own)) visible.add(chat);
+        }
+        chats = visible;
         long generation = ++renderGeneration;
         long startedNanos = SystemClock.elapsedRealtimeNanos();
         int incomingCount = chats == null ? 0 : chats.size();
@@ -266,7 +288,18 @@ public final class ChatsView extends View {
                 + " incoming=" + incomingCount
                 + " previousVisible=" + previousVisibleCount
                 + " visibleLimit=" + visibleChatCount);
+        if (!startupRevealCompleted && adapter.chatCount() == 0 && incomingCount > 1
+                && adapter.query.isEmpty()) {
+            startupRevealLimit = visibleRowCapacity(incomingCount);
+            Log.d(TESTING_TAG, "chat_render phase=startup_capacity availableHeight="
+                    + getHeight() + " rowHeight=" + Math.round(chatRowHeightPx())
+                    + " rows=" + startupRevealLimit);
+        }
         adapter.submit(chats, adapter.query);
+        if (!startupRevealCompleted && startupRevealLimit != Integer.MAX_VALUE) {
+            removeCallbacks(revealNextStartupRows);
+            postOnAnimation(revealNextStartupRows);
+        }
         if (getWidth() > 0) prefetchAvatars(adapter.all);
         long appliedMs = (SystemClock.elapsedRealtimeNanos() - startedNanos) / 1_000_000L;
         Log.d(TESTING_TAG, "chat_render phase=adapter_applied generation=" + generation
@@ -288,8 +321,27 @@ public final class ChatsView extends View {
         post(this::loadAllPagesForSearch);
     }
 
+    private int visibleRowCapacity(int availableRows) {
+        float rowHeight = chatRowHeightPx();
+        int availableHeight = getHeight();
+        if (availableHeight <= 0 || rowHeight <= 0f) return availableRows;
+        return Math.max(1, Math.min(availableRows,
+                (int) Math.ceil(availableHeight / rowHeight)));
+    }
+
+    private float chatRowHeightPx() {
+        int width = getWidth();
+        if (width <= 0) return 0f;
+        return 185f * figmaConfig.getScale(width);
+    }
+
     public void showLoading() { showStatus("Loading chats..."); }
     public void filter(String query) {
+        if (query != null && !query.trim().isEmpty()) {
+            removeCallbacks(revealNextStartupRows);
+            startupRevealCompleted = true;
+            startupRevealLimit = Integer.MAX_VALUE;
+        }
         adapter.filter(query);
         showStatus(adapter.getItemCount() == 0
                 ? (adapter.hasChats() ? "No matching conversations"
@@ -343,11 +395,7 @@ public final class ChatsView extends View {
 
     @Override protected void onAttachedToWindow() {
         super.onAttachedToWindow();
-        if (isDebugBuild() && !frameProfilerRunning) {
-            frameProfilerRunning = true;
-            previousFrameNanos = 0L;
-            Choreographer.getInstance().postFrameCallback(frameProfiler);
-        }
+        updateFrameProfilerState();
         // HomeActivity owns the initial chat-list request and may feed Room rows
         // through submit() without calling this view's legacy loadChats() method.
         // The pagination state must therefore be observed whenever the view is
@@ -357,13 +405,42 @@ public final class ChatsView extends View {
 
     @Override protected void onDetachedFromWindow() {
         removeCallbacks(paginationAfterFling);
-        frameProfilerRunning = false;
-        Choreographer.getInstance().removeFrameCallback(frameProfiler);
+        removeCallbacks(revealNextStartupRows);
+        stopFrameProfiler();
         if (observing) {
             repository.observeChatListState().removeObserver(listStateObserver);
             observing = false;
         }
         super.onDetachedFromWindow();
+    }
+
+    @Override protected void onVisibilityChanged(View changedView, int visibility) {
+        super.onVisibilityChanged(changedView, visibility);
+        if (changedView == this) updateFrameProfilerState();
+    }
+
+    @Override protected void onWindowVisibilityChanged(int visibility) {
+        super.onWindowVisibilityChanged(visibility);
+        updateFrameProfilerState();
+    }
+
+    private void updateFrameProfilerState() {
+        boolean shouldRun = isDebugBuild() && isAttachedToWindow()
+                && getVisibility() == VISIBLE && getWindowVisibility() == VISIBLE;
+        if (shouldRun == frameProfilerRunning) return;
+        if (!shouldRun) {
+            stopFrameProfiler();
+            return;
+        }
+        frameProfilerRunning = true;
+        previousFrameNanos = 0L;
+        Choreographer.getInstance().postFrameCallback(frameProfiler);
+    }
+
+    private void stopFrameProfiler() {
+        frameProfilerRunning = false;
+        previousFrameNanos = 0L;
+        Choreographer.getInstance().removeFrameCallback(frameProfiler);
     }
 
     @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
@@ -508,8 +585,7 @@ public final class ChatsView extends View {
     private void updateVisibility() {
         if (list == null || status == null) return;
         ChatListState.Status state = chatListState.getStatus();
-        boolean paginationStarted = adapter.setPaginationLoading(
-                state == ChatListState.Status.PAGINATING);
+        adapter.setPaginationLoading(state == ChatListState.Status.PAGINATING);
         boolean hasChats = adapter.chatCount() > 0;
         boolean awaitingCachedRows = !adapter.hasChats()
                 && chatListState.getCachedChatCount() > 0;
@@ -539,16 +615,6 @@ public final class ChatsView extends View {
         }
         list.setRegion(new RectF(0, 0, getWidth(), getHeight()));
         list.setVisible(hasChats).setEnabled(hasChats);
-        if (paginationStarted && hasChats && adapter.query.isEmpty()) {
-            // The footer is inserted just beyond the old content extent. Reveal
-            // it inside ComponentList's viewport, which already ends above the
-            // HomeView bottom navigation bar.
-            post(() -> {
-                if (list != null && adapter.isPaginationLoading()) {
-                    list.scrollToPosition(adapter.getItemCount() - 1);
-                }
-            });
-        }
         status.setText(errorWithoutCache
                         ? "Couldn't refresh chats. Check your connection and try again."
                         : statusMessage)
@@ -723,6 +789,7 @@ public final class ChatsView extends View {
         if (released) return;
         released = true;
         typingHandler.removeCallbacksAndMessages(null);
+        removeCallbacks(revealNextStartupRows);
         typingBaselines.clear();
         typingTimeouts.clear();
         if (observing) {
@@ -781,7 +848,7 @@ public final class ChatsView extends View {
         }
         private List<Chat> filteredChats() {
             List<Chat> filtered = new ArrayList<>();
-            int count = Math.min(visibleChatCount, all.size());
+            int count = Math.min(Math.min(visibleChatCount, startupRevealLimit), all.size());
             for (int index = 0; index < count; index++) {
                 Chat chat = all.get(index);
                 if (query.isEmpty() || matchesQuery(chat)) {
@@ -817,6 +884,19 @@ public final class ChatsView extends View {
             return true;
         }
         private void applyVisibleDiff(List<Chat> updated) {
+            boolean sameOrder = chats.size() == updated.size();
+            for (int i = 0; sameOrder && i < chats.size(); i++) {
+                sameOrder = Objects.equals(chats.get(i).getChatId(), updated.get(i).getChatId());
+            }
+            if (!sameOrder) {
+                // Single-item structural notifications recycle every visible holder in
+                // ComponentList. Publish the complete structure before notifying once.
+                chats.clear();
+                chats.addAll(updated);
+                rowBindings.clear();
+                notifyDataSetChanged();
+                return;
+            }
             String previousLastChatId = chats.isEmpty()
                     ? null : chats.get(chats.size() - 1).getChatId();
             boolean structureChanged = false;
@@ -902,6 +982,41 @@ public final class ChatsView extends View {
             invalidateChatBinding(chatId);
             int position = indexOfChat(chatId);
             if (position >= 0) notifyItemChanged(position);
+        }
+        void applyLoadedAvatar(String chatId, String expectedPath, int expectedSize) {
+            int position = indexOfChat(chatId);
+            if (position < 0 || avatarPixelSize() != expectedSize) return;
+            Chat current = chats.get(position);
+            String currentPath = resolveAvatarPath(current);
+            if (!Objects.equals(currentPath, expectedPath)) return;
+
+            Bitmap loaded = ProfileBitmapCache.get().request(currentPath,
+                    current.getContactName(), expectedSize, ACCENT, null);
+            if (loaded == null || loaded.isRecycled()) return;
+
+            boolean changed = false;
+            for (Map.Entry<ComponentList.Item, RowBindingState> entry
+                    : rowBindings.entrySet()) {
+                RowBindingState binding = entry.getValue();
+                if (!Objects.equals(binding.chatId, chatId)
+                        || binding.position != position
+                        || binding.contentHash != rowContentHash(current)) {
+                    continue;
+                }
+                Image avatarImage = entry.getKey().find("avatar", Image.class);
+                if (avatarImage.getBitmap() != loaded) {
+                    avatarImage.setBitmap(loaded);
+                    changed = true;
+                }
+                if (!avatarImage.isVisible()) {
+                    avatarImage.setVisible(true);
+                    changed = true;
+                }
+                // Keep the fast rebind path in sync so it cannot restore the
+                // fallback bitmap that was captured before decoding completed.
+                binding.avatarBitmap = loaded;
+            }
+            if (changed) ChatsView.this.invalidate();
         }
         private void invalidateChatBinding(String chatId) {
             if (chatId == null) return;
@@ -1210,7 +1325,7 @@ public final class ChatsView extends View {
             private final int position;
             private final boolean selected;
             private final boolean typing;
-            private final Bitmap avatarBitmap;
+            private Bitmap avatarBitmap;
 
             private RowBindingState(ComponentList.Item item, Chat chat, int position,
                                     boolean selected, boolean typing) {
@@ -1292,8 +1407,8 @@ public final class ChatsView extends View {
 
     private Text.Builder rowText(String id, RectF bounds, float size, int color,
                                  FontVariation variation) {
-        return new Text.Builder(getContext(), id, "", bounds).setFont(NativeFonts.INTER)
-                .setFontVariations(variation).setTextSizePx(size).setTextColor(color)
+        return new Text.Builder(getContext(), id, "", bounds).setFont(ListFonts.inter(getContext(), variation))
+                .clearFontVariations().setTextSizePx(size).setTextColor(color)
                 .setVerticalAlignment(Text.VerticalAlignment.CENTER).setWrapEnabled(false)
                 .setMaxLines(1);
     }
@@ -1335,8 +1450,7 @@ public final class ChatsView extends View {
         Bitmap avatar = ProfileBitmapCache.get().request(path, chat.getContactName(), size,
                 ACCENT, () -> {
                     if (released) return;
-                    int position = adapter.indexOfChat(chat.getChatId());
-                    if (position >= 0) adapter.notifyItemChanged(position);
+                    adapter.applyLoadedAvatar(chat.getChatId(), path, size);
                 });
         item.find("avatar", Image.class).setBitmap(avatar);
         logAvatarBind(started, path == null || path.trim().isEmpty()
@@ -1428,34 +1542,6 @@ public final class ChatsView extends View {
         return chat.getUnreadCount() > 99 ? "99+" : String.valueOf(chat.getUnreadCount());
     }
 
-    private List<Chat> toChats(List<ChatEntity> entities) {
-        List<Chat> chats = new ArrayList<>();
-        if (entities == null) return chats;
-        for (ChatEntity entity : entities) {
-            String name = entity.isGroup
-                    ? (entity.contactName == null || entity.contactName.trim().isEmpty()
-                        ? "Group" : entity.contactName.trim())
-                    : DeviceContactResolver.cachedNameOrPhone(entity.otherUserId);
-            String path = entity.localProfilePhotoPath == null
-                    || entity.localProfilePhotoPath.isEmpty()
-                    ? (entity.isGroup ? null
-                        : ChatProfilePhotoStore.getLocalPath(getContext(), entity.otherUserId))
-                    : entity.localProfilePhotoPath;
-            Chat chat = new Chat(entity.chatId, name, entity.profilePhotoUrl, path,
-                    homeMessagePreview(entity), entity.lastMessageTime,
-                    normalizeId(entity.lastMessageSenderId).equals(currentPhoneNumber()),
-                    entity.lastMessageDeliveredTime, entity.lastMessageReadTime,
-                    entity.lastMessageStatus,
-                    entity.lastMessageType, entity.lastMessageAttachmentName,
-                    entity.unreadCount,
-                    entity.pinned, entity.notificationMuted, entity.archived,
-                    entity.isOnline, entity.lastSeen);
-            chat.setLastCallParticipantIdsJson(entity.lastCallParticipantIdsJson);
-            chats.add(chat);
-        }
-        return chats;
-    }
-
     private String conferenceParticipantNames(Chat chat) {
         if (chat == null || chat.getChatId().startsWith("grp_")) return "";
         String json = chat.getLastCallParticipantIdsJson();
@@ -1475,25 +1561,6 @@ public final class ChatsView extends View {
         } catch (RuntimeException ignored) {
             return "";
         }
-    }
-
-    private String homeMessagePreview(ChatEntity entity) {
-        String text = entity.lastMessage;
-        if (text == null) return null;
-        String type = entity.lastMessageType == null ? "" : entity.lastMessageType;
-        String action = "chat_report".equalsIgnoreCase(type) ? "reported"
-                : "chat_block".equalsIgnoreCase(type) ? "blocked"
-                : "chat_unblock".equalsIgnoreCase(type) ? "unblocked" : "";
-        if (action.isEmpty()) return text;
-        String ownNumber = currentPhoneNumber();
-        String normalizedText = text.trim();
-        String[] participants = normalizedText.split(" " + action + " ", 2);
-        if (!ownNumber.isEmpty() && participants.length == 2) return
-                (ownNumber.equals(normalizeId(participants[0])) ? "You" : participants[0])
-                        + " " + action + " "
-                        + (ownNumber.equals(normalizeId(participants[1]))
-                        ? "You" : participants[1]);
-        return normalizedText;
     }
 
     private String currentPhoneNumber() {

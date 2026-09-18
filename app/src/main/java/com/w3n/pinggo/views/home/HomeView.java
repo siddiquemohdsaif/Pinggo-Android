@@ -84,6 +84,8 @@ public final class HomeView extends ZLayerViewGroup {
     private Button overflow;
     private Image overflowDots;
     private Button action;
+    private final RectF actionBounds = new RectF();
+    private boolean actionTouchActive;
     private int topInset;
     private int bottomInset;
     private boolean showingChats = true;
@@ -156,6 +158,9 @@ public final class HomeView extends ZLayerViewGroup {
     }
     public void setCallsPaginationLoading(boolean loading) {
         callsView.setPaginationLoading(loading);
+    }
+    public void setCallsCanLoadMore(boolean canLoadMore) {
+        callsView.setCanLoadMore(canLoadMore);
     }
     public void setChatTyping(String chatId, boolean typing) {
         chatsView.setTyping(chatId, typing);
@@ -277,8 +282,9 @@ public final class HomeView extends ZLayerViewGroup {
                     return actionId == EditorInfo.IME_ACTION_DONE;
                 }));
 
+        actionBounds.set(width - px(429f), navTop - px(198f), width - px(55f), navTop - px(44f));
         action = addButton(contentLayer, "action", accentBitmap, getString(R.string.new_chat),
-                new RectF(width - px(429f), navTop - px(198f), width - px(55f), navTop - px(44f)),
+                actionBounds,
                 Color.WHITE, px(49.5f), id -> {
                     if (showingChats) listener.onNewChat(); else listener.onMakeCall();
                 });
@@ -463,7 +469,24 @@ public final class HomeView extends ZLayerViewGroup {
         super.dispatchDraw(canvas);
         contentLayer.draw(canvas);
     }
+    @Override public boolean onInterceptTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            actionTouchActive = !showingChats && !showingMeet && action != null
+                    && actionBounds.contains(event.getX(), event.getY());
+        }
+        // The floating component is drawn over child views, so it must own
+        // gestures that begin on it before the Calls list receives them.
+        return actionTouchActive || super.onInterceptTouchEvent(event);
+    }
     @Override public boolean onTouchEvent(MotionEvent event) {
+        if (actionTouchActive) {
+            layers.onTouchEvent(event);
+            if (event.getActionMasked() == MotionEvent.ACTION_UP
+                    || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                actionTouchActive = false;
+            }
+            return true;
+        }
         return layers.onTouchEvent(event) || super.onTouchEvent(event);
     }
     @Override public boolean onCheckIsTextEditor() { return layers.onCheckIsTextEditor(); }

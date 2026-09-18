@@ -27,7 +27,6 @@ import com.w3n.pinggo.linkeddevice.LinkedDeviceAccountSwitchGuard;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.views.common.BlockingProgressView;
 import com.w3n.pinggo.views.linkeddevice.NativeLinkedDevicesView;
-import com.w3n.pinggo.notification.FcmTokenManager;
 
 import java.text.DateFormat;
 import java.util.ArrayList;
@@ -154,18 +153,7 @@ public final class LinkedDevicesActivity extends AppCompatActivity {
     }
 
     private void registerAndLoad() {
-        JsonObject body = new JsonObject();
-        body.addProperty("deviceId", currentDeviceId);
-        body.addProperty("name", DeviceIdentityManager.getDeviceName());
-        body.addProperty("platform", "android");
-        String fcmToken = FcmTokenManager.getSavedToken(this);
-        if (!fcmToken.isEmpty()) body.addProperty("fcmToken", fcmToken);
-        api.registerLinkedDevice(body).enqueue(new Callback<JsonObject>() {
-            @Override public void onResponse(@NonNull Call<JsonObject> call,
-                    @NonNull Response<JsonObject> response) { load(); }
-            @Override public void onFailure(@NonNull Call<JsonObject> call,
-                    @NonNull Throwable error) { load(); }
-        });
+        load();
     }
 
     private void load() {

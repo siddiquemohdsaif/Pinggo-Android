@@ -21,6 +21,8 @@ public class LoginStateManager {
     private static String UID = null;
     private static String ENC = null;
     private static String USER_DATA = null;
+    private static String DEVICE_ROLE = null;
+    private static Long LOGIN_AT = null;
     private static UserData userDataModal = null;
     private static LoginStateManager instance;
     private static final Object lock = new Object();
@@ -42,10 +44,7 @@ public class LoginStateManager {
 
 
     public boolean isLoggedIn(Context context){
-        SharedPreferences sharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        String UID = sharedPreferences.getString(PREF_UID, null);
-        String ENC = sharedPreferences.getString(PREF_ENC, null);
-        return UID != null && ENC != null;
+        return getUID(context) != null && getENC(context) != null;
     }
 
 
@@ -127,6 +126,9 @@ public class LoginStateManager {
         LoginStateManager.ENC = ENC;
         LoginStateManager.USER_DATA = userDataJson;
         LoginStateManager.userDataModal = userData;
+        LoginStateManager.DEVICE_ROLE = ROLE_COMPANION.equals(deviceRole)
+                ? ROLE_COMPANION : ROLE_PRIMARY;
+        if (refreshLoginTime) LoginStateManager.LOGIN_AT = System.currentTimeMillis();
     }
 
 
@@ -144,6 +146,8 @@ public class LoginStateManager {
         ENC = null;
         USER_DATA = null;
         userDataModal = null;
+        DEVICE_ROLE = null;
+        LOGIN_AT = null;
     }
 
     public String getUID(Context context) {
@@ -172,8 +176,11 @@ public class LoginStateManager {
     }
 
     public String getDeviceRole(Context context) {
-        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .getString(PREF_DEVICE_ROLE, ROLE_PRIMARY);
+        if (DEVICE_ROLE == null) {
+            DEVICE_ROLE = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .getString(PREF_DEVICE_ROLE, ROLE_PRIMARY);
+        }
+        return DEVICE_ROLE;
     }
 
     public boolean isCompanionDevice(Context context) {
@@ -181,8 +188,11 @@ public class LoginStateManager {
     }
 
     public long getLoginAt(Context context) {
-        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .getLong(PREF_LOGIN_AT, 0L);
+        if (LOGIN_AT == null) {
+            LOGIN_AT = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .getLong(PREF_LOGIN_AT, 0L);
+        }
+        return LOGIN_AT;
     }
 
     public UserData getUserDataModal(Context context) {

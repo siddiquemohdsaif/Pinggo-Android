@@ -3,6 +3,7 @@ package com.w3n.pinggo.activity;
 import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -42,6 +43,7 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.call.ActiveCallRegistry;
 import com.w3n.pinggo.call.PingGoLiveKitAudio;
+import com.w3n.pinggo.call.CallPictureInPicture;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.data.repository.ChatRepository;
@@ -75,7 +77,7 @@ import kotlin.coroutines.intrinsics.IntrinsicsKt;
 /** Java-only LiveKit call screen for direct and group voice/video calls. */
 public final class LiveKitCallActivity extends AppCompatActivity
     implements ChatRepository.CallEventListener, VoiceActiveCallView.Listener,
-    VideoActiveCallView.Listener {
+    VideoActiveCallView.Listener, ActiveCallRegistry.PictureInPictureHangupListener {
   private static final String TAG = "PingGoLiveKit";
   private static final String WAITING_TILE_KEY = "__waiting_participant__";
   private static final long UNANSWERED_TIMEOUT_MS = 50000L;
@@ -92,12 +94,31 @@ public final class LiveKitCallActivity extends AppCompatActivity
   private Room room;
   private GridLayout grid;
   private FrameLayout videoRoot;
+  private ParticipantTile pipLocalTile;
   private RenderedTrack localRenderer;
   private VoiceActiveCallView voiceView;
   private VideoActiveCallView videoView;
   private AudioManager audioManager;
   private boolean connected, muted, cameraEnabled = true, speakerOn, destroyed, ending;
+  private boolean pipEligible;
+  private boolean pipLayoutActive;
+  private boolean pipLayoutUpdatePosted;
+  private boolean pipSessionActive;
+  private boolean pipActivityStopped;
+  private boolean pipDismissalHandled;
+  private int pipExitCheckAttempts;
+  private boolean suppressNextUserLeaveHint;
+  private boolean conferenceInvitePending;
+  private boolean conferenceInviteCreated;
+  private boolean tokenRequestStarted;
   private boolean microphoneChangePending, cameraChangePending;
+  private final com.w3n.pinggo.call.LatestMediaState micState =
+      new com.w3n.pinggo.call.LatestMediaState(false);
+  private final com.w3n.pinggo.call.LatestMediaState cameraState =
+      new com.w3n.pinggo.call.LatestMediaState(true);
+  private com.w3n.pinggo.call.LatestMediaState speakerState;
+  private final java.util.concurrent.ExecutorService mediaExecutor =
+      java.util.concurrent.Executors.newSingleThreadExecutor();
   private boolean conference, everHadRemoteParticipant;
   private long timerStartedAt;
   private final Runnable unansweredTimeout = () -> {
@@ -105,6 +126,7 @@ public final class LiveKitCallActivity extends AppCompatActivity
     Log.i(TAG, "unanswered_timeout_finish callId=" + callId());
     com.w3n.pinggo.notification.PingGoNotificationManager.clearCallNotification(
         this, callId());
+    ending = true;
     if (!incoming()) sendControl("call_end");
     finish();
   };
@@ -124,6 +146,7 @@ public final class LiveKitCallActivity extends AppCompatActivity
           + " conference=" + conference);
       com.w3n.pinggo.notification.PingGoNotificationManager.clearCallNotification(
           this, callId());
+      ending = true;
       sendControl(conference ? "call_leave" : "call_end");
       finish();
     }
@@ -150,7 +173,7 @@ public final class LiveKitCallActivity extends AppCompatActivity
       new ActivityResultContracts.RequestMultiplePermissions(), grants -> {
         boolean allowed = true;
         for (Boolean grant : grants.values()) allowed &= Boolean.TRUE.equals(grant);
-        if (allowed) authorizeAndConnect();
+        if (allowed) prepareConferenceAndAuthorize();
         else fail("Required call permissions were denied.");
       });
 
@@ -178,10 +201,16 @@ public final class LiveKitCallActivity extends AppCompatActivity
           .markCallNotificationOpened(this, getIntent());
     }
     buildUi();
+    CallPictureInPicture.configure(this, false);
+    getOnBackPressedDispatcher().addCallback(this,
+        new androidx.activity.OnBackPressedCallback(true) {
+          @Override public void handleOnBackPressed() { onBack(); }
+        });
     handler.postDelayed(unansweredTimeout, UNANSWERED_TIMEOUT_MS);
     audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
     speakerOn = isVideo() && applySpeakerRoute(true);
     if (!isVideo()) applySpeakerRoute(false);
+    speakerState = new com.w3n.pinggo.call.LatestMediaState(speakerOn);
     updateAudioState();
     room = LiveKit.INSTANCE.create(
         getApplicationContext(), new RoomOptions(), PingGoLiveKitAudio.createOverrides());
@@ -211,6 +240,10 @@ public final class LiveKitCallActivity extends AppCompatActivity
       videoView.setAddMemberVisible(!chatId().startsWith("grp_"));
       videoView.setCallStatus("Preparing call…");
       videoRoot.addView(videoView, new FrameLayout.LayoutParams(-1, -1));
+      videoRoot.addOnLayoutChangeListener((view, left, top, right, bottom,
+          oldLeft, oldTop, oldRight, oldBottom) -> {
+        if (pipLayoutActive && bottom > top) schedulePictureInPictureLayout();
+      });
       setContentView(videoRoot);
       applySystemBarInsets(videoView);
     } else {
@@ -230,6 +263,10 @@ public final class LiveKitCallActivity extends AppCompatActivity
       voiceView.setAddMemberVisible(!chatId().startsWith("grp_"));
       voiceView.setCallStatus("Preparing call…");
       videoRoot.addView(voiceView, new FrameLayout.LayoutParams(-1, -1));
+      videoRoot.addOnLayoutChangeListener((view, left, top, right, bottom,
+          oldLeft, oldTop, oldRight, oldBottom) -> {
+        if (pipLayoutActive && bottom > top) schedulePictureInPictureLayout();
+      });
       setContentView(videoRoot);
       applySystemBarInsets(voiceView);
     }
@@ -279,11 +316,29 @@ public final class LiveKitCallActivity extends AppCompatActivity
     if (isVideo() && ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
         != PackageManager.PERMISSION_GRANTED) missing.add(Manifest.permission.CAMERA);
     Log.i(TAG, "permission_check callId=" + callId() + " missing=" + missing);
-    if (missing.isEmpty()) authorizeAndConnect();
+    if (missing.isEmpty()) prepareConferenceAndAuthorize();
     else permissionRequest.launch(missing.toArray(new String[0]));
   }
 
+  private void prepareConferenceAndAuthorize() {
+    boolean needsServerConference = conference && !incoming() && !chatId().startsWith("grp_");
+    if (!needsServerConference || conferenceInviteCreated) {
+      authorizeAndConnect();
+      return;
+    }
+    if (conferenceInvitePending) return;
+    conferenceInvitePending = true;
+    setStatus("Starting conference…");
+    Log.i(TAG, "conference_invite_prepare callId=" + callId()
+        + " participants=" + knownParticipantIds.size());
+    sendControl("call_invite");
+  }
+
   private void authorizeAndConnect() {
+    if (tokenRequestStarted) return;
+    tokenRequestStarted = true;
+    pipEligible = true;
+    CallPictureInPicture.configure(this, true);
     setStatus("Authorizing…");
     Log.i(TAG, "token_request callId=" + callId() + " chatId=" + chatId()
         + " media=" + mediaType());
@@ -310,7 +365,8 @@ public final class LiveKitCallActivity extends AppCompatActivity
       Log.i(TAG, "connect_success callId=" + callId());
       setMediaEnabled("setMicrophoneEnabled", true);
       if (isVideo()) setMediaEnabled("setCameraEnabled", true);
-      sendControl(incoming() ? "call_answer" : "call_invite");
+      if (incoming()) sendControl("call_answer");
+      else if (!conferenceInviteCreated) sendControl("call_invite");
       handler.removeCallbacks(unansweredTimeout);
       handler.postDelayed(unansweredTimeout, UNANSWERED_TIMEOUT_MS);
       handler.post(participantSync);
@@ -329,6 +385,11 @@ public final class LiveKitCallActivity extends AppCompatActivity
   }
 
   private void invokeSuspendResult(Object target, String name, Object[] arguments,
+      Consumer<Object> success, Consumer<Throwable> failure) {
+    mediaExecutor.execute(() -> invokeSuspendOnWorker(target, name, arguments, success, failure));
+  }
+
+  private void invokeSuspendOnWorker(Object target, String name, Object[] arguments,
       Consumer<Object> success, Consumer<Throwable> failure) {
     try {
       Method selected = null;
@@ -349,17 +410,17 @@ public final class LiveKitCallActivity extends AppCompatActivity
         @Override public void resumeWith(Object result) {
           try {
             ResultKt.throwOnFailure(result);
-            runOnUiThread(() -> success.accept(result));
+            runOnUiThread(() -> { if (!destroyed && !ending) success.accept(result); });
           }
-          catch (Throwable error) { runOnUiThread(() -> failure.accept(error)); }
+          catch (Throwable error) { runOnUiThread(() -> { if (!destroyed && !ending) failure.accept(error); }); }
         }
       };
       Object result = selected.invoke(target, values);
       if (result != IntrinsicsKt.getCOROUTINE_SUSPENDED())
-        runOnUiThread(() -> success.accept(result));
+        runOnUiThread(() -> { if (!destroyed && !ending) success.accept(result); });
     } catch (Throwable error) {
       Log.e(TAG, "suspend_call_failed callId=" + callId() + " method=" + name, error);
-      runOnUiThread(() -> failure.accept(error));
+      runOnUiThread(() -> { if (!destroyed && !ending) failure.accept(error); });
     }
   }
 
@@ -404,12 +465,13 @@ public final class LiveKitCallActivity extends AppCompatActivity
     room.initVideoRenderer(renderer);
     renderer.setZOrderMediaOverlay(true);
     track.addRenderer(renderer);
-    int width = dp(112), height = dp(154);
-    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(width, height,
-        Gravity.TOP | Gravity.END);
-    params.topMargin = dp(92);
-    params.rightMargin = dp(16);
-    videoRoot.addView(renderer, Math.max(1, videoRoot.indexOfChild(videoView)), params);
+    if (pipLayoutActive) {
+      ensurePipLocalTile();
+      pipLocalTile.addView(renderer, 0, new FrameLayout.LayoutParams(-1, -1));
+    } else {
+      FrameLayout.LayoutParams params = localVideoLayoutParams();
+      videoRoot.addView(renderer, Math.max(1, videoRoot.indexOfChild(videoView)), params);
+    }
     localRenderer = new RenderedTrack(track, renderer);
     Log.i(TAG, "local_video_attached callId=" + callId());
   }
@@ -456,7 +518,19 @@ public final class LiveKitCallActivity extends AppCompatActivity
       }
       ensureParticipantTile(key, normalizedIdentity);
       TrackPublication publication = participant.getTrackPublication(Track.Source.CAMERA);
-      if (publication != null && publication.getTrack() instanceof VideoTrack)
+      TrackPublication microphone = participant.getTrackPublication(Track.Source.MICROPHONE);
+      boolean peerMicOff = microphone == null || microphone.getMuted();
+      boolean peerCameraOff = isVideo() && (publication == null || publication.getMuted());
+      ParticipantTile peerTile = participantTiles.get(key);
+      if (peerTile != null) peerTile.setMediaState(peerMicOff, peerCameraOff);
+      if (!conference && remoteCount == 1) {
+        if (voiceView != null) voiceView.setRemoteMuted(peerMicOff);
+        if (videoView != null) {
+          videoView.setRemoteMuted(peerMicOff);
+          videoView.setRemoteCameraEnabled(!peerCameraOff);
+        }
+      }
+      if (publication != null && !publication.getMuted() && publication.getTrack() instanceof VideoTrack)
         attachVideo(key, (VideoTrack) publication.getTrack());
       else detachVideoTrack(key);
     }
@@ -468,12 +542,7 @@ public final class LiveKitCallActivity extends AppCompatActivity
         removeParticipantTile(key);
       }
     }
-    // Rebind the entire grid on every room snapshot. This refreshes existing tiles
-    // as well as newly joined/removed participants across all call members.
-    updateRemoteVideoLayout();
-    for (ParticipantTile tile : participantTiles.values()) tile.invalidate();
-    grid.requestLayout();
-    grid.invalidate();
+    // Add/remove paths update layout; unchanged polling snapshots do not.
     List<String> participantNames = new ArrayList<>();
     String ownId = normalizedParticipantId(LoginStateManager.getInstance().getUID(this));
     for (String participantId : knownParticipantIds) {
@@ -511,6 +580,7 @@ public final class LiveKitCallActivity extends AppCompatActivity
         normalizedParticipantId(value(VoiceCallActivity.EXTRA_CALLER_ID)))
         ? value(VoiceCallActivity.EXTRA_PROFILE_PATH) : null;
     ParticipantTile tile = new ParticipantTile(this, identity, preferredProfilePath);
+    if (pipLayoutActive) tile.setCompact(true);
     participantTiles.put(key, tile);
     enableVideoTileDragging(tile);
     grid.addView(tile);
@@ -562,11 +632,19 @@ public final class LiveKitCallActivity extends AppCompatActivity
     if (count == 0) return;
     int columns = count <= 2 ? 1 : 2;
     int rows = count == 1 ? 1 : count == 2 ? 2 : (count + 1) / 2;
-    // Expand first so new child specs are valid; shrinking happens after specs change.
-    if (columns > grid.getColumnCount()) grid.setColumnCount(columns);
-    if (rows > grid.getRowCount()) grid.setRowCount(rows);
-    int screenWidth = getResources().getDisplayMetrics().widthPixels;
-    int screenHeight = getResources().getDisplayMetrics().heightPixels;
+    // Android can infer a larger getRowCount() from an auto-positioned new child while
+    // retaining a smaller explicit row count internally. Re-assert generous explicit
+    // bounds before assigning any child specs, then shrink after every child is valid.
+    int safeColumns = Math.max(columns, Math.max(count, grid.getColumnCount()));
+    int safeRows = Math.max(rows, Math.max(count, grid.getRowCount()));
+    grid.setColumnCount(safeColumns);
+    grid.setRowCount(safeRows);
+    int screenWidth = grid.getWidth() > 0 ? grid.getWidth()
+        : videoRoot != null && videoRoot.getWidth() > 0 ? videoRoot.getWidth()
+        : getResources().getDisplayMetrics().widthPixels;
+    int screenHeight = grid.getHeight() > 0 ? grid.getHeight()
+        : videoRoot != null && videoRoot.getHeight() > 0 ? videoRoot.getHeight()
+        : getResources().getDisplayMetrics().heightPixels;
     for (int index = 0; index < count; index++) {
       boolean lastWide = columns == 2 && count % 2 == 1 && index == count - 1;
       int row = columns == 1 ? index : index / 2;
@@ -661,10 +739,102 @@ public final class LiveKitCallActivity extends AppCompatActivity
     view.setElevation(0f);
   }
 
+  /** PiP puts every remote participant and the local user into one adaptive grid. */
+  private void applyPictureInPictureLayout(boolean pip) {
+    if (videoRoot == null || grid == null) return;
+    pipLayoutActive = pip;
+    if (videoView != null) videoView.setVisibility(pip ? View.GONE : View.VISIBLE);
+    if (voiceView != null) voiceView.setPictureInPictureMode(pip, true);
+    int match = FrameLayout.LayoutParams.MATCH_PARENT;
+    if (pip) {
+      grid.setLayoutParams(new FrameLayout.LayoutParams(match, match));
+      ensurePipLocalTile();
+      for (ParticipantTile tile : participantTiles.values()) tile.setCompact(true);
+      pipLocalTile.setCompact(true);
+      moveLocalRenderer(pipLocalTile, new FrameLayout.LayoutParams(match, match));
+    } else {
+      removePipLocalTile();
+      for (ParticipantTile tile : participantTiles.values()) tile.setCompact(false);
+      grid.setLayoutParams(new FrameLayout.LayoutParams(match, match));
+      if (localRenderer != null)
+        moveLocalRenderer(videoRoot, localVideoLayoutParams(),
+            Math.max(1, videoRoot.indexOfChild(videoView)));
+    }
+    if (videoView != null && !pip) videoView.bringToFront();
+    schedulePictureInPictureLayout();
+  }
+
+  private void schedulePictureInPictureLayout() {
+    if (videoRoot == null || pipLayoutUpdatePosted) return;
+    pipLayoutUpdatePosted = true;
+    videoRoot.post(() -> {
+      pipLayoutUpdatePosted = false;
+      if (destroyed) return;
+      if (pipLayoutActive) {
+        int height = Math.max(1, videoRoot.getHeight());
+        ViewGroup.LayoutParams current = grid.getLayoutParams();
+        if (current == null || current.width != FrameLayout.LayoutParams.MATCH_PARENT
+            || current.height != height) {
+          grid.setLayoutParams(new FrameLayout.LayoutParams(
+              FrameLayout.LayoutParams.MATCH_PARENT, height, Gravity.TOP));
+        }
+      }
+      updateRemoteVideoLayout();
+    });
+  }
+
+  private void ensurePipLocalTile() {
+    if (pipLocalTile == null) {
+      String ownId = LoginStateManager.getInstance().getUID(this);
+      pipLocalTile = new ParticipantTile(this, ownId, null, false);
+      pipLocalTile.name.setText("You");
+    }
+    if (pipLocalTile.getParent() != grid) {
+      if (pipLocalTile.getParent() instanceof ViewGroup)
+        ((ViewGroup) pipLocalTile.getParent()).removeView(pipLocalTile);
+      grid.addView(pipLocalTile);
+    }
+  }
+
+  private void removePipLocalTile() {
+    if (pipLocalTile == null) return;
+    if (localRenderer != null && localRenderer.renderer.getParent() == pipLocalTile)
+      pipLocalTile.removeView(localRenderer.renderer);
+    if (pipLocalTile.getParent() instanceof ViewGroup)
+      ((ViewGroup) pipLocalTile.getParent()).removeView(pipLocalTile);
+    pipLocalTile.release();
+    pipLocalTile = null;
+  }
+
+  private void moveLocalRenderer(ViewGroup destination, FrameLayout.LayoutParams params) {
+    moveLocalRenderer(destination, params, -1);
+  }
+
+  private void moveLocalRenderer(ViewGroup destination, FrameLayout.LayoutParams params, int index) {
+    if (localRenderer == null || destination == null) return;
+    SurfaceViewRenderer renderer = localRenderer.renderer;
+    if (renderer.getParent() instanceof ViewGroup)
+      ((ViewGroup) renderer.getParent()).removeView(renderer);
+    if (index >= 0) destination.addView(renderer, Math.min(index, destination.getChildCount()), params);
+    else destination.addView(renderer, 0, params);
+    if (destination == pipLocalTile) pipLocalTile.name.bringToFront();
+    renderer.bringToFront();
+    if (destination == pipLocalTile) pipLocalTile.name.bringToFront();
+  }
+
+  private FrameLayout.LayoutParams localVideoLayoutParams() {
+    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(112), dp(154),
+        Gravity.TOP | Gravity.END);
+    params.topMargin = dp(92);
+    params.rightMargin = dp(16);
+    return params;
+  }
+
   private void detachLocalVideo() {
     if (localRenderer == null) return;
     localRenderer.track.removeRenderer(localRenderer.renderer);
-    if (videoRoot != null) videoRoot.removeView(localRenderer.renderer);
+    if (localRenderer.renderer.getParent() instanceof ViewGroup)
+      ((ViewGroup) localRenderer.renderer.getParent()).removeView(localRenderer.renderer);
     localRenderer.renderer.release();
     localRenderer = null;
   }
@@ -677,23 +847,32 @@ public final class LiveKitCallActivity extends AppCompatActivity
           + " control=mute reason=not_connected");
       return;
     }
-    if (microphoneChangePending) {
-      Log.w(TAG, "control_ignored callId=" + callId()
-          + " control=mute reason=change_pending");
-      return;
-    }
-    final boolean targetMuted = !muted;
+    muted = micState.toggle();
+    updateAudioState();
+    applyRequestedMute();
+  }
+
+  private void applyRequestedMute() {
+    if (destroyed || ending || !micState.needsApply()) return;
+    final boolean targetMuted = micState.begin();
     microphoneChangePending = true;
     Log.i(TAG, "control_started callId=" + callId()
         + " control=mute requestedMuted=" + targetMuted);
     setMediaEnabled("setMicrophoneEnabled", !targetMuted, () -> {
       microphoneChangePending = false;
-      muted = targetMuted;
+      micState.complete(true);
+      muted = micState.desired();
       updateAudioState();
+      sendLocalMediaState();
       Log.i(TAG, "control_completed callId=" + callId()
           + " control=mute muted=" + muted);
+      applyRequestedMute();
     }, () -> {
       microphoneChangePending = false;
+      micState.complete(false);
+      muted = micState.desired();
+      updateAudioState();
+      applyRequestedMute();
       Log.e(TAG, "control_failed callId=" + callId()
           + " control=mute requestedMuted=" + targetMuted);
     });
@@ -708,23 +887,32 @@ public final class LiveKitCallActivity extends AppCompatActivity
           + " control=camera reason=" + (!connected ? "not_connected" : "not_video_call"));
       return;
     }
-    if (cameraChangePending) {
-      Log.w(TAG, "control_ignored callId=" + callId()
-          + " control=camera reason=change_pending");
-      return;
-    }
-    final boolean targetEnabled = !cameraEnabled;
+    cameraEnabled = cameraState.toggle();
+    if (videoView != null) videoView.setCameraEnabled(cameraEnabled);
+    applyRequestedCamera();
+  }
+
+  private void applyRequestedCamera() {
+    if (destroyed || ending || !cameraState.needsApply()) return;
+    final boolean targetEnabled = cameraState.begin();
     cameraChangePending = true;
     Log.i(TAG, "control_started callId=" + callId()
         + " control=camera requestedEnabled=" + targetEnabled);
     setMediaEnabled("setCameraEnabled", targetEnabled, () -> {
       cameraChangePending = false;
-      cameraEnabled = targetEnabled;
+      cameraState.complete(true);
+      sendLocalMediaState();
+      cameraEnabled = cameraState.desired();
       if (videoView != null) videoView.setCameraEnabled(cameraEnabled);
       Log.i(TAG, "control_completed callId=" + callId()
           + " control=camera enabled=" + cameraEnabled);
+      applyRequestedCamera();
     }, () -> {
       cameraChangePending = false;
+      cameraState.complete(false);
+      cameraEnabled = cameraState.desired();
+      if (videoView != null) videoView.setCameraEnabled(cameraEnabled);
+      applyRequestedCamera();
       Log.e(TAG, "control_failed callId=" + callId()
           + " control=camera requestedEnabled=" + targetEnabled);
     });
@@ -745,7 +933,27 @@ public final class LiveKitCallActivity extends AppCompatActivity
     event.addProperty("senderId", LoginStateManager.getInstance().getUID(this));
     event.addProperty("receiverId", value(VoiceCallActivity.EXTRA_CALLER_ID));
     event.addProperty("mediaType", mediaType());
+    if (conference) {
+      event.addProperty("conference", true);
+      event.addProperty("callMode", "group");
+      com.google.gson.JsonArray participants = new com.google.gson.JsonArray();
+      String ownId = normalizedParticipantId(LoginStateManager.getInstance().getUID(this));
+      if (!ownId.isEmpty()) participants.add(ownId);
+      for (String participantId : knownParticipantIds) {
+        String normalizedId = normalizedParticipantId(participantId);
+        if (!normalizedId.isEmpty() && !normalizedId.equals(ownId)) participants.add(normalizedId);
+      }
+      event.add("participantIds", participants);
+    }
     return event;
+  }
+
+  // Extend the existing authenticated realtime relay, rather than an HTTP webhook.
+  private void sendLocalMediaState() {
+    JsonObject event = baseControl("call_mute");
+    event.addProperty("muted", micState.applied());
+    event.addProperty("cameraEnabled", isVideo() && cameraState.applied());
+    ChatRepository.getInstance(this).sendCallEvent(event);
   }
 
   private void setStatus(String value) {
@@ -755,6 +963,7 @@ public final class LiveKitCallActivity extends AppCompatActivity
 
   private void setConnected(boolean value) {
     connected = value;
+    ActiveCallRegistry.getInstance().setConnected(this, value);
     if (voiceView != null) voiceView.setCallConnected(value);
     if (videoView != null) videoView.setCallConnected(value);
   }
@@ -766,8 +975,99 @@ public final class LiveKitCallActivity extends AppCompatActivity
 
   @Override public void onBack() {
     Log.i(TAG, "control_click callId=" + callId() + " control=back");
+    if (pipEligible && CallPictureInPicture.enter(this)) {
+      Log.i(TAG, "control_completed callId=" + callId() + " control=back action=pip");
+      return;
+    }
     finish();
     Log.i(TAG, "control_completed callId=" + callId() + " control=back action=finish");
+  }
+
+  @Override protected void onUserLeaveHint() {
+    super.onUserLeaveHint();
+    if (suppressNextUserLeaveHint) {
+      suppressNextUserLeaveHint = false;
+      return;
+    }
+    if (pipEligible) CallPictureInPicture.enter(this);
+  }
+
+  @Override public void onPictureInPictureModeChanged(boolean inPictureInPictureMode,
+      @androidx.annotation.NonNull Configuration newConfig) {
+    super.onPictureInPictureModeChanged(inPictureInPictureMode, newConfig);
+    Log.i("PingGoDisconnectHook", "stage=pip_mode_changed engine=livekit media="
+        + mediaType() + " callId=" + callId() + " inPip=" + inPictureInPictureMode);
+    if (inPictureInPictureMode) {
+      pipSessionActive = true;
+      pipActivityStopped = false;
+      pipExitCheckAttempts = 0;
+    } else {
+      pipExitCheckAttempts = 0;
+      if (pipSessionActive && pipActivityStopped && !hasWindowFocus()) {
+        Log.i("PingGoDisconnectHook", "stage=pip_exit_direct engine=livekit media="
+            + mediaType() + " callId=" + callId() + " trigger=mode_changed");
+        if (signalPipDismissal("mode_changed_direct") && !isFinishing()) finish();
+      } else {
+        schedulePipExitCheck("mode_changed");
+      }
+    }
+    if (inPictureInPictureMode) applyPictureInPictureLayout(true);
+  }
+
+  @Override protected void onResume() {
+    super.onResume();
+    pipActivityStopped = false;
+    // Expanding PiP resumes this activity. PiP dismissal goes directly through
+    // stop/destroy, leaving this flag set so destruction can signal a hang-up.
+    if (!CallPictureInPicture.isActive(this)) {
+      pipSessionActive = false;
+      pipExitCheckAttempts = 0;
+      applyPictureInPictureLayout(false);
+    }
+  }
+
+  @Override protected void onStop() {
+    super.onStop();
+    if (!pipSessionActive) return;
+    pipActivityStopped = true;
+    boolean stillInPip = CallPictureInPicture.isActive(this);
+    Log.i("PingGoDisconnectHook", "stage=pip_on_stop engine=livekit media="
+        + mediaType() + " callId=" + callId() + " stillInPip=" + stillInPip);
+    // Some Android variants, including MIUI, dismiss PiP without destroying the activity.
+    schedulePipExitCheck("on_stop");
+  }
+
+  private void schedulePipExitCheck(String trigger) {
+    if (!pipSessionActive || ending
+        || pipExitCheckAttempts >= CallPictureInPicture.DISMISS_CONFIRMATION_MAX_ATTEMPTS) return;
+    int attempt = ++pipExitCheckAttempts;
+    handler.postDelayed(() -> {
+      if (!pipSessionActive || ending) return;
+      boolean inPip = CallPictureInPicture.isActive(this);
+      Log.i("PingGoDisconnectHook", "stage=pip_exit_check engine=livekit media="
+          + mediaType() + " callId=" + callId() + " trigger=" + trigger
+          + " attempt=" + attempt + " inPip=" + inPip + " focus=" + hasWindowFocus());
+      if (!inPip) {
+        if (signalPipDismissal("exit_check") && !isFinishing()) finish();
+      } else {
+        schedulePipExitCheck(trigger);
+      }
+    }, CallPictureInPicture.DISMISS_CONFIRMATION_MS);
+  }
+
+  private boolean signalPipDismissal(String lifecycle) {
+    if (!pipSessionActive || ending) return false;
+    ending = true;
+    pipSessionActive = false;
+    pipDismissalHandled = true;
+    String signal = conference ? "call_leave" : "call_end";
+    Log.i(TAG, "pip_dismissed callId=" + callId() + " signal=" + signal
+        + " lifecycle=" + lifecycle);
+    Log.i("PingGoDisconnectHook", "stage=pip_dismissed engine=livekit media="
+        + mediaType() + " callId=" + callId() + " signal=" + signal
+        + " lifecycle=" + lifecycle);
+    sendControl(signal);
+    return true;
   }
 
   @Override public void onAccept() {
@@ -792,28 +1092,50 @@ public final class LiveKitCallActivity extends AppCompatActivity
   }
 
   @Override public void onSpeaker() {
-    boolean requested = !speakerOn;
-    Log.i(TAG, "control_click callId=" + callId()
-        + " control=speaker requestedEnabled=" + requested);
-    if (!applySpeakerRoute(requested)) {
-      Log.e(TAG, "control_failed callId=" + callId()
-          + " control=speaker requestedEnabled=" + requested);
-      Toast.makeText(this, "Unable to change audio output.", Toast.LENGTH_SHORT).show();
-      return;
-    }
-    speakerOn = requested;
+    if (destroyed || ending || speakerState == null) return;
+    speakerOn = speakerState.toggle();
     updateAudioState();
-    Log.i(TAG, "control_completed callId=" + callId()
-        + " control=speaker enabled=" + speakerOn);
+    applyRequestedSpeaker();
+  }
+
+  private void applyRequestedSpeaker() {
+    if (destroyed || ending || !speakerState.needsApply()) return;
+    boolean requested = speakerState.begin();
+    mediaExecutor.execute(() -> {
+      boolean success;
+      try { success = applySpeakerRoute(requested); }
+      catch (RuntimeException error) { success = false; }
+      final boolean applied = success;
+      runOnUiThread(() -> {
+        if (destroyed || ending) return;
+        speakerState.complete(applied);
+        speakerOn = speakerState.desired();
+        updateAudioState();
+        Log.i(TAG, "control_completed callId=" + callId()
+            + " control=speaker enabled=" + speakerOn + " success=" + applied);
+        if (!applied) Toast.makeText(this, "Unable to change audio output.", Toast.LENGTH_SHORT).show();
+        applyRequestedSpeaker();
+      });
+    });
   }
 
   @Override public void onMute() { toggleMute(); }
   @Override public void onEnd() { hangup(); }
+  @Override public void onPictureInPictureHangup() {
+    Log.i("PingGoDisconnectHook", "stage=pip_hangup_action engine=livekit media="
+        + mediaType() + " callId=" + callId());
+    if (signalPipDismissal("pip_action") && !isFinishing()) {
+      finish();
+      return;
+    }
+    hangup();
+  }
   @Override public void onCamera() { toggleCamera(); }
 
   @Override public void onFlipCamera() {
     Log.i(TAG, "control_click callId=" + callId()
         + " control=flip_camera enabled=" + cameraEnabled);
+    mediaExecutor.execute(() -> {
     try {
       TrackPublication publication = room.getLocalParticipant()
           .getTrackPublication(Track.Source.CAMERA);
@@ -832,8 +1154,10 @@ public final class LiveKitCallActivity extends AppCompatActivity
           + " control=flip_camera position=" + target);
     } catch (Throwable error) {
       Log.e(TAG, "control_failed callId=" + callId() + " control=flip_camera", error);
-      Toast.makeText(this, "Unable to switch camera.", Toast.LENGTH_SHORT).show();
+      runOnUiThread(() -> { if (!destroyed)
+        Toast.makeText(this, "Unable to switch camera.", Toast.LENGTH_SHORT).show(); });
     }
+    });
   }
 
   private boolean applySpeakerRoute(boolean enabled) {
@@ -882,6 +1206,7 @@ public final class LiveKitCallActivity extends AppCompatActivity
         .putStringArrayListExtra(NewChatActivity.EXTRA_EXCLUDED_MEMBER_IDS, excluded);
     Log.i(TAG, "member_picker_open callId=" + callId()
         + " excludedParticipants=" + excluded.size());
+    suppressNextUserLeaveHint = true;
     memberPicker.launch(intent);
     Log.i(TAG, "control_completed callId=" + callId()
         + " control=add_member action=member_picker_opened");
@@ -906,14 +1231,37 @@ public final class LiveKitCallActivity extends AppCompatActivity
     String type = JsonParserUtil.getString(event, "type");
     Log.i(TAG, "signal_receive callId=" + callId() + " type=" + type);
     runOnUiThread(() -> {
+      if ("call_invite_ack".equals(type) && conferenceInvitePending) {
+        conferenceInvitePending = false;
+        conferenceInviteCreated = true;
+        Log.i(TAG, "conference_invite_ready callId=" + callId());
+        authorizeAndConnect();
+        return;
+      }
+      if ("call_failed".equals(type) && conferenceInvitePending) {
+        conferenceInvitePending = false;
+        fail(JsonParserUtil.getString(event, "message"));
+        return;
+      }
       if (type.endsWith("_ack") && "ended".equals(
           JsonParserUtil.getString(event, "state"))) {
+        ending = true;
         com.w3n.pinggo.notification.PingGoNotificationManager.clearCallNotification(
             this, callId());
         finish();
         return;
       }
-      if ("call_ringing".equals(type)) setStatus("Ringing…");
+      if ("call_mute".equals(type) && event.has("muted")) {
+        boolean peerMuted = event.get("muted").getAsBoolean();
+        if (!conference) {
+          if (voiceView != null) voiceView.setRemoteMuted(peerMuted);
+          if (videoView != null) videoView.setRemoteMuted(peerMuted);
+          if (videoView != null && event.has("cameraEnabled"))
+            videoView.setRemoteCameraEnabled(event.get("cameraEnabled").getAsBoolean());
+        }
+        refreshParticipantTiles("peer_mute");
+      }
+      else if ("call_ringing".equals(type)) setStatus("Ringing…");
       else if ("call_answer".equals(type)) {
         handler.removeCallbacks(unansweredTimeout);
         setStatus("Joining…");
@@ -967,7 +1315,10 @@ public final class LiveKitCallActivity extends AppCompatActivity
   @Override protected void onDestroy() {
     Log.i(TAG, "activity_destroyed callId=" + callId() + " connected=" + connected
         + " remoteParticipants=" + (room == null ? 0 : room.getRemoteParticipants().size()));
+    signalPipDismissal("on_destroy");
     destroyed = true;
+    mediaExecutor.shutdown();
+    CallPictureInPicture.configure(this, false);
     handler.removeCallbacks(participantSync);
     handler.removeCallbacks(finishIfStillAlone);
     handler.removeCallbacks(callTimer);
@@ -975,13 +1326,18 @@ public final class LiveKitCallActivity extends AppCompatActivity
     // Teardown does not need a layout pass. Removing tiles individually invokes
     // updateRemoteVideoLayout between removals and can expose stale GridLayout specs.
     for (String key : new ArrayList<>(renderers.keySet())) detachVideoTrack(key);
+    detachLocalVideo();
+    removePipLocalTile();
     for (ParticipantTile tile : participantTiles.values()) tile.release();
     participantTiles.clear();
     if (grid != null) grid.removeAllViews();
-    detachLocalVideo();
     if (voiceView != null) voiceView.release();
     if (videoView != null) videoView.release();
-    if (room != null) room.disconnect();
+    if (room != null) {
+      room.disconnect();
+      if (pipDismissalHandled) Log.i("PingGoDisconnectHook",
+          "stage=livekit_room_disconnected callId=" + callId() + " media=" + mediaType());
+    }
     if (audioManager != null) {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
         audioManager.clearCommunicationDevice();
@@ -1058,18 +1414,33 @@ public final class LiveKitCallActivity extends AppCompatActivity
     final String displayName;
     final Bitmap avatarBitmap;
     final View avatar;
+    private String mediaLabel = "";
+
+    void setMediaState(boolean micOff, boolean cameraOff) {
+      String label = displayName + (micOff ? " • Mic off" : "")
+          + (cameraOff ? " • Camera off" : "");
+      if (label.equals(mediaLabel)) return;
+      mediaLabel = label;
+      name.setText(label);
+    }
 
     ParticipantTile(android.content.Context context, String identity) {
-      this(context, identity, null);
+      this(context, identity, null, true);
     }
 
     ParticipantTile(android.content.Context context, String identity, String preferredProfilePath) {
+      this(context, identity, preferredProfilePath, true);
+    }
+
+    ParticipantTile(android.content.Context context, String identity, String preferredProfilePath,
+        boolean lookUpStoredProfile) {
       super(context);
       setBackgroundColor(0xFF18242E);
       setWillNotDraw(false);
       displayName = DeviceContactResolver.cachedNameOrPhone(identity);
-      String profilePath = preferredProfilePath == null || preferredProfilePath.trim().isEmpty()
-          ? ChatProfilePhotoStore.getLocalPath(context, identity) : preferredProfilePath;
+      String profilePath = preferredProfilePath;
+      if (lookUpStoredProfile && (profilePath == null || profilePath.trim().isEmpty()))
+        profilePath = ChatProfilePhotoStore.getLocalPath(context, identity);
       Bitmap bitmap = profilePath == null ? null : BitmapFactory.decodeFile(profilePath);
       avatarBitmap = bitmap == null ? null : circularBitmap(bitmap);
       int avatarSize = dp(isVideo() ? 156 : 232);
@@ -1108,6 +1479,16 @@ public final class LiveKitCallActivity extends AppCompatActivity
 
     void release() {
       if (avatarBitmap != null && !avatarBitmap.isRecycled()) avatarBitmap.recycle();
+    }
+
+    void setCompact(boolean compact) {
+      int avatarSize = dp(compact ? 64 : isVideo() ? 156 : 232);
+      avatar.setLayoutParams(new FrameLayout.LayoutParams(
+          avatarSize, avatarSize, Gravity.CENTER));
+      name.setTextSize(compact ? 10f : 14f);
+      name.setPadding(dp(compact ? 4 : 12), 0, dp(compact ? 4 : 12), 0);
+      name.setLayoutParams(new FrameLayout.LayoutParams(
+          -1, dp(compact ? 22 : 40), Gravity.BOTTOM));
     }
   }
 }

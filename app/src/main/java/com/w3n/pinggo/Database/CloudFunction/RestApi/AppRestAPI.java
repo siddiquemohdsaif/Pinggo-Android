@@ -132,6 +132,9 @@ public interface AppRestAPI {
   @POST("devices/register")
   Call<JsonObject> registerLinkedDevice(@Body JsonObject body);
 
+  @POST("devices/login")
+  Call<JsonObject> recordDeviceLogin(@Body JsonObject body);
+
   @POST("devices/logout-account")
   Call<JsonObject> logoutAccount(@Body JsonObject body);
 

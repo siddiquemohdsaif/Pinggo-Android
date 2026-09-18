@@ -137,6 +137,7 @@ public class CropImageView extends View {
 
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
+                if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
                 downX = event.getX();
                 downY = event.getY();
                 resizingCrop = isNearCropBorder(downX, downY);
@@ -168,6 +169,7 @@ public class CropImageView extends View {
                 draggingCrop = false;
                 resizingCrop = false;
                 resizeLeft = resizeTop = resizeRight = resizeBottom = false;
+                if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(false);
                 return true;
             default:
                 return false;
@@ -239,14 +241,16 @@ public class CropImageView extends View {
         float distance = Math.max(Math.abs(touchX - centerX), Math.abs(touchY - centerY));
         float requestedSize = resizeStartSize + 2f * (distance - resizeStartDistance);
 
-        float maximumAroundCenter = 2f * Math.min(
-                Math.min(centerX - imageRect.left, imageRect.right - centerX),
-                Math.min(centerY - imageRect.top, imageRect.bottom - centerY)
-        );
-        float maximumSize = Math.min(maximumCropBoxSizePx, maximumAroundCenter);
+        // Let the square grow to the full available image dimension. If it was dragged
+        // near an edge, move its center back into range instead of stopping growth at
+        // whichever edge happens to be closest.
+        float maximumSize = Math.min(maximumCropBoxSizePx,
+                Math.min(imageRect.width(), imageRect.height()));
         float minimumSize = Math.min(minimumCropBoxSizePx, maximumSize);
         float size = Math.max(minimumSize, Math.min(requestedSize, maximumSize));
         float halfSize = size / 2f;
+        centerX = clamp(centerX, imageRect.left + halfSize, imageRect.right - halfSize);
+        centerY = clamp(centerY, imageRect.top + halfSize, imageRect.bottom - halfSize);
         cropRect.set(
                 centerX - halfSize,
                 centerY - halfSize,

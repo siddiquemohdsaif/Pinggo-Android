@@ -3,6 +3,7 @@ package com.w3n.pinggo.activity;
 import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.media.AudioManager;
 import android.media.Ringtone;
 import android.media.RingtoneManager;
@@ -17,6 +18,7 @@ import com.google.gson.JsonObject;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.annotation.NonNull;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
@@ -25,13 +27,14 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.call.WebRTCCallClient;
 import com.w3n.pinggo.call.FloatingVoiceCallController;
 import com.w3n.pinggo.call.ActiveCallRegistry;
+import com.w3n.pinggo.call.CallPictureInPicture;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.notification.PingGoNotificationManager;
 import com.w3n.pinggo.views.call.VoiceActiveCallView;
 
 public class VoiceCallActivity extends AppCompatActivity
     implements VoiceActiveCallView.Listener, WebRTCCallClient.Listener,
-    ChatRepository.CallEventListener {
+    ChatRepository.CallEventListener, ActiveCallRegistry.PictureInPictureHangupListener {
   private static final String CALL_TRACE = "PingGoCallTrace";
   public static final String EXTRA_PHONE_NUMBER = "com.w3n.pinggo.EXTRA_CALL_PHONE_NUMBER";
   public static final String EXTRA_PROFILE_PATH = "com.w3n.pinggo.EXTRA_CALL_PROFILE_PATH";
@@ -49,6 +52,10 @@ public class VoiceCallActivity extends AppCompatActivity
   private long connectedAt;
   private boolean timerRunning;
   private boolean incomingAccepted;
+  private boolean pipEligible;
+  private boolean pipSessionActive;
+  private boolean pipActivityStopped;
+  private int pipExitCheckAttempts;
   private Ringtone incomingRingtone;
   private ToneGenerator outgoingTone;
   private boolean incomingToneActive, outgoingToneActive;
@@ -144,6 +151,12 @@ public class VoiceCallActivity extends AppCompatActivity
         getIntent().getStringExtra(EXTRA_PROFILE_PATH),
         () -> runOnUiThread(this::endFromFloatingView));
     setContentView(callView);
+    pipEligible = false;
+    CallPictureInPicture.configure(this, false);
+    getOnBackPressedDispatcher().addCallback(this,
+        new androidx.activity.OnBackPressedCallback(true) {
+          @Override public void handleOnBackPressed() { minimizeCall(); }
+        });
     ViewCompat.setOnApplyWindowInsetsListener(callView, (view, insets) -> {
       Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
       callView.setInsets(bars.top, bars.bottom);
@@ -189,6 +202,8 @@ public class VoiceCallActivity extends AppCompatActivity
   }
 
   private void startCall() {
+    pipEligible = true;
+    CallPictureInPicture.configure(this, true);
     callClient = new WebRTCCallClient(this, ChatRepository.getInstance(this), this);
     String local = LoginStateManager.getInstance().getUID(this);
     String incomingOffer = getIntent().getStringExtra(EXTRA_SDP_OFFER);
@@ -207,7 +222,94 @@ public class VoiceCallActivity extends AppCompatActivity
 
   @Override
   public void onBack() {
-    FloatingVoiceCallController.getInstance().minimizeAndReturn(this);
+    minimizeCall();
+  }
+
+  private void minimizeCall() {
+    if (isIncoming() && !incomingAccepted) {
+      rejectIncoming();
+      return;
+    }
+    if (!CallPictureInPicture.enter(this))
+      FloatingVoiceCallController.getInstance().minimizeAndReturn(this);
+  }
+
+  @Override protected void onUserLeaveHint() {
+    super.onUserLeaveHint();
+    if (pipEligible) CallPictureInPicture.enter(this);
+  }
+
+  @Override public void onPictureInPictureModeChanged(boolean inPictureInPictureMode,
+      @NonNull Configuration newConfig) {
+    super.onPictureInPictureModeChanged(inPictureInPictureMode, newConfig);
+    Log.i("PingGoDisconnectHook", "stage=pip_mode_changed engine=webrtc media=audio callId="
+        + callId() + " inPip=" + inPictureInPictureMode);
+    if (inPictureInPictureMode) {
+      pipSessionActive = true;
+      pipActivityStopped = false;
+      pipExitCheckAttempts = 0;
+    } else {
+      pipExitCheckAttempts = 0;
+      if (pipSessionActive && pipActivityStopped && !hasWindowFocus()) {
+        Log.i("PingGoDisconnectHook", "stage=pip_exit_direct engine=webrtc media=audio callId="
+            + callId() + " trigger=mode_changed");
+        if (disconnectDismissedPip("mode_changed_direct") && !isFinishing()) finish();
+      } else {
+        schedulePipExitCheck("mode_changed");
+      }
+    }
+    if (inPictureInPictureMode && callView != null)
+      callView.setPictureInPictureMode(true, false);
+  }
+
+  @Override protected void onResume() {
+    super.onResume();
+    pipActivityStopped = false;
+    // Returning from PiP to the full activity is not a dismissal.
+    if (!CallPictureInPicture.isActive(this)) {
+      pipSessionActive = false;
+      pipExitCheckAttempts = 0;
+      if (callView != null) callView.setPictureInPictureMode(false, false);
+    }
+  }
+
+  @Override protected void onStop() {
+    super.onStop();
+    if (!pipSessionActive) return;
+    pipActivityStopped = true;
+    boolean stillInPip = CallPictureInPicture.isActive(this);
+    Log.i("PingGoDisconnectHook", "stage=pip_on_stop engine=webrtc media=audio callId="
+        + callId() + " stillInPip=" + stillInPip);
+    // PiP dismissal does not reliably destroy the activity on every Android vendor build.
+    schedulePipExitCheck("on_stop");
+  }
+
+  private void schedulePipExitCheck(String trigger) {
+    if (!pipSessionActive
+        || pipExitCheckAttempts >= CallPictureInPicture.DISMISS_CONFIRMATION_MAX_ATTEMPTS) return;
+    int attempt = ++pipExitCheckAttempts;
+    timerHandler.postDelayed(() -> {
+      if (!pipSessionActive) return;
+      boolean inPip = CallPictureInPicture.isActive(this);
+      Log.i("PingGoDisconnectHook", "stage=pip_exit_check engine=webrtc media=audio callId="
+          + callId() + " trigger=" + trigger + " attempt=" + attempt
+          + " inPip=" + inPip + " focus=" + hasWindowFocus());
+      if (!inPip) {
+        if (disconnectDismissedPip("exit_check") && !isFinishing()) finish();
+      } else {
+        schedulePipExitCheck(trigger);
+      }
+    }, CallPictureInPicture.DISMISS_CONFIRMATION_MS);
+  }
+
+  private boolean disconnectDismissedPip(String lifecycle) {
+    if (!pipSessionActive || callClient == null) return false;
+    pipSessionActive = false;
+    Log.i(CALL_TRACE, "voice_pip_dismissed callId=" + callId());
+    Log.i("PingGoDisconnectHook", "stage=pip_dismissed engine=webrtc media=audio callId="
+        + callId() + " action=call_end lifecycle=" + lifecycle);
+    callClient.endCall(lifecycle);
+    return true;
   }
 
   @Override
@@ -255,6 +357,17 @@ public class VoiceCallActivity extends AppCompatActivity
     if (callClient != null)
       callClient.endCall();
     finish();
+  }
+
+  @Override public void onPictureInPictureHangup() {
+    Log.i("PingGoDisconnectHook", "stage=pip_hangup_action engine=webrtc media=audio callId="
+        + callId());
+    if (disconnectDismissedPip("pip_action") && !isFinishing()) {
+      finish();
+      return;
+    }
+    if (callClient != null) callClient.endCall("pip_action");
+    if (!isFinishing()) finish();
   }
 
   private void endFromFloatingView() {
@@ -422,11 +535,13 @@ public class VoiceCallActivity extends AppCompatActivity
         + " changingConfiguration=" + isChangingConfigurations()
         + " finishing=" + isFinishing() + " connected=" + timerRunning);
     stopCallTones();
+    CallPictureInPicture.configure(this, false);
     stopCallTimer();
     if (audioManager != null) {
       audioManager.setSpeakerphoneOn(false);
       audioManager.setMicrophoneMute(false);
     }
+    disconnectDismissedPip("on_destroy");
     if (callClient != null)
       callClient.close(true);
     else

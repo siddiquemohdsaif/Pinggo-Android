@@ -201,7 +201,6 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
           beginSearch();
       });
   private final Set<String> pendingSeen = new HashSet<>();
-  private final Set<String> observedMessageKeys = new HashSet<>();
   private final Set<String> automaticFileDownloads = new HashSet<>();
   private final Map<String, Integer> attachmentStates = new ConcurrentHashMap<>();
   private final Map<String, Long> attachmentDownloadedBytes = new ConcurrentHashMap<>();
@@ -817,7 +816,6 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     raw = deduplicateMessages(raw);
     LocalMessageWindow window = trimLocalMessageSentinel(raw);
     List<MessageEntity> snapshot = window.messages;
-    startAutomaticFileDownloads(snapshot);
     if (!snapshot.isEmpty()) {
       MessageEntity newest = snapshot.get(snapshot.size() - 1);
       Log.d("PingGoMessageTrace", "stage=activity_room_observed"
@@ -860,14 +858,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   private void startAutomaticFileDownloads(List<MessageEntity> messages) {
-    Set<String> currentKeys = new HashSet<>();
     if (messages != null) {
       for (MessageEntity message : messages) {
         String messageKey = stableMessageKey(message);
-        if (!messageKey.isEmpty())
-          currentKeys.add(messageKey);
-        if (messageKey.isEmpty() || observedMessageKeys.contains(messageKey))
-          continue;
+        if (messageKey.isEmpty()) continue;
         if (!"file".equals(message.messageType)
             || currentUser.equals(normalize(message.senderId))
             || message.attachmentId == null || message.attachmentId.trim().isEmpty()
@@ -880,7 +874,11 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         }
       }
     }
-    observedMessageKeys.addAll(currentKeys);
+  }
+
+  @Override
+  public void onVisibleMessagesChanged(List<MessageEntity> messagesBottomFirst) {
+    startAutomaticFileDownloads(messagesBottomFirst);
   }
 
   private void startAutomaticFileDownload(MessageEntity message) {

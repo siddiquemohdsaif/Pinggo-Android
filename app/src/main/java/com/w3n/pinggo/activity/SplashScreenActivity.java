@@ -3,6 +3,8 @@ package com.w3n.pinggo.activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.os.SystemClock;
+import android.util.Log;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
@@ -24,13 +26,18 @@ import com.w3n.pinggo.Util.MainRunnerThread;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.notification.FcmTokenManager;
 import com.w3n.pinggo.views.SplashAnimationView;
+import com.ogfa.nativeviews.font.NativeFonts;
 
 import org.json.JSONObject;
 
 public class SplashScreenActivity extends AppCompatActivity {
+    private static final String FONT_PREWARM_TAG = "FontPrewarm";
     private static final long MINIMUM_SPLASH_DURATION_MS = 1000L;
     private static final long APP_CONFIG_TIMEOUT_MS = 5000L;
+    private static final long FONT_PREWARM_TIMEOUT_MS = 2500L;
     private boolean minimumSplashDurationElapsed;
+    private boolean fontPrewarmFinished;
+    private long fontPrewarmStartedAtMs;
     private boolean navigationStarted;
     private boolean listRoutesStarted;
     private SplashAnimationView splashAnimationView;
@@ -47,11 +54,14 @@ public class SplashScreenActivity extends AppCompatActivity {
             return insets;
         });
 
+        prewarmNativeFont();
         loadAppConfig();
         MainRunnerThread.runDelayed(
                 this::onMinimumSplashDurationElapsed,
                 MINIMUM_SPLASH_DURATION_MS);
         MainRunnerThread.runDelayed(this::onAppConfigTimeout, APP_CONFIG_TIMEOUT_MS);
+        MainRunnerThread.runDelayed(
+                () -> onFontPrewarmFinished("timeout"), FONT_PREWARM_TIMEOUT_MS);
     }
 
     @Override
@@ -81,7 +91,37 @@ public class SplashScreenActivity extends AppCompatActivity {
 
     private void onMinimumSplashDurationElapsed() {
         minimumSplashDurationElapsed = true;
-        if (AppContextProvider.getParsedAppConfig() != null) {
+        if (fontPrewarmFinished && AppContextProvider.getParsedAppConfig() != null) {
+            continueToApp();
+        }
+    }
+
+    private void prewarmNativeFont() {
+        android.content.Context appContext = getApplicationContext();
+        fontPrewarmStartedAtMs = SystemClock.elapsedRealtime();
+        Log.i(FONT_PREWARM_TAG, "stage=started");
+        BackgroundRunnerThread.run(() -> {
+            try {
+                // Populate the process-wide login caches before HomeActivity asks
+                // for them, so SharedPreferences never has to load on its UI thread.
+                LoginStateManager loginState = LoginStateManager.getInstance();
+                loginState.isLoggedIn(appContext);
+                loginState.getDeviceRole(appContext);
+                loginState.getLoginAt(appContext);
+                NativeFonts.load(appContext, NativeFonts.INTER);
+            } finally {
+                MainRunnerThread.run(() -> onFontPrewarmFinished("loaded"));
+            }
+        });
+    }
+
+    private void onFontPrewarmFinished(String reason) {
+        if (fontPrewarmFinished) return;
+        fontPrewarmFinished = true;
+        Log.i(FONT_PREWARM_TAG, "stage=finished reason=" + reason + " durationMs="
+                + (SystemClock.elapsedRealtime() - fontPrewarmStartedAtMs));
+        if (minimumSplashDurationElapsed
+                && AppContextProvider.getParsedAppConfig() != null) {
             continueToApp();
         }
     }
@@ -98,6 +138,7 @@ public class SplashScreenActivity extends AppCompatActivity {
         if (navigationStarted || isFinishing() || isDestroyed()) {
             return;
         }
+        if (!fontPrewarmFinished) return;
         navigationStarted = true;
 
         boolean isLoggedIn = LoginStateManager.getInstance().isLoggedIn(this);

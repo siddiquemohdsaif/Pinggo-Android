@@ -45,8 +45,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class NewChatActivity extends AppCompatActivity implements NewChatView.Listener {
+  public static final String EXTRA_SHOW_CHAT_LIST = "com.w3n.pinggo.EXTRA_SHOW_CHAT_LIST";
+  private boolean showChatList;
   public static final String EXTRA_CREATE_GROUP = "com.w3n.pinggo.EXTRA_CREATE_GROUP";
   public static final String EXTRA_PRESELECTED_MEMBER_IDS =
       "com.w3n.pinggo.EXTRA_PRESELECTED_MEMBER_IDS";
@@ -66,13 +69,55 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   private final List<ChatEntity> orderedChats = new ArrayList<>();
   private final Set<String> rendered = new LinkedHashSet<>();
   private final Set<String> photoDownloads = Collections.newSetFromMap(new ConcurrentHashMap<>());
+  private final AtomicInteger discoveryGeneration = new AtomicInteger();
   private NewChatView newChatView;
+  private boolean creatingGroup;
+  private com.w3n.pinggo.views.chat.CreateGroupView groupDetails;
+  private String groupPhotoBase64;
+  private com.w3n.pinggo.views.common.NativeCropView groupCropView;
+  private final List<String> groupMembers = new ArrayList<>();
+  private final androidx.activity.result.ActivityResultLauncher<String> groupPhotoPicker =
+      registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.GetContent(), uri -> {
+        if (uri == null || groupDetails == null || creatingGroup) return;
+        photoExecutor.execute(() -> {
+          try {
+            android.graphics.Bitmap bitmap;
+            if (android.os.Build.VERSION.SDK_INT >= 28) {
+              bitmap = android.graphics.ImageDecoder.decodeBitmap(
+                android.graphics.ImageDecoder.createSource(getContentResolver(), uri), (decoder, info, source) -> {
+                  float scale = Math.min(1f, 512f / Math.max(info.getSize().getWidth(), info.getSize().getHeight()));
+                  decoder.setTargetSize(Math.max(1, Math.round(info.getSize().getWidth() * scale)),
+                      Math.max(1, Math.round(info.getSize().getHeight() * scale)));
+                  decoder.setAllocator(android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE);
+                });
+            } else {
+              android.graphics.BitmapFactory.Options options = new android.graphics.BitmapFactory.Options();
+              options.inJustDecodeBounds = true;
+              try (java.io.InputStream input = getContentResolver().openInputStream(uri)) {
+                android.graphics.BitmapFactory.decodeStream(input, null, options);
+              }
+              options.inSampleSize = 1;
+              while (Math.max(options.outWidth, options.outHeight) / options.inSampleSize > 512)
+                options.inSampleSize *= 2;
+              options.inJustDecodeBounds = false;
+              try (java.io.InputStream input = getContentResolver().openInputStream(uri)) {
+                bitmap = android.graphics.BitmapFactory.decodeStream(input, null, options);
+              }
+              if (bitmap == null) throw new java.io.IOException("Invalid image");
+            }
+            runOnUiThread(() -> { if (!isClosing() && groupDetails != null && !creatingGroup) {
+              showGroupCrop(bitmap);
+            } });
+          } catch (Exception error) {
+            runOnUiThread(() -> Toast.makeText(this, "Unable to load group photo.", Toast.LENGTH_SHORT).show());
+          }
+        });
+      });
   private ChatRepository repository;
   private NativePromptDialogView promptDialog;
   private String forwardSourceChatId;
   private ArrayList<String> forwardMessageIds;
   private boolean createGroupMode;
-  private boolean creatingGroup;
   private String addToGroupId;
   private boolean selectCallMembers;
   private final Set<String> excludedMemberIds = new LinkedHashSet<>();
@@ -80,12 +125,17 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
+    getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
+      @Override public void handleOnBackPressed() { onBack(); }
+    });
     WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     newChatView = new NewChatView(this, this);
     forwardSourceChatId = getIntent().getStringExtra(EXTRA_FORWARD_SOURCE_CHAT_ID);
     forwardMessageIds = getIntent().getStringArrayListExtra(EXTRA_FORWARD_MESSAGE_IDS);
     repository = ChatRepository.getInstance(this);
     createGroupMode = getIntent().getBooleanExtra(EXTRA_CREATE_GROUP, false);
+    showChatList = getIntent().getBooleanExtra(EXTRA_SHOW_CHAT_LIST, false);
+    if (showChatList) createGroupMode = true;
     addToGroupId = getIntent().getStringExtra(EXTRA_ADD_TO_GROUP_ID);
     selectCallMembers = getIntent().getBooleanExtra(EXTRA_SELECT_CALL_MEMBERS, false);
     ArrayList<String> excluded = getIntent().getStringArrayListExtra(EXTRA_EXCLUDED_MEMBER_IDS);
@@ -104,12 +154,15 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     if (selectCallMembers) {
       newChatView.setTitle("Add to call");
       newChatView.setGroupActionLabel("Invite");
+    } else if (showChatList) {
+      newChatView.setTitle("New call");
+      newChatView.setGroupActionLabel("Call");
     } else if (addToGroupId != null && !addToGroupId.trim().isEmpty()) {
       newChatView.setTitle("Add members");
       newChatView.setGroupActionLabel("Add");
     } else if (isForwarding())
       newChatView.setTitle("Forward to");
-    if (createGroupMode) {
+    if (createGroupMode || showChatList) {
       repository.observeChats().observe(this, chats -> {
         orderedChats.clear();
         if (chats != null) orderedChats.addAll(chats);
@@ -159,7 +212,9 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
       });
       return;
     }
-    if (loadDiscoveryCache()) return;
+    // Cached results may be rendered immediately, but never suppress the permission request.
+    // Once permission is granted, discovery restarts from the device's current contacts.
+    loadDiscoveryCache();
     ActivityCompat.requestPermissions(
         this, new String[] { Manifest.permission.READ_CONTACTS }, CONTACTS_PERMISSION_REQUEST);
   }
@@ -168,25 +223,30 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   public void onRequestPermissionsResult(
       int code, @NonNull String[] permissions, @NonNull int[] results) {
     super.onRequestPermissionsResult(code, permissions, results);
-    if (code == CONTACTS_PERMISSION_REQUEST
-        && results.length > 0
+    if (code != CONTACTS_PERMISSION_REQUEST) return;
+    if (results.length > 0
         && results[0] == PackageManager.PERMISSION_GRANTED) {
       DeviceContactResolver.warmUp(this, this::discoverContacts);
-    } else if (createGroupMode)
+    } else if (!found.isEmpty() || !invites.isEmpty())
+      render();
+    else if (createGroupMode || showChatList)
       render();
     else
       newChatView.showStatus("Contacts permission is required to discover chats.");
   }
 
   private void discoverContacts() {
+    final int generation = discoveryGeneration.incrementAndGet();
     if (!selectCallMembers) newChatView.showStatus("Loading contacts...");
     discoveryExecutor.execute(
         () -> {
           List<String> contacts = readPhoneContacts();
+          if (generation != discoveryGeneration.get()) return;
           runOnUiThread(
               () -> {
+                if (generation != discoveryGeneration.get()) return;
                 if (contacts.isEmpty()) {
-                  if (createGroupMode) render();
+                  if (createGroupMode || showChatList) render();
                   else newChatView.showStatus("No contacts found.");
                   return;
                 }
@@ -196,15 +256,17 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
                 if (!selectCallMembers) newChatView.showStatus("Discovering contacts...");
               });
           if (!contacts.isEmpty())
-            discoverNextBatch(contacts, 0);
+            discoverNextBatch(contacts, 0, generation);
         });
   }
 
-  private void discoverNextBatch(List<String> contacts, int start) {
-    if (isClosing())
+  private void discoverNextBatch(List<String> contacts, int start, int generation) {
+    if (isClosing() || generation != discoveryGeneration.get())
       return;
     if (start >= contacts.size()) {
-      runOnUiThread(() -> { render(); saveDiscoveryCache(); });
+      runOnUiThread(() -> {
+        if (generation == discoveryGeneration.get()) { render(); saveDiscoveryCache(); }
+      });
       return;
     }
     int end = Math.min(start + DISCOVER_BATCH_SIZE, contacts.size());
@@ -212,23 +274,28 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     discoverBatch(batch)
         .whenCompleteAsync(
             (response, error) -> {
-              if (isClosing())
+              if (isClosing() || generation != discoveryGeneration.get())
                 return;
               if (error == null) {
                 BatchResult result = parseBatch(response);
-                runOnUiThread(() -> append(result));
+                runOnUiThread(() -> {
+                  if (generation == discoveryGeneration.get()) append(result);
+                });
                 prefetchProfilePhotos(result.foundContacts);
               } else {
                 runOnUiThread(
-                    () -> Toast.makeText(
+                    () -> {
+                      if (generation != discoveryGeneration.get()) return;
+                      Toast.makeText(
                         this,
                         error.getMessage() == null
                             ? "Contact discovery failed."
                             : error.getMessage(),
                         Toast.LENGTH_SHORT)
-                        .show());
+                        .show();
+                    });
               }
-              discoverNextBatch(contacts, end);
+              discoverNextBatch(contacts, end, generation);
             },
             discoveryExecutor);
   }
@@ -347,17 +414,19 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
       return;
     List<NewChatView.Item> items = new ArrayList<>();
     Set<String> addedAccounts = new LinkedHashSet<>();
-    if (createGroupMode) {
+    List<String> existingAccounts = new ArrayList<>();
+    if (createGroupMode || showChatList) {
       // ChatDao already supplies the Chats screen order: pinned first, then most recent.
       // Include existing one-to-one chat users even when they are not saved in
       // Android contacts. Saved contacts below are merged and deduplicated.
       for (ChatEntity chat : orderedChats) {
         if (chat == null || chat.isGroup) continue;
-        String phone = normalize(chat.otherUserId);
+        String phone = chat.isGroup ? chat.chatId : normalize(chat.otherUserId);
         if (phone.isEmpty() || excludedMemberIds.contains(phone)
             || !addedAccounts.add(phone)) continue;
         items.add(NewChatView.Item.found(phone, chat.chatId, chat.profilePhotoUrl,
             chat.contactName));
+        existingAccounts.add(phone);
       }
     }
     for (JsonObject contact : found) {
@@ -378,6 +447,7 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
           items.add(NewChatView.Item.invite(phone));
         }
     }
+    if (showChatList) newChatView.setChatSections(existingAccounts);
     newChatView.submitItems(items);
   }
 
@@ -431,13 +501,57 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
         + found.size() + " invites=" + invites.size());
   }
 
+  private void refreshContacts() {
+    discoveryGeneration.incrementAndGet();
+    getSharedPreferences(DISCOVERY_CACHE, MODE_PRIVATE).edit().clear().apply();
+    DeviceContactResolver.clearCache();
+    found.clear();
+    invites.clear();
+    rendered.clear();
+    newChatView.showStatus("Loading contacts...");
+    if (ContextCompat.checkSelfPermission(this,
+        Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+      ActivityCompat.requestPermissions(this,
+          new String[] { Manifest.permission.READ_CONTACTS }, CONTACTS_PERMISSION_REQUEST);
+      return;
+    }
+    DeviceContactResolver.warmUp(this, this::discoverContacts);
+  }
+
   private int dp(int value) {
     return Math.round(value * getResources().getDisplayMetrics().density);
   }
 
   @Override
   public void onBack() {
+    if (promptDialog != null) { removePrompt(); return; }
+    if (groupCropView != null) { groupCropView.dismissIfShowing(); return; }
+    if (groupDetails != null) {
+      if (!creatingGroup) {
+        if (groupDetails.getVisibility() == android.view.View.GONE) {
+          groupDetails.setVisibility(android.view.View.VISIBLE);
+          newChatView.setSelectedMembers(groupMembers);
+          return;
+        }
+        ((ViewGroup) groupDetails.getParent()).removeView(groupDetails);
+        groupDetails = null;
+        groupPhotoBase64 = null;
+      }
+      return;
+    }
     finish();
+  }
+
+  @Override public void onBackPressed() {
+    if (promptDialog != null || groupCropView != null || groupDetails != null) onBack(); else super.onBackPressed();
+  }
+
+  @Override
+  public void onMore() {
+    showPrompt(NativePromptDialogView.actions(this,
+        Collections.singletonList("Refresh"), index -> {
+          if (index == 0) refreshContacts();
+        }, this::removePrompt));
   }
 
   @Override
@@ -452,7 +566,8 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     }
     Intent intent = new Intent(this, ChatActivity.class);
     intent.putExtra(ChatActivity.EXTRA_CHAT_NAME,
-        DeviceContactResolver.nameOrPhone(this, item.phoneNumber));
+        item.displayName == null || item.displayName.trim().isEmpty()
+            ? DeviceContactResolver.nameOrPhone(this, item.phoneNumber) : item.displayName);
     intent.putExtra(ChatActivity.EXTRA_CHAT_ID, item.chatId);
     intent.putExtra(ChatActivity.EXTRA_PROFILE_PHOTO_URL, item.profilePhotoUrl);
     intent.putExtra(
@@ -489,6 +604,10 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   public void onCreateGroup(List<String> memberIds) {
     if (!createGroupMode || creatingGroup || memberIds == null || memberIds.isEmpty())
       return;
+    if (showChatList) {
+      showCallOptions(new ArrayList<>(memberIds));
+      return;
+    }
     if (selectCallMembers) {
       setResult(RESULT_OK, new Intent().putStringArrayListExtra(
           RESULT_MEMBER_IDS, new ArrayList<>(memberIds)));
@@ -514,22 +633,36 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
           });
       return;
     }
-    showPrompt(NativePromptDialogView.input(this, "Create group", "",
-        InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES, name -> {
-          if (creatingGroup) return false;
+    groupMembers.clear();
+    groupMembers.addAll(memberIds);
+    if (groupDetails != null) {
+      groupDetails.setMembers(groupMemberLabels());
+      groupDetails.setVisibility(android.view.View.VISIBLE);
+      return;
+    }
+    List<String> selected = groupMembers;
+    List<String> labels = groupMemberLabels();
+    groupDetails = new com.w3n.pinggo.views.chat.CreateGroupView(this, labels, this::onBack,
+        () -> groupPhotoPicker.launch("image/*"), () -> {
+          if (creatingGroup) return;
+          if (selected.isEmpty()) { onGroupSelectionRequired(); return; }
+          String name = groupDetails.groupName();
           if (name.isEmpty()) {
-            Toast.makeText(this, "Enter a group name", Toast.LENGTH_SHORT).show();
-            return false;
+            groupDetails.showNameError();
+            return;
           }
           creatingGroup = true;
-          AppFunctionManager.getInstance().createGroup(currentPhone(), name, "", memberIds,
+          groupDetails.setBusy(true);
+          AppFunctionManager.getInstance().createGroup(currentPhone(), name, "", selected,
+              groupPhotoBase64, groupDetails.adminsOnly(),
               new AppFunctionManager.Callback() {
                 @Override
                 public void onSuccess(Object value) {
                   creatingGroup = false;
-                  runOnUiThread(NewChatActivity.this::removePrompt);
+                  if (isClosing()) return;
                   if (!(value instanceof JsonObject)) {
                     Toast.makeText(NewChatActivity.this, "Invalid group response.", Toast.LENGTH_SHORT).show();
+                    finish();
                     return;
                   }
                   JsonObject response = (JsonObject) value;
@@ -547,7 +680,7 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
                   Intent intent = new Intent(NewChatActivity.this, ChatActivity.class);
                   intent.putExtra(ChatActivity.EXTRA_CHAT_NAME, name);
                   intent.putExtra(ChatActivity.EXTRA_CHAT_ID, groupId);
-                  intent.putExtra(ChatActivity.EXTRA_PROFILE_PHOTO_URL, "");
+                  intent.putExtra(ChatActivity.EXTRA_PROFILE_PHOTO_URL, string(group, "icon"));
                   startActivity(intent);
                   finish();
                 }
@@ -555,13 +688,33 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
                 @Override
                 public void onError(String error) {
                   creatingGroup = false;
+                  if (groupDetails != null) groupDetails.setBusy(false);
                   runOnUiThread(() -> Toast.makeText(NewChatActivity.this,
                         error == null || error.trim().isEmpty() ? "Unable to create group." : error,
                         Toast.LENGTH_SHORT).show());
                 }
               });
-          return false;
-        }, this::removePrompt));
+        }, () -> {
+          newChatView.setSelectedMembers(groupMembers);
+          groupDetails.setVisibility(android.view.View.GONE);
+          ((android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE))
+              .hideSoftInputFromWindow(groupDetails.getWindowToken(), 0);
+        }, () -> {
+          groupPhotoBase64 = null;
+          groupDetails.clearPhoto();
+        }, index -> {
+          if (creatingGroup || index < 0 || index >= groupMembers.size()) return;
+          groupMembers.remove(index);
+          newChatView.setSelectedMembers(groupMembers);
+          groupDetails.setMembers(groupMemberLabels());
+        });
+    ((ViewGroup) findViewById(android.R.id.content)).addView(groupDetails, new ViewGroup.LayoutParams(-1, -1));
+    ViewCompat.setOnApplyWindowInsetsListener(groupDetails, (view, insets) -> {
+      Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.ime());
+      view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+      return insets;
+    });
+    ViewCompat.requestApplyInsets(groupDetails);
   }
 
   private void showPrompt(NativePromptDialogView prompt) {
@@ -570,6 +723,114 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     ((ViewGroup) findViewById(android.R.id.content)).addView(prompt,
         new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT));
+  }
+
+  private List<String> groupMemberLabels() {
+    List<String> labels = new ArrayList<>();
+    for (String id : groupMembers) {
+      String label = DeviceContactResolver.cachedNameOrPhone(id);
+      for (ChatEntity chat : orderedChats)
+        if (id.equals(normalize(chat.otherUserId)) && chat.contactName != null && !chat.contactName.trim().isEmpty()) {
+          label = chat.contactName; break;
+        }
+      labels.add(label.equals(id) ? id : label + " · " + id);
+    }
+    return labels;
+  }
+
+  private void showCallOptions(ArrayList<String> members) {
+    boolean multiple = members.size() > 1;
+    if (members.size() > 19) {
+      Toast.makeText(this, "Select up to 19 people for a call.", Toast.LENGTH_SHORT).show();
+      return;
+    }
+    List<String> choices = multiple
+        ? java.util.Arrays.asList("Voice call · LiveKit", "Video call · LiveKit")
+        : java.util.Arrays.asList("Voice call · LiveKit", "Video call · LiveKit",
+            "Voice call · WebRTC", "Video call · WebRTC");
+    showPrompt(NativePromptDialogView.actions(this, choices, index -> {
+      removePrompt();
+      startSelectedCall(members, index % 2 == 1, index < 2);
+    }, this::removePrompt));
+  }
+
+  private void startSelectedCall(ArrayList<String> members, boolean video, boolean liveKit) {
+    if (members.isEmpty() || isClosing()) return;
+    com.w3n.pinggo.call.ActiveCallRegistry registry = com.w3n.pinggo.call.ActiveCallRegistry.getInstance();
+    if (registry.hasActiveCall()) {
+      Toast.makeText(this, "A call is already active.", Toast.LENGTH_SHORT).show();
+      registry.openExisting(this);
+      return;
+    }
+    String receiver = members.get(0);
+    String callChatId = "";
+    String displayName = DeviceContactResolver.cachedNameOrPhone(receiver);
+    for (ChatEntity chat : orderedChats) {
+      if (!chat.isGroup && receiver.equals(normalize(chat.otherUserId))) {
+        callChatId = chat.chatId;
+        if (chat.contactName != null && !chat.contactName.trim().isEmpty()) displayName = chat.contactName;
+        break;
+      }
+    }
+    if (callChatId == null || callChatId.isEmpty()) {
+      for (JsonObject contact : found) if (receiver.equals(normalize(string(contact, "phoneNumber")))) {
+        callChatId = string(contact, "chatId"); break;
+      }
+    }
+    if (callChatId == null || callChatId.isEmpty()) {
+      List<String> pair = new ArrayList<>(java.util.Arrays.asList(currentPhone(), receiver));
+      Collections.sort(pair);
+      callChatId = pair.get(0) + "_" + pair.get(1);
+    }
+    Intent intent = new Intent(this, liveKit ? LiveKitCallActivity.class
+        : video ? VideoCallActivity.class : VoiceCallActivity.class);
+    intent.putExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID, callChatId);
+    String outgoingCallId = java.util.UUID.randomUUID().toString();
+    intent.putExtra(VoiceCallActivity.EXTRA_CALL_ID, outgoingCallId);
+    intent.putExtra(VoiceCallActivity.EXTRA_CALLER_ID, receiver);
+    intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER, displayName);
+    intent.putExtra(VoiceCallActivity.EXTRA_PROFILE_PATH, ChatProfilePhotoStore.getLocalPath(this, receiver));
+    intent.putExtra(VoiceCallActivity.EXTRA_CALL_ENGINE, liveKit
+        ? com.w3n.pinggo.call.CallEngineToggle.LIVEKIT : com.w3n.pinggo.call.CallEngineToggle.LEGACY);
+    if (liveKit) {
+      intent.putExtra(LiveKitCallActivity.EXTRA_MEDIA_TYPE, video ? "video" : "audio");
+      intent.putExtra(LiveKitCallActivity.EXTRA_CONFERENCE_CALL, members.size() > 1);
+      intent.putStringArrayListExtra(LiveKitCallActivity.EXTRA_PARTICIPANT_IDS, members);
+    }
+    registry.closePickerWhenConnected(this, outgoingCallId);
+    startActivity(intent);
+  }
+
+  private void showGroupCrop(android.graphics.Bitmap bitmap) {
+    removeGroupCrop();
+    androidx.core.view.WindowInsetsControllerCompat bars = WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
+    bars.setSystemBarsBehavior(androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+    bars.hide(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.ime());
+    groupCropView = new com.w3n.pinggo.views.common.NativeCropView(this, bitmap, 495, 1155,
+        new com.w3n.pinggo.views.common.NativeCropView.Listener() {
+          @Override public void onRetry() { groupPhotoPicker.launch("image/*"); }
+          @Override public void onConfirm(android.graphics.Bitmap cropped) {
+            if (groupDetails == null || isClosing()) return;
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            cropped.compress(android.graphics.Bitmap.CompressFormat.JPEG, 88, bytes);
+            groupPhotoBase64 = android.util.Base64.encodeToString(bytes.toByteArray(), android.util.Base64.NO_WRAP);
+            groupDetails.setPhoto(cropped);
+          }
+          @Override public void onInvalidCrop() {
+            Toast.makeText(NewChatActivity.this, "Unable to crop image.", Toast.LENGTH_SHORT).show();
+          }
+          @Override public void onDismiss() { removeGroupCrop(); }
+        });
+    ((ViewGroup) findViewById(android.R.id.content)).addView(groupCropView, new ViewGroup.LayoutParams(-1, -1));
+  }
+
+  private void removeGroupCrop() {
+    com.w3n.pinggo.views.common.NativeCropView current = groupCropView;
+    groupCropView = null;
+    if (current == null) return;
+    WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView()).show(WindowInsetsCompat.Type.systemBars());
+    if (current.getParent() instanceof ViewGroup) ((ViewGroup) current.getParent()).removeView(current);
+    current.release();
   }
 
   private void removePrompt() {
@@ -611,6 +872,9 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
 
   @Override
   protected void onDestroy() {
+    com.w3n.pinggo.call.ActiveCallRegistry.getInstance().clearCallPicker(this);
+    removeGroupCrop();
+    discoveryGeneration.incrementAndGet();
     removePrompt();
     discoveryExecutor.shutdownNow();
     photoExecutor.shutdownNow();

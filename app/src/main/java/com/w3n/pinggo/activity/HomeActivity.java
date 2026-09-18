@@ -49,12 +49,17 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Hosts the AAR-native home surface and owns lifecycle, data, and navigation.
  */
 public class HomeActivity extends AppCompatActivity implements HomeView.Listener {
     private static final String TESTING_TAG = "PARVEZ_TESTING";
+    private static final String CALL_PAGINATION_TAG = "CallPagination";
     private static final int SELECTION_STATUS_BAR_COLOR = 0xFFE9EDF0;
     private static final int HOME_SYSTEM_BAR_COLOR = 0xFFF7F9FB;
     private HomeView homeView;
@@ -69,6 +74,12 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
     private int callListGeneration;
     private int callListVisibleLimit = 20;
     private boolean callPaginationRevealPending;
+    private final ExecutorService callRowExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService chatRowExecutor = Executors.newSingleThreadExecutor();
+    private final Map<String, CachedCallRow> callRowCache = new ConcurrentHashMap<>();
+    private int callRowBuildGeneration;
+    private int chatRowBuildGeneration;
+    private int contactNameGeneration;
     private final ActivityResultLauncher<String> notificationPermission = registerForActivityResult(
             new ActivityResultContracts.RequestPermission(), granted -> {
             });
@@ -147,7 +158,8 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         DeviceContactResolver.warmUp(this, () -> {
             if (homeView == null)
                 return;
-            homeView.submitChats(toChats(latestChatEntities));
+            contactNameGeneration++;
+            submitChatsAsync(latestChatEntities);
             submitCachedCalls(latestCallEntities);
         });
     }
@@ -191,8 +203,8 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
             Log.d(TESTING_TAG, "home_chat_render phase=room_observed count=" + count
                     + " loadElapsedMs=" + (SystemClock.elapsedRealtime() - loadStartedAt));
             latestChatEntities = entities == null ? new ArrayList<>() : entities;
-            homeView.submitChats(toChats(entities));
-            Log.d(TESTING_TAG, "home_chat_render phase=view_submitted count=" + count
+            submitChatsAsync(entities);
+            Log.d(TESTING_TAG, "home_chat_render phase=conversion_scheduled count=" + count
                     + " durationMs="
                     + ((SystemClock.elapsedRealtimeNanos() - renderStartedNanos) / 1_000_000L));
             submitCachedCalls(latestCallEntities);
@@ -205,11 +217,10 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
             callRepository = CallRepository.getInstance(this);
             callRepository.observeCalls(uid).observe(this, calls -> {
                 latestCallEntities = calls == null ? new ArrayList<>() : calls;
+                Log.i(CALL_PAGINATION_TAG, "stage=cache_observed cached="
+                        + latestCallEntities.size() + " visibleLimit=" + callListVisibleLimit
+                        + " revealPending=" + callPaginationRevealPending);
                 submitCachedCalls(latestCallEntities);
-                if (callPaginationRevealPending) {
-                    callPaginationRevealPending = false;
-                    homeView.setCallsPaginationLoading(false);
-                }
             });
         }
     }
@@ -266,35 +277,58 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         callListLoading = false;
         nextCallCursor = null;
         callListHasMore = true;
-        callListVisibleLimit = 20;
+        // Keep already revealed history visible while refreshing the first server page.
+        callListVisibleLimit = Math.max(20, callListVisibleLimit);
         callPaginationRevealPending = false;
+        Log.i(CALL_PAGINATION_TAG, "stage=refresh_reset generation=" + callListGeneration
+                + " visibleLimit=" + callListVisibleLimit + " cached="
+                + latestCallEntities.size());
         if (homeView != null) {
             homeView.setCallsPaginationLoading(false);
+            homeView.setCallsCanLoadMore(true);
             submitCachedCalls(latestCallEntities);
         }
         loadServerCalls();
     }
 
     private void loadServerCalls() {
-        if (callListLoading || callPaginationRevealPending || !callListHasMore)
+        if (callListLoading || callPaginationRevealPending || !callListHasMore) {
+            Log.i(CALL_PAGINATION_TAG, "stage=request_skipped loading=" + callListLoading
+                    + " revealPending=" + callPaginationRevealPending + " hasMore="
+                    + callListHasMore + " cursorPresent="
+                    + (nextCallCursor != null && !nextCallCursor.isEmpty()));
             return;
+        }
         String uid = LoginStateManager.getInstance().getUID(this);
-        if (uid == null || uid.trim().isEmpty())
+        if (uid == null || uid.trim().isEmpty()) {
+            Log.i(CALL_PAGINATION_TAG, "stage=request_skipped reason=missing_user");
             return;
+        }
         callListLoading = true;
         final int requestGeneration = callListGeneration;
         final String requestedCursor = nextCallCursor;
         final boolean pagination = requestedCursor != null && !requestedCursor.isEmpty();
+        final long requestStartedAt = SystemClock.elapsedRealtime();
+        Log.i(CALL_PAGINATION_TAG, "stage=api_request_start generation=" + requestGeneration
+                + " kind=" + (pagination ? "next_page" : "initial") + " pageSize=20"
+                + " cursorPresent=" + pagination + " cached=" + latestCallEntities.size()
+                + " visibleLimit=" + callListVisibleLimit);
         if (pagination && homeView != null)
             homeView.setCallsPaginationLoading(true);
         AppFunctionManager.getInstance().getCallList(uid, 20, requestedCursor,
                 new AppFunctionManager.Callback() {
                     @Override
                     public void onSuccess(Object object) {
-                        if (requestGeneration != callListGeneration)
+                        if (requestGeneration != callListGeneration) {
+                            Log.i(CALL_PAGINATION_TAG, "stage=api_response_ignored generation="
+                                    + requestGeneration + " currentGeneration=" + callListGeneration);
                             return;
+                        }
                         callListLoading = false;
                         if (!(object instanceof JsonObject)) {
+                            Log.i(CALL_PAGINATION_TAG, "stage=api_response_invalid kind="
+                                    + (pagination ? "next_page" : "initial") + " elapsedMs="
+                                    + (SystemClock.elapsedRealtime() - requestStartedAt));
                             callPaginationRevealPending = false;
                             if (homeView != null) homeView.setCallsPaginationLoading(false);
                             return;
@@ -313,6 +347,16 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                         callListHasMore = response.has("hasMore")
                                 && response.get("hasMore").getAsBoolean()
                                 && !nextCallCursor.isEmpty();
+                        if (homeView != null)
+                            homeView.setCallsCanLoadMore(callListHasMore);
+                        Log.i(CALL_PAGINATION_TAG, "stage=api_response_success kind="
+                                + (pagination ? "next_page" : "initial") + " received="
+                                + values.size() + " elapsedMs="
+                                + (SystemClock.elapsedRealtime() - requestStartedAt)
+                                + " visibleLimit=" + callListVisibleLimit + " hasMore="
+                                + callListHasMore + " nextCursorPresent="
+                                + !nextCallCursor.isEmpty() + " revealPending="
+                                + callPaginationRevealPending);
                         if (pagination && values.size() == 0 && homeView != null)
                             homeView.setCallsPaginationLoading(false);
                     }
@@ -323,64 +367,135 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                             callListLoading = false;
                         callPaginationRevealPending = false;
                         if (homeView != null) homeView.setCallsPaginationLoading(false);
+                        Log.e(CALL_PAGINATION_TAG, "stage=api_response_error kind="
+                                + (pagination ? "next_page" : "initial") + " elapsedMs="
+                                + (SystemClock.elapsedRealtime() - requestStartedAt)
+                                + " error=" + error);
                     }
                 });
     }
 
     @Override
     public void onLoadMoreCalls() {
+        Log.i(CALL_PAGINATION_TAG, "stage=activity_load_more_callback cached="
+                + latestCallEntities.size() + " visibleLimit=" + callListVisibleLimit
+                + " loading=" + callListLoading + " revealPending="
+                + callPaginationRevealPending + " hasMore=" + callListHasMore);
         loadServerCalls();
     }
 
     private void submitCachedCalls(List<CallEntity> values) {
-        List<CallLog> calls = new ArrayList<>();
-        Map<String, ChatEntity> chatsById = new HashMap<>();
-        for (ChatEntity chat : latestChatEntities)
-            chatsById.put(chat.chatId, chat);
-        String ownId = normalizeAccountId(LoginStateManager.getInstance().getUID(this));
-        DateFormat rowTime = new SimpleDateFormat("MMM d, h:mm a", Locale.getDefault());
-        DateFormat fullTime = DateFormat.getDateTimeInstance(
-                DateFormat.LONG, DateFormat.SHORT, Locale.getDefault());
-        if (values == null)
-            values = new ArrayList<>();
-        int visibleCount = Math.min(callListVisibleLimit, values.size());
-        for (int index = 0; index < visibleCount; index++) {
-            CallEntity call = values.get(index);
-            String chatId = call.chatId == null ? "" : call.chatId;
-            String callerId = call.callerId == null ? "" : call.callerId;
-            String receiverId = call.receiverId == null ? "" : call.receiverId;
-            String otherId = ownId.equals(normalizeAccountId(callerId))
-                    ? receiverId
-                    : callerId;
-            ChatEntity chat = chatsById.get(chatId);
-            String contact = DeviceContactResolver.cachedNameOrPhone(otherId);
-            if (call.conference) {
-                contact = chat != null && chat.isGroup && chat.contactName != null
-                        && !chat.contactName.trim().isEmpty()
-                        ? chat.contactName.trim() : "Conference call";
-                if (chat == null || !chat.isGroup) {
-                    String names = conferenceParticipantNames(call.participantIdsJson, ownId);
-                    if (!names.isEmpty()) contact += "\n" + names;
+        if (callRowExecutor.isShutdown()) return;
+        final List<CallEntity> callSnapshot = values == null
+                ? new ArrayList<>() : new ArrayList<>(values);
+        final List<ChatEntity> chatSnapshot = new ArrayList<>(latestChatEntities);
+        final String ownId = normalizeAccountId(LoginStateManager.getInstance().getUID(this));
+        final int visibleLimit = callListVisibleLimit;
+        final int namesGeneration = contactNameGeneration;
+        final int buildGeneration = ++callRowBuildGeneration;
+        final long scheduledAt = SystemClock.elapsedRealtime();
+        final android.content.Context appContext = getApplicationContext();
+        Log.i(CALL_PAGINATION_TAG, "stage=render_scheduled generation=" + buildGeneration
+                + " cached=" + callSnapshot.size() + " visibleLimit=" + visibleLimit);
+        callRowExecutor.execute(() -> {
+            long buildStartedAt = SystemClock.elapsedRealtime();
+            List<CallLog> calls = new ArrayList<>();
+            Map<String, ChatEntity> chatsById = new HashMap<>();
+            for (ChatEntity chat : chatSnapshot) chatsById.put(chat.chatId, chat);
+            DateFormat rowTime = new SimpleDateFormat("MMM d, h:mm a", Locale.getDefault());
+            DateFormat fullTime = DateFormat.getDateTimeInstance(
+                    DateFormat.LONG, DateFormat.SHORT, Locale.getDefault());
+            int visibleCount = Math.min(visibleLimit, callSnapshot.size());
+            int reusedCount = 0;
+            int convertedCount = 0;
+            Log.i(CALL_PAGINATION_TAG, "stage=render_prepare generation=" + buildGeneration
+                    + " thread=" + Thread.currentThread().getName() + " cached="
+                    + callSnapshot.size() + " visibleLimit=" + visibleLimit
+                    + " targetRendered=" + visibleCount);
+            for (int index = 0; index < visibleCount; index++) {
+                CallEntity call = callSnapshot.get(index);
+                String chatId = call.chatId == null ? "" : call.chatId;
+                String callerId = call.callerId == null ? "" : call.callerId;
+                String receiverId = call.receiverId == null ? "" : call.receiverId;
+                String otherId = ownId.equals(normalizeAccountId(callerId))
+                        ? receiverId : callerId;
+                ChatEntity chat = chatsById.get(chatId);
+                String rowKey = call.callId == null || call.callId.isEmpty()
+                        ? (call.messageId == null ? "row:" + index : "message:" + call.messageId)
+                        : "call:" + call.callId;
+                int rowFingerprint = Objects.hash(call.messageId, chatId, callerId, receiverId,
+                        call.mediaType, call.status, call.terminationReason, call.createdAt,
+                        call.ringingAt, call.connectedAt, call.endedAt, call.durationSeconds,
+                        call.conference, call.participantIdsJson, ownId, namesGeneration,
+                        chat == null ? null : chat.contactName,
+                        chat == null ? null : chat.localProfilePhotoPath,
+                        chat != null && chat.isGroup);
+                CachedCallRow cachedRow = callRowCache.get(rowKey);
+                if (cachedRow != null && cachedRow.fingerprint == rowFingerprint) {
+                    calls.add(cachedRow.call);
+                    reusedCount++;
+                    continue;
                 }
+                String contact = DeviceContactResolver.cachedNameOrPhone(otherId);
+                if (call.conference) {
+                    contact = chat != null && chat.isGroup && chat.contactName != null
+                            && !chat.contactName.trim().isEmpty()
+                            ? chat.contactName.trim() : "Conference call";
+                    if (chat == null || !chat.isGroup) {
+                        String names = conferenceParticipantNames(call.participantIdsJson, ownId);
+                        if (!names.isEmpty()) contact += "\n" + names;
+                    }
+                }
+                long endedAt = call.endedAt;
+                boolean outgoing = ownId.equals(normalizeAccountId(callerId));
+                boolean missed = call.connectedAt == null || call.connectedAt <= 0;
+                Date date = new Date(endedAt > 0 ? endedAt : call.createdAt);
+                String profilePath = chat == null ? null : chat.localProfilePhotoPath;
+                if ((profilePath == null || profilePath.trim().isEmpty())
+                        && !chatId.startsWith("grp_")) {
+                    profilePath = ChatProfilePhotoStore.getLocalPath(appContext, otherId);
+                }
+                List<String> participantIds = call.conference
+                        ? conferenceParticipantIds(call.participantIdsJson, ownId, otherId)
+                        : java.util.Collections.emptyList();
+                for (String participantId : participantIds)
+                    ChatProfilePhotoStore.getLocalPath(appContext, participantId);
+                CallLog prepared = new CallLog(chatId, call.callId, call.messageId, otherId,
+                        contact, rowTime.format(date), fullTime.format(date),
+                        formatCallDuration(call.durationSeconds),
+                        "video".equals(call.mediaType), outgoing, missed, call.conference,
+                        profilePath, participantIds);
+                calls.add(prepared);
+                callRowCache.put(rowKey, new CachedCallRow(rowFingerprint, prepared));
+                convertedCount++;
             }
-            long endedAt = call.endedAt;
-            long duration = call.durationSeconds;
-            boolean outgoing = ownId.equals(normalizeAccountId(callerId));
-            boolean missed = call.connectedAt == null || call.connectedAt <= 0;
-            Date date = new Date(endedAt > 0 ? endedAt : call.createdAt);
-            String profilePath = chat == null ? null : chat.localProfilePhotoPath;
-            if ((profilePath == null || profilePath.trim().isEmpty())
-                    && !chatId.startsWith("grp_")) {
-                profilePath = ChatProfilePhotoStore.getLocalPath(this, otherId);
-            }
-            calls.add(new CallLog(chatId, call.callId, call.messageId, otherId,
-                    contact, rowTime.format(date), fullTime.format(date),
-                    formatCallDuration(duration),
-                    "video".equals(call.mediaType), outgoing, missed, call.conference,
-                    profilePath));
-        }
-        if (homeView != null)
-            homeView.submitCalls(calls);
+            long builtAt = SystemClock.elapsedRealtime();
+            Log.i(CALL_PAGINATION_TAG, "stage=render_built generation=" + buildGeneration
+                    + " rendered=" + calls.size() + " backgroundDurationMs="
+                    + (builtAt - buildStartedAt) + " reused=" + reusedCount
+                    + " converted=" + convertedCount);
+            runOnUiThread(() -> {
+                if (buildGeneration != callRowBuildGeneration || homeView == null) {
+                    Log.i(CALL_PAGINATION_TAG, "stage=render_discarded generation="
+                            + buildGeneration + " currentGeneration=" + callRowBuildGeneration);
+                    return;
+                }
+                long submitStartedAt = SystemClock.elapsedRealtime();
+                homeView.submitCalls(calls);
+                Log.i(CALL_PAGINATION_TAG, "stage=render_submitted generation="
+                        + buildGeneration + " rendered=" + calls.size() + " cached="
+                        + callSnapshot.size() + " uiDurationMs="
+                        + (SystemClock.elapsedRealtime() - submitStartedAt)
+                        + " totalDurationMs="
+                        + (SystemClock.elapsedRealtime() - scheduledAt));
+                if (callPaginationRevealPending) {
+                    callPaginationRevealPending = false;
+                    homeView.setCallsPaginationLoading(false);
+                    Log.i(CALL_PAGINATION_TAG,
+                            "stage=cache_reveal_complete renderedLimit=" + visibleLimit);
+                }
+            });
+        });
     }
 
     private static String jsonString(JsonObject object, String name) {
@@ -402,6 +517,25 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         } catch (RuntimeException ignored) {
             return "";
         }
+    }
+
+    private static List<String> conferenceParticipantIds(String json, String ownId,
+                                                          String fallbackOtherId) {
+        java.util.LinkedHashSet<String> participants = new java.util.LinkedHashSet<>();
+        if (json != null && !json.trim().isEmpty()) {
+            try {
+                JsonArray ids = com.google.gson.JsonParser.parseString(json).getAsJsonArray();
+                for (JsonElement item : ids) {
+                    String id = normalizeAccountId(item.getAsString());
+                    if (!id.isEmpty() && !id.equals(ownId)) participants.add(id);
+                }
+            } catch (RuntimeException ignored) {
+                // The direct-call peer below remains a safe visual fallback.
+            }
+        }
+        String fallback = normalizeAccountId(fallbackOtherId);
+        if (!fallback.isEmpty() && !fallback.equals(ownId)) participants.add(fallback);
+        return new ArrayList<>(participants);
     }
 
     private static long jsonLong(JsonObject object, String name) {
@@ -436,6 +570,8 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         intent.putExtra(CallDetailActivity.EXTRA_IS_MISSED, callLog.isMissed());
         intent.putExtra(CallDetailActivity.EXTRA_PROFILE_PATH,
                 callLog.getLocalProfilePhotoPath());
+        intent.putStringArrayListExtra(CallDetailActivity.EXTRA_PARTICIPANT_IDS,
+                new ArrayList<>(callLog.getParticipantIds()));
         startActivity(intent);
     }
 
@@ -469,7 +605,9 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
 
     @Override
     public void onMakeCall() {
-        Toast.makeText(this, R.string.make_call, Toast.LENGTH_SHORT).show();
+        Intent intent = new Intent(this, NewChatActivity.class);
+        intent.putExtra(NewChatActivity.EXTRA_SHOW_CHAT_LIST, true);
+        startActivity(intent);
     }
 
     @Override
@@ -625,7 +763,34 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         startActivity(new Intent(this, SettingsActivity.class));
     }
 
-    private List<Chat> toChats(List<ChatEntity> entities) {
+    private void submitChatsAsync(List<ChatEntity> entities) {
+        if (chatRowExecutor.isShutdown()) return;
+        final List<ChatEntity> snapshot = entities == null
+                ? new ArrayList<>() : new ArrayList<>(entities);
+        final int generation = ++chatRowBuildGeneration;
+        final android.content.Context appContext = getApplicationContext();
+        chatRowExecutor.execute(() -> {
+            long startedAt = SystemClock.elapsedRealtime();
+            String ownId = normalizeAccountId(
+                    LoginStateManager.getInstance().getUID(appContext));
+            List<Chat> rows = toChats(snapshot, ownId, appContext);
+            long preparedAt = SystemClock.elapsedRealtime();
+            Log.d(TESTING_TAG, "home_chat_render phase=conversion_finished generation="
+                    + generation + " count=" + rows.size() + " backgroundDurationMs="
+                    + (preparedAt - startedAt));
+            runOnUiThread(() -> {
+                if (generation != chatRowBuildGeneration || homeView == null) return;
+                long submitStartedAt = SystemClock.elapsedRealtime();
+                homeView.submitChats(rows);
+                Log.d(TESTING_TAG, "home_chat_render phase=view_submitted generation="
+                        + generation + " count=" + rows.size() + " uiDurationMs="
+                        + (SystemClock.elapsedRealtime() - submitStartedAt));
+            });
+        });
+    }
+
+    private List<Chat> toChats(List<ChatEntity> entities, String ownId,
+                               android.content.Context appContext) {
         List<Chat> chats = new ArrayList<>();
         if (entities == null)
             return chats;
@@ -635,12 +800,12 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                     : DeviceContactResolver.cachedNameOrPhone(entity.otherUserId);
             String localPath = entity.localProfilePhotoPath;
             if (!entity.isGroup && (localPath == null || localPath.isEmpty())) {
-                localPath = ChatProfilePhotoStore.getLocalPath(this, entity.otherUserId);
+                localPath = ChatProfilePhotoStore.getLocalPath(appContext, entity.otherUserId);
             }
             chats.add(new Chat(entity.chatId, contact, entity.profilePhotoUrl, localPath,
-                    homeMessagePreview(entity), entity.lastMessageTime,
+                    homeMessagePreview(entity, ownId), entity.lastMessageTime,
                     normalizeAccountId(entity.lastMessageSenderId).equals(
-                            normalizeAccountId(LoginStateManager.getInstance().getUID(this))),
+                            ownId),
                     entity.lastMessageDeliveredTime, entity.lastMessageReadTime,
                     entity.lastMessageStatus,
                     entity.lastMessageType, entity.lastMessageAttachmentName,
@@ -655,7 +820,7 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         return value == null || value.trim().isEmpty() ? "Group" : value.trim();
     }
 
-    private String homeMessagePreview(ChatEntity entity) {
+    private String homeMessagePreview(ChatEntity entity, String ownNumber) {
         String text = entity.lastMessage;
         if (text == null)
             return null;
@@ -665,8 +830,6 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                         : "chat_unblock".equalsIgnoreCase(type) ? "unblocked" : "";
         if (action.isEmpty())
             return text;
-        String ownNumber = normalizeAccountId(
-                LoginStateManager.getInstance().getUID(this));
         String normalizedText = text.trim();
         String[] participants = normalizedText.split(" " + action + " ", 2);
         if (!ownNumber.isEmpty() && participants.length == 2)
@@ -686,8 +849,23 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
         return normalized.startsWith("+") ? normalized.substring(1) : normalized;
     }
 
+    private static final class CachedCallRow {
+        final int fingerprint;
+        final CallLog call;
+
+        CachedCallRow(int fingerprint, CallLog call) {
+            this.fingerprint = fingerprint;
+            this.call = call;
+        }
+    }
+
     @Override
     protected void onDestroy() {
+        callRowBuildGeneration++;
+        chatRowBuildGeneration++;
+        callRowExecutor.shutdownNow();
+        chatRowExecutor.shutdownNow();
+        callRowCache.clear();
         if (homeView != null) {
             ViewCompat.setOnApplyWindowInsetsListener(homeView, null);
             homeView.release();

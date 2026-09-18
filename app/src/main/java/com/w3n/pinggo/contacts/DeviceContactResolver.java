@@ -107,6 +107,11 @@ public final class DeviceContactResolver {
         });
     }
 
+    /** Clears resolved names before an explicit user-requested contacts refresh. */
+    public static void clearCache() {
+        NAMES.clear();
+    }
+
     private static boolean hasPermission(Context context) {
         return ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS)
                 == PackageManager.PERMISSION_GRANTED;

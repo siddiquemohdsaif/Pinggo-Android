@@ -37,6 +37,19 @@ public final class VideoActiveCallView extends View {
   private boolean conferenceMode;
   private String participantSummary = "";
   private boolean addMemberVisible;
+  private boolean remoteCameraEnabled = true, buildPosted, released;
+
+  private void requestBuild() {
+    if (released || getWidth() <= 0 || buildPosted) return;
+    buildPosted = true;
+    post(() -> { buildPosted = false; if (!released) build(); });
+  }
+
+  public void setRemoteCameraEnabled(boolean enabled) {
+    if (remoteCameraEnabled == enabled) return;
+    remoteCameraEnabled = enabled;
+    requestBuild();
+  }
 
   public VideoActiveCallView(Context context, String phone, String profilePath, Listener listener) {
     super(context);
@@ -51,23 +64,28 @@ public final class VideoActiveCallView extends View {
     if (getWidth() > 0) build();
   }
   public void setAudioState(boolean speaker, boolean mute) {
+    if (speakerOn == speaker && muted == mute) return;
     speakerOn = speaker; muted = mute;
-    if (getWidth() > 0) build();
+    requestBuild();
   }
   public void setCallStatus(String status) {
+    if (java.util.Objects.equals(callStatus, status)) return;
     callStatus = status == null || status.trim().isEmpty() ? "Video call" : status;
     if (getWidth() > 0) build();
   }
   public void setConferenceParticipants(boolean conference, String participants) {
+    if (conferenceMode == conference && java.util.Objects.equals(participantSummary, participants)) return;
     conferenceMode = conference;
     participantSummary = participants == null ? "" : participants.trim();
     if (getWidth() > 0) build();
   }
   public void setCameraEnabled(boolean enabled) {
+    if (cameraEnabled == enabled) return;
     cameraEnabled = enabled;
-    if (getWidth() > 0) build();
+    requestBuild();
   }
   public void setCallConnected(boolean connected) {
+    if (callConnected == connected) return;
     callConnected = connected;
     if (!connected) muted = false;
     if (getWidth() > 0) build();
@@ -77,8 +95,9 @@ public final class VideoActiveCallView extends View {
     if (getWidth() > 0) build();
   }
   public void setRemoteMuted(boolean value) {
+    if (remoteMuted == value) return;
     remoteMuted = value;
-    if (getWidth() > 0) build();
+    requestBuild();
   }
   public void showIncomingPrompt(boolean show) {
     incomingPrompt = show;
@@ -113,6 +132,11 @@ public final class VideoActiveCallView extends View {
           top + px(508.75f)), sp(14), 0xFFCCD3D9, FontVariation.REGULAR, Text.Alignment.CENTER);
     }
     if (incomingPrompt) incomingControls(w, h); else controls(w, h);
+    if (!remoteCameraEnabled) {
+      text("remote_camera", phone + " • Camera off",
+          new RectF(px(66f), top + px(508.75f), w - px(66f), top + px(600f)),
+          sp(14), 0xFFCCD3D9, FontVariation.REGULAR, Text.Alignment.CENTER);
+    }
     invalidate();
   }
   private void incomingControls(float w, float h) {
@@ -162,22 +186,27 @@ public final class VideoActiveCallView extends View {
   }
   private void text(String id, String value, RectF rect, float size, int color,
       FontVariation weight, Text.Alignment alignment) {
-    content.add(new Text.Builder(getContext(), id, value, rect).setFont(NativeFonts.INTER)
-        .setFontVariations(weight).setTextSizePx(size).setTextColor(color).setAlignment(alignment)
+    content.add(new Text.Builder(getContext(), id, value, rect)
+        .setFont(com.w3n.pinggo.views.home.ListFonts.inter(getContext(), weight))
+        .clearFontVariations().setTextSizePx(size).setTextColor(color).setAlignment(alignment)
         .setVerticalAlignment(Text.VerticalAlignment.CENTER).setMaxLines(1));
   }
   private Button button(String id, Bitmap image, String label, RectF rect, int color,
       Button.OnClickListener click) {
     return content.add(new Button.Builder(getContext(), id, image, label, rect)
-        .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(px(66f)).setFont(NativeFonts.INTER)
-        .setFontVariations(FontVariation.SEMI_BOLD).setTextSizePx(sp(13)).setTextColor(color)
+        .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(px(66f))
+        .setTextStyle(new com.ogfa.nativeviews.text.TextStyle.Builder()
+            .setFont(com.w3n.pinggo.views.home.ListFonts.inter(getContext(), FontVariation.SEMI_BOLD))
+            .clearFontVariations().setTextSizePx(sp(13)).setTextColor(color)
+            .setAlignment(Text.Alignment.CENTER).setVerticalAlignment(Text.VerticalAlignment.CENTER)
+            .setMaxLines(1).build())
         .setRippleEnabled(true).setWaitForRippleBeforeClick(false).setRippleColor(0x33FFFFFF).setOnClickListener(click));
   }
   @Override protected void onDraw(Canvas canvas) { super.onDraw(canvas); layers.draw(canvas); }
   @Override public boolean onTouchEvent(MotionEvent event) {
     return layers.onTouchEvent(event) || super.onTouchEvent(event);
   }
-  public void release() { layers.release(); recycle(dark, control, selected, danger, disabled, profile); }
+  public void release() { released = true; layers.release(); recycle(dark, control, selected, danger, disabled, profile); }
   private Bitmap avatar() {
     int size = Math.round(px(495f)); Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
     Canvas canvas = new Canvas(bitmap); Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);

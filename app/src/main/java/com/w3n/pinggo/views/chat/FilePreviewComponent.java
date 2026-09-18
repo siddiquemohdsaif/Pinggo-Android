@@ -5,6 +5,8 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.Typeface;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.StaticLayout;
 import android.text.TextPaint;
 import android.view.MotionEvent;
@@ -13,6 +15,7 @@ import com.ogfa.nativeviews.component.ComponentHost;
 
 /** Fixed-size document preview drawn inside a tail-less file-message bubble. */
 final class FilePreviewComponent implements Component {
+  private static final Handler MAIN = new Handler(Looper.getMainLooper());
   private static final int PANEL_COLOR = 0xFFF8F9FA;
   private static final int TITLE_COLOR = 0xFF131D2F;
   private static final int SUBTITLE_COLOR = 0xFF687382;
@@ -31,6 +34,15 @@ final class FilePreviewComponent implements Component {
   private long totalBytes;
   private boolean visible;
   private boolean released;
+  private float spinnerAngle;
+  private final Runnable animateSpinner = new Runnable() {
+    @Override public void run() {
+      if (released || !visible || attachmentState != 2) return;
+      spinnerAngle = (spinnerAngle + 12f) % 360f;
+      invalidate();
+      MAIN.postDelayed(this, 16L);
+    }
+  };
 
   FilePreviewComponent(String id, Bitmap documentIcon, Typeface typeface, float figmaScale) {
     this.id = id;
@@ -48,12 +60,15 @@ final class FilePreviewComponent implements Component {
     downloadedBytes = Math.max(0L, currentBytes);
     totalBytes = Math.max(0L, fileBytes);
     visible = true;
+    MAIN.removeCallbacks(animateSpinner);
+    if (attachmentState == 2) MAIN.post(animateSpinner);
     invalidate();
     return this;
   }
 
   FilePreviewComponent hide() {
     visible = false;
+    MAIN.removeCallbacks(animateSpinner);
     invalidate();
     return this;
   }
@@ -64,7 +79,11 @@ final class FilePreviewComponent implements Component {
   @Override public boolean isEnabled() { return false; }
   @Override public boolean onTouchEvent(MotionEvent event) { return false; }
   @Override public void attach(ComponentHost owner) { host = owner; }
-  @Override public void release() { released = true; host = null; }
+  @Override public void release() {
+    released = true;
+    MAIN.removeCallbacks(animateSpinner);
+    host = null;
+  }
 
   @Override public void draw(Canvas canvas) {
     if (!isVisible() || bounds.isEmpty()) return;
@@ -130,11 +149,11 @@ final class FilePreviewComponent implements Component {
       paint.setColor(0xFFD7E5EA);
       canvas.drawArc(progressRing, 0f, 360f, false, paint);
       paint.setColor(0xFF019CC4);
-      if (totalBytes > 0L) {
+      if (totalBytes > 0L && downloadedBytes > 0L) {
         float fraction = Math.min(1f, downloadedBytes / (float) totalBytes);
         canvas.drawArc(progressRing, -90f, 360f * fraction, false, paint);
       } else {
-        canvas.drawArc(progressRing, -90f, 270f, false, paint);
+        canvas.drawArc(progressRing, spinnerAngle, 270f, false, paint);
       }
       paint.setStyle(Paint.Style.FILL);
       subtitleLeft += 34f * scale;

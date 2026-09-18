@@ -19,7 +19,15 @@ public final class GroupHandler {
     public static void create(AppRestAPI api, String userId, String name, String description,
                               java.util.List<String> memberIds,
                               AppFunctionManager.Callback callback) {
+        create(api, userId, name, description, memberIds, null, false, callback);
+    }
+
+    public static void create(AppRestAPI api, String userId, String name, String description,
+                              java.util.List<String> memberIds, String photoBase64, boolean adminsOnly,
+                              AppFunctionManager.Callback callback) {
         JsonObject body = identity(userId, null);
+        if (photoBase64 != null) body.addProperty("profilePhotoBase64", photoBase64);
+        body.addProperty("adminsOnly", adminsOnly);
         body.addProperty("name", name);
         body.addProperty("description", description == null ? "" : description);
         JsonArray ids = new JsonArray();

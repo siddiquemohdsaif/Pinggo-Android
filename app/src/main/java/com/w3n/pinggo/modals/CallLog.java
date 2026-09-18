@@ -1,5 +1,9 @@
 package com.w3n.pinggo.modals;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 public class CallLog {
     public static final int ICON_INCOMING = 0;
     public static final int ICON_OUTGOING = 1;
@@ -17,6 +21,7 @@ public class CallLog {
     private final boolean missed;
     private final boolean conference;
     private final String localProfilePhotoPath;
+    private final List<String> participantIds;
 
     public CallLog(String contactName, String calledTime, String fullCalledDateTime, String duration, boolean videoCall) {
         this("", "", "", contactName, calledTime, fullCalledDateTime, duration,
@@ -64,6 +69,16 @@ public class CallLog {
                    String contactName, String calledTime, String fullCalledDateTime,
                    String duration, boolean videoCall, boolean outgoing, boolean missed,
                    boolean conference, String localProfilePhotoPath) {
+        this(chatId, callId, messageId, phoneNumber, contactName, calledTime,
+                fullCalledDateTime, duration, videoCall, outgoing, missed, conference,
+                localProfilePhotoPath, Collections.emptyList());
+    }
+
+    public CallLog(String chatId, String callId, String messageId, String phoneNumber,
+                   String contactName, String calledTime, String fullCalledDateTime,
+                   String duration, boolean videoCall, boolean outgoing, boolean missed,
+                   boolean conference, String localProfilePhotoPath,
+                   List<String> participantIds) {
         this.chatId = chatId == null ? "" : chatId;
         this.callId = callId == null ? "" : callId;
         this.messageId = messageId == null ? "" : messageId;
@@ -77,6 +92,8 @@ public class CallLog {
         this.missed = missed;
         this.conference = conference;
         this.localProfilePhotoPath = localProfilePhotoPath;
+        this.participantIds = participantIds == null ? Collections.emptyList()
+                : Collections.unmodifiableList(new ArrayList<>(participantIds));
     }
 
     public String getChatId() { return chatId; }
@@ -108,6 +125,7 @@ public class CallLog {
     public boolean isMissed() { return missed; }
     public boolean isConference() { return conference; }
     public String getLocalProfilePhotoPath() { return localProfilePhotoPath; }
+    public List<String> getParticipantIds() { return participantIds; }
     public boolean isGroupCall() { return chatId.startsWith("grp_"); }
 
     /** Mirrors the call-icon rules used by ChatsView and ChatMessageAdapter. */

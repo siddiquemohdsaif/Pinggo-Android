@@ -43,11 +43,22 @@ public final class ProfileBitmapCache {
    * Callers may retain the bitmap while visible but must never call {@link Bitmap#recycle()}.
    */
   public Bitmap request(String path, String name, int size, int accent, Runnable onLoaded) {
+    return requestInternal(path, name, size, accent, true, onLoaded);
+  }
+
+  /** Returns a center-cropped square bitmap for composite avatars. */
+  public Bitmap requestSquare(String path, String name, int size, int accent, Runnable onLoaded) {
+    return requestInternal(path, name, size, accent, false, onLoaded);
+  }
+
+  private Bitmap requestInternal(String path, String name, int size, int accent,
+                                 boolean circular, Runnable onLoaded) {
     int target = Math.max(1, size);
-    String photoKey = "photo|" + (path == null ? "" : path) + '|' + target;
+    String photoKey = (circular ? "photo|" : "photo_square|")
+        + (path == null ? "" : path) + '|' + target;
     Bitmap hit = cache.get(photoKey);
     if (usable(hit)) return hit;
-    Bitmap fallback = fallback(name, target, accent);
+    Bitmap fallback = fallback(name, target, accent, circular);
     if (path == null || path.trim().isEmpty()) return fallback;
     synchronized (waiting) {
       List<Runnable> callbacks = waiting.get(photoKey);
@@ -62,7 +73,7 @@ public final class ProfileBitmapCache {
       waiting.put(photoKey, callbacks);
     }
     decoder.execute(() -> {
-      Bitmap decoded = decodeScaled(path, target);
+      Bitmap decoded = decodeScaled(path, target, circular);
       if (decoded != null) cache.put(photoKey, decoded);
       List<Runnable> callbacks;
       synchronized (waiting) { callbacks = waiting.remove(photoKey); }
@@ -72,17 +83,19 @@ public final class ProfileBitmapCache {
     return fallback;
   }
 
-  private Bitmap fallback(String name, int size, int accent) {
+  private Bitmap fallback(String name, int size, int accent, boolean circular) {
     String initial = name == null || name.trim().isEmpty()
         ? "?" : name.trim().substring(0, 1).toUpperCase(Locale.US);
-    String key = "fallback|" + initial + '|' + size + '|' + accent;
+    String key = (circular ? "fallback|" : "fallback_square|")
+        + initial + '|' + size + '|' + accent;
     Bitmap hit = cache.get(key);
     if (usable(hit)) return hit;
     Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
     Canvas canvas = new Canvas(bitmap);
     Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     paint.setColor(0xFFD9F1F7);
-    canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint);
+    if (circular) canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint);
+    else canvas.drawRect(0f, 0f, size, size, paint);
     paint.setColor(accent);
     paint.setTextSize(size * .42f);
     paint.setTextAlign(Paint.Align.CENTER);
@@ -93,7 +106,7 @@ public final class ProfileBitmapCache {
     return bitmap;
   }
 
-  private static Bitmap decodeScaled(String path, int target) {
+  private static Bitmap decodeScaled(String path, int target, boolean circular) {
     BitmapFactory.Options bounds = new BitmapFactory.Options();
     bounds.inJustDecodeBounds = true;
     BitmapFactory.decodeFile(path, bounds);
@@ -105,12 +118,12 @@ public final class ProfileBitmapCache {
     options.inSampleSize = sample;
     Bitmap source = BitmapFactory.decodeFile(path, options);
     if (source == null) return null;
-    Bitmap result = circleCrop(source, target);
+    Bitmap result = crop(source, target, circular);
     if (source != result && !source.isRecycled()) source.recycle();
     return result;
   }
 
-  private static Bitmap circleCrop(Bitmap source, int size) {
+  private static Bitmap crop(Bitmap source, int size, boolean circular) {
     Bitmap output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
     Canvas canvas = new Canvas(output);
     Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -122,7 +135,8 @@ public final class ProfileBitmapCache {
         (size - source.getHeight() * scale) / 2f);
     shader.setLocalMatrix(matrix);
     paint.setShader(shader);
-    canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint);
+    if (circular) canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint);
+    else canvas.drawRect(0f, 0f, size, size, paint);
     return output;
   }
 

@@ -26,7 +26,7 @@ import com.w3n.pinggo.R;
 import com.w3n.pinggo.modals.UserData;
 import com.w3n.pinggo.views.common.BlockingProgressView;
 import com.w3n.pinggo.views.common.ExitAppController;
-import com.w3n.pinggo.views.common.NativeCropDialogView;
+import com.w3n.pinggo.views.common.NativeCropView;
 import com.w3n.pinggo.views.signup.ProfileSetupView;
 import java.io.IOException;
 import java.io.InputStream;
@@ -43,7 +43,7 @@ public class SignUpActivity extends AppCompatActivity {
   private ProfileSetupView profileSetupView;
   private BlockingProgressView progressView;
   private Bitmap selectedPhoto;
-  private NativeCropDialogView cropDialog;
+  private NativeCropView cropView;
   private String phoneNumber;
   private String email;
   private boolean requestInProgress;
@@ -90,6 +90,14 @@ public class SignUpActivity extends AppCompatActivity {
         });
     ViewCompat.requestApplyInsets(profileSetupView);
     ExitAppController.install(this, null);
+    getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
+      @Override public void handleOnBackPressed() {
+        if (cropView != null && cropView.dismissIfShowing()) return;
+        setEnabled(false);
+        try { getOnBackPressedDispatcher().onBackPressed(); }
+        finally { setEnabled(true); }
+      }
+    });
   }
 
   private void configureSystemBars() {
@@ -112,7 +120,7 @@ public class SignUpActivity extends AppCompatActivity {
     if (bitmap == null) {
       Toast.makeText(this, R.string.image_load_failed, Toast.LENGTH_SHORT).show();
     } else {
-      showCropDialog(bitmap);
+      showCropView(bitmap);
     }
   }
 
@@ -124,10 +132,15 @@ public class SignUpActivity extends AppCompatActivity {
     }
   }
 
-  private void showCropDialog(Bitmap bitmap) {
-    cropDialog = new NativeCropDialogView(this, bitmap,
+  private void showCropView(Bitmap bitmap) {
+    removeCropView();
+    WindowInsetsControllerCompat bars = WindowCompat.getInsetsController(
+        getWindow(), getWindow().getDecorView());
+    bars.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+    bars.hide(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.ime());
+    cropView = new NativeCropView(this, bitmap,
         MIN_CROP_BOX_SIZE_PX, MAX_CROP_BOX_SIZE_PX,
-        new NativeCropDialogView.Listener() {
+        new NativeCropView.Listener() {
           @Override public void onRetry() { photoPicker.launch("image/*"); }
           @Override public void onConfirm(Bitmap cropped) {
             selectedPhoto = cropped;
@@ -137,21 +150,22 @@ public class SignUpActivity extends AppCompatActivity {
             Toast.makeText(SignUpActivity.this, R.string.image_load_failed,
                 Toast.LENGTH_SHORT).show();
           }
-          @Override public void onDismiss() { removeCropDialog(); }
+          @Override public void onDismiss() { removeCropView(); }
         });
-    ((ViewGroup) findViewById(android.R.id.content)).addView(cropDialog,
+    ((ViewGroup) findViewById(android.R.id.content)).addView(cropView,
         new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT));
   }
 
-  private void removeCropDialog() {
-    NativeCropDialogView current = cropDialog;
-    cropDialog = null;
+  private void removeCropView() {
+    NativeCropView current = cropView;
+    cropView = null;
     if (current == null) return;
-    if (current.getParent() instanceof ViewGroup) {
+    WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView())
+        .show(WindowInsetsCompat.Type.systemBars());
+    configureSystemBars();
     if (current.getParent() instanceof ViewGroup) {
       ((ViewGroup) current.getParent()).removeView(current);
-    }
     }
     current.release();
   }
@@ -248,7 +262,7 @@ public class SignUpActivity extends AppCompatActivity {
       ViewCompat.setOnApplyWindowInsetsListener(profileSetupView, null);
     }
     if (progressView != null) progressView.setLoading(false);
-    removeCropDialog();
+    removeCropView();
     requestInProgress = false;
     super.onDestroy();
   }

@@ -7,6 +7,8 @@ import android.graphics.BitmapShader;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
@@ -23,8 +25,12 @@ import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.modals.CallLog;
 import com.w3n.pinggo.R;
+import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
+import com.w3n.pinggo.contacts.DeviceContactResolver;
+import com.w3n.pinggo.data.cache.ProfileBitmapCache;
 import java.util.Locale;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /** AAR-native call detail screen. */
@@ -52,13 +58,18 @@ public final class CallDetailView extends View {
   private final Bitmap voiceActionIcon = drawableBitmap(R.drawable.ic_call, Color.WHITE);
   private final Bitmap videoActionIcon = drawableBitmap(R.drawable.ic_video_call, Color.WHITE);
   private final Bitmap messageActionIcon = drawableBitmap(R.drawable.ic_chat, Color.WHITE);
-  private final Bitmap profile;
+  private final boolean conference;
+  private final List<String> participantIds;
+  private final List<Bitmap> ownedProfiles = new ArrayList<>();
+  private Bitmap profile;
   private final HistoryAdapter adapter = new HistoryAdapter();
   private ComponentList<CallLog> list;
   private Text status;
   private String statusText = "Loading call history...";
   private int topInset;
   private int bottomInset;
+  private boolean released;
+  private final Runnable conferenceProfileRefreshTask = this::refreshConferenceProfile;
 
   public CallDetailView(
       Context context,
@@ -68,6 +79,8 @@ public final class CallDetailView extends View {
       String duration,
       boolean video,
       String profilePath,
+      boolean conference,
+      List<String> participantIds,
       Listener listener) {
     super(context);
     this.name = name;
@@ -75,7 +88,12 @@ public final class CallDetailView extends View {
     this.dateTime = dateTime;
     this.duration = duration;
     this.video = video;
-    profile = loadProfile(profilePath, name);
+    this.conference = conference;
+    this.participantIds = participantIds == null ? Collections.emptyList()
+        : Collections.unmodifiableList(new ArrayList<>(participantIds));
+    profile = usesConferenceCollage()
+        ? buildConferenceProfile() : loadProfile(profilePath, name);
+    ownedProfiles.add(profile);
     this.listener = listener;
     setBackgroundColor(0xFFF7F9FB);
     setClickable(true);
@@ -151,7 +169,8 @@ public final class CallDetailView extends View {
     float actionTop = avatarTop + px(330f);
     float actionSize = px(154f);
     float gap = px(35f);
-    float groupWidth = actionSize * 3f + gap * 2f;
+    int actionCount = conference ? 2 : 3;
+    float groupWidth = actionSize * actionCount + gap * (actionCount - 1);
     float actionLeft = (w - groupWidth) / 2f;
     addIconButton("voice", voiceActionIcon, new RectF(actionLeft, actionTop,
         actionLeft + actionSize, actionTop + actionSize), id -> listener.onVoiceCall());
@@ -159,10 +178,12 @@ public final class CallDetailView extends View {
         new RectF(actionLeft + actionSize + gap, actionTop,
             actionLeft + actionSize * 2f + gap, actionTop + actionSize),
         id -> listener.onVideoCall());
-    addIconButton("message", messageActionIcon,
-        new RectF(actionLeft + (actionSize + gap) * 2f, actionTop,
-            actionLeft + actionSize * 3f + gap * 2f, actionTop + actionSize),
-        id -> listener.onMessage());
+    if (!conference) {
+      addIconButton("message", messageActionIcon,
+          new RectF(actionLeft + (actionSize + gap) * 2f, actionTop,
+              actionLeft + actionSize * 3f + gap * 2f, actionTop + actionSize),
+          id -> listener.onMessage());
+    }
     float listTop = actionTop + actionSize + px(44f);
     list = content.add(new ComponentList.Builder<CallLog>(getContext(), "call_history",
         new RectF(0f, listTop, w, getHeight() - bottomInset))
@@ -310,10 +331,133 @@ public final class CallDetailView extends View {
   }
 
   public void release() {
+    released = true;
+    removeCallbacks(conferenceProfileRefreshTask);
     layers.release();
     recycle(white, accent, divider, phoneIncomingIcon, phoneOutgoingIcon, phoneMissedIcon,
         videoIncomingIcon, videoOutgoingIcon, videoMissedIcon, voiceActionIcon,
-        videoActionIcon, messageActionIcon, profile);
+        videoActionIcon, messageActionIcon);
+    recycle(ownedProfiles.toArray(new Bitmap[0]));
+    ownedProfiles.clear();
+  }
+
+  private boolean usesConferenceCollage() {
+    return participantIds.size() > 1;
+  }
+
+  private Bitmap buildConferenceProfile() {
+    int size = Math.max(1, Math.round(px(220f)));
+    int total = participantIds.size();
+    int photoCount = total > 4 ? 3 : Math.min(4, total);
+    int panelCount = total > 4 ? 4 : photoCount;
+    Bitmap output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+    Canvas canvas = new Canvas(output);
+    Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+    Path circle = new Path();
+    circle.addCircle(size / 2f, size / 2f, size / 2f, Path.Direction.CW);
+    canvas.save();
+    canvas.clipPath(circle);
+    canvas.drawColor(0xFFF1E8DC);
+
+    RectF[] panels = conferencePanels(panelCount, size);
+    for (int index = 0; index < photoCount; index++) {
+      String participantId = participantIds.get(index);
+      Bitmap photo = ProfileBitmapCache.get().requestSquare(
+          ChatProfilePhotoStore.getLocalPath(getContext(), participantId),
+          DeviceContactResolver.cachedNameOrPhone(participantId), size, 0xFF019CC4,
+          this::scheduleConferenceProfileRefresh);
+      drawCenterCrop(canvas, photo, panels[index], paint);
+    }
+    if (total > 4) drawConferenceOverflow(canvas, panels[3], total - 3, paint);
+    drawConferenceDividers(canvas, panelCount, size, paint);
+    canvas.restore();
+
+    paint.setStyle(Paint.Style.STROKE);
+    paint.setStrokeWidth(Math.max(1f, size * .018f));
+    paint.setColor(0xFFF1E8DC);
+    canvas.drawCircle(size / 2f, size / 2f,
+        size / 2f - paint.getStrokeWidth() / 2f, paint);
+    return output;
+  }
+
+  private void refreshConferenceProfile() {
+    if (released || !usesConferenceCollage()) return;
+    Bitmap updated = buildConferenceProfile();
+    profile = updated;
+    ownedProfiles.add(updated);
+    if (getWidth() > 0 && getHeight() > 0) build();
+  }
+
+  private void scheduleConferenceProfileRefresh() {
+    if (released) return;
+    removeCallbacks(conferenceProfileRefreshTask);
+    post(conferenceProfileRefreshTask);
+  }
+
+  private static RectF[] conferencePanels(int count, int size) {
+    float half = size / 2f;
+    if (count == 2) return new RectF[] {
+        new RectF(0f, 0f, half, size), new RectF(half, 0f, size, size)
+    };
+    if (count == 3) return new RectF[] {
+        new RectF(0f, 0f, half, size), new RectF(half, 0f, size, half),
+        new RectF(half, half, size, size)
+    };
+    return new RectF[] {
+        new RectF(0f, 0f, half, half), new RectF(half, 0f, size, half),
+        new RectF(0f, half, half, size), new RectF(half, half, size, size)
+    };
+  }
+
+  private static void drawCenterCrop(
+      Canvas canvas, Bitmap bitmap, RectF destination, Paint paint) {
+    if (bitmap == null || bitmap.isRecycled()
+        || destination.width() <= 0f || destination.height() <= 0f) return;
+    float sourceAspect = bitmap.getWidth() / (float) bitmap.getHeight();
+    float destinationAspect = destination.width() / destination.height();
+    int left = 0;
+    int top = 0;
+    int right = bitmap.getWidth();
+    int bottom = bitmap.getHeight();
+    if (sourceAspect > destinationAspect) {
+      int croppedWidth = Math.max(1,
+          Math.round(bitmap.getHeight() * destinationAspect));
+      left = (bitmap.getWidth() - croppedWidth) / 2;
+      right = left + croppedWidth;
+    } else if (sourceAspect < destinationAspect) {
+      int croppedHeight = Math.max(1,
+          Math.round(bitmap.getWidth() / destinationAspect));
+      top = (bitmap.getHeight() - croppedHeight) / 2;
+      bottom = top + croppedHeight;
+    }
+    canvas.drawBitmap(bitmap, new Rect(left, top, right, bottom), destination, paint);
+  }
+
+  private static void drawConferenceOverflow(
+      Canvas canvas, RectF panel, int overflow, Paint paint) {
+    paint.setStyle(Paint.Style.FILL);
+    paint.setColor(0xFFD8C8B5);
+    canvas.drawRect(panel, paint);
+    paint.setColor(0xFF285565);
+    paint.setTextAlign(Paint.Align.CENTER);
+    paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+    paint.setTextSize(panel.width() * .38f);
+    Paint.FontMetrics metrics = paint.getFontMetrics();
+    canvas.drawText("+" + overflow, panel.centerX(),
+        panel.centerY() - (metrics.ascent + metrics.descent) / 2f, paint);
+    paint.setTypeface(null);
+  }
+
+  private static void drawConferenceDividers(
+      Canvas canvas, int count, int size, Paint paint) {
+    float half = size / 2f;
+    paint.setStyle(Paint.Style.STROKE);
+    paint.setStrokeWidth(Math.max(2f, size * .025f));
+    paint.setColor(0xFFF1E8DC);
+    canvas.drawLine(half, 0f, half, size, paint);
+    if (count == 3) canvas.drawLine(half, half, size, half, paint);
+    else if (count >= 4) canvas.drawLine(0f, half, size, half, paint);
+    paint.setStyle(Paint.Style.FILL);
   }
 
   private Bitmap loadProfile(String path, String fallbackName) {

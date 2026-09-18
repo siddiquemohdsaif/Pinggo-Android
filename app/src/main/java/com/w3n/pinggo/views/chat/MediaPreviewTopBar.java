@@ -1,4 +1,4 @@
-package com.w3n.pinggo.activity;
+package com.w3n.pinggo.views.chat;
 
 import android.app.Activity;
 import android.graphics.Color;

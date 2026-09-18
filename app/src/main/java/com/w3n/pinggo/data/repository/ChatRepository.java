@@ -79,6 +79,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     public interface DeviceEventListener { void onDevicesChanged(); }
     private static final String PERF_TAG = "ChatsRepoPerf";
     private static final String TESTING_TAG = "PARVEZ_TESTING";
+    private static final String DISCONNECT_HOOK_TAG = "PingGoDisconnectHook";
     private static final long ATTACHMENT_CHUNK_SIZE = 3L * 1024L * 1024L;
     private static final int CHAT_LIST_PAGE_SIZE = 20;
     private static final String PIN_USER_SEPARATOR = "\u001F";
@@ -390,6 +391,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 + JsonParserUtil.getString(event, "type") + " callId="
                 + JsonParserUtil.getString(event, "callId") + " sent=" + sent
                 + " queued=" + !sent);
+        logDisconnectHook("dispatch", event, sent, !sent);
         return sent;
     }
 
@@ -402,9 +404,25 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 Log.i("PingGoCallTrace", "call_event_retry_sent type="
                         + JsonParserUtil.getString(event, "type") + " callId="
                         + JsonParserUtil.getString(event, "callId"));
+                logDisconnectHook("retry_sent", event, true, false);
                 iterator.remove();
             }
         }
+    }
+
+    /** Logs the client-side trigger that the signaling backend turns into a disconnect webhook. */
+    private static void logDisconnectHook(String stage, JsonObject event, boolean sent,
+                                          boolean queued) {
+        String type = JsonParserUtil.getString(event, "type");
+        if (!"call_end".equals(type) && !"call_leave".equals(type)) return;
+        Log.i(DISCONNECT_HOOK_TAG, "stage=" + stage
+                + " callId=" + JsonParserUtil.getString(event, "callId")
+                + " engine=" + JsonParserUtil.getString(event, "engine")
+                + " media=" + JsonParserUtil.getString(event, "mediaType")
+                + " signal=" + type
+                + " reason=" + JsonParserUtil.getString(event, "reason")
+                + " transportSent=" + sent + " queued=" + queued
+                + " webhookExpected=true");
     }
 
     public LiveData<List<MessageEntity>> observeMessages(String chatId, int limit) {
@@ -646,21 +664,102 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         return transferDao.observeChat(chatId);
     }
 
+    public LiveData<List<MessageEntity>> observeLocalAttachments(String chatId) {
+        return messageDao.observeLocalAttachments(chatId);
+    }
+
     public void loadStoredMedia(String chatId, int pageSize, Long before,
+                                StoredMediaCallback callback) {
+        loadStoredMedia(chatId, "all", pageSize, before, callback);
+    }
+
+    public void loadStoredMedia(String chatId, String category, int pageSize, Long before,
                                 StoredMediaCallback callback) {
         ioExecutor.execute(() -> {
             int limit = Math.max(1, pageSize);
             long cursor = before == null ? Long.MAX_VALUE : before;
-            List<MessageEntity> values = messageDao.findStoredMediaPage(chatId, cursor, limit);
-            Long next = values.size() == limit ? values.get(values.size() - 1).sentTime : null;
+            List<MessageEntity> values;
+            if ("media".equalsIgnoreCase(category)) {
+                values = messageDao.findStoredImageVideoPage(chatId, cursor, limit);
+            } else if ("docs".equalsIgnoreCase(category)) {
+                values = messageDao.findStoredDocumentPage(chatId, cursor, limit);
+            } else if ("links".equalsIgnoreCase(category)) {
+                values = messageDao.findStoredLinkPage(chatId, cursor, limit);
+            } else {
+                values = messageDao.findStoredMediaPage(chatId, cursor, limit);
+            }
+            Long next = values.isEmpty() ? before : values.get(values.size() - 1).sentTime;
             mainHandler.post(() -> callback.onLoaded(values, next, values.size() == limit));
+        });
+    }
+
+    /** Calls can populate the same profile store even when ChatsView has never loaded. */
+    public void loadCallProfilePhoto(String chatId, String otherId,
+                                    java.util.function.Consumer<String> callback) {
+        ioExecutor.execute(() -> {
+            String path = ChatProfilePhotoStore.getLocalPath(appContext, otherId);
+            if (path != null) {
+                String ready = path;
+                mainHandler.post(() -> callback.accept(ready));
+                return;
+            }
+            ChatEntity chat = chatDao.findByChatId(chatId);
+            if (chat != null && chat.profilePhotoUrl != null && !chat.profilePhotoUrl.trim().isEmpty()) {
+                storeCallProfilePhoto(chatId, otherId, chat.profilePhotoUrl, callback);
+                return;
+            }
+            AppFunctionManager.getInstance().discoverContacts(
+                    LoginStateManager.getInstance().getUID(appContext),
+                    Collections.singletonList(otherId), new AppFunctionManager.Callback() {
+                @Override public void onSuccess(Object value) {
+                    String url = null;
+                    if (value instanceof JsonObject) {
+                        JsonObject root = (JsonObject) value;
+                        if (root.has("contacts") && root.get("contacts").isJsonArray()) {
+                            for (JsonElement item : root.getAsJsonArray("contacts")) {
+                                if (!item.isJsonObject()) continue;
+                                JsonObject contact = item.getAsJsonObject();
+                                if (normalizeAccountId(otherId).equals(normalizeAccountId(
+                                        JsonParserUtil.getString(contact, "phoneNumber")))) {
+                                    url = JsonParserUtil.getString(contact, "profilePhotoUrl");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (url == null || url.trim().isEmpty()) {
+                        mainHandler.post(() -> callback.accept(null));
+                    } else storeCallProfilePhoto(chatId, otherId, url, callback);
+                }
+                @Override public void onError(String error) {
+                    mainHandler.post(() -> callback.accept(null));
+                }
+            });
+        });
+    }
+
+    private void storeCallProfilePhoto(String chatId, String otherId, String url,
+                                      java.util.function.Consumer<String> callback) {
+        profilePhotoExecutor.execute(() -> {
+            String path = ChatProfilePhotoStore.downloadAndStore(appContext, otherId, url);
+            if (path != null) chatDao.updateLocalProfilePhotoPath(
+                    chatId, url, path, System.currentTimeMillis());
+            mainHandler.post(() -> callback.accept(path));
         });
     }
 
     public void downloadAttachment(MessageEntity message, DownloadCallback callback) {
         ioExecutor.execute(() -> {
-            if (message == null || message.attachmentId == null || message.attachmentUrl == null) {
+            if (message == null || message.attachmentId == null || message.attachmentId.isEmpty()) {
                 mainHandler.post(() -> callback.onError("Download URL is unavailable."));
+                return;
+            }
+            MessageEntity stored = messageDao.findLocalAttachment(message.attachmentId);
+            String local = message.attachmentLocalUri;
+            if (local == null && stored != null) local = stored.attachmentLocalUri;
+            if (local != null && canReadAttachment(Uri.parse(local))) {
+                Uri uri = Uri.parse(local);
+                mainHandler.post(() -> callback.onAvailable(uri));
                 return;
             }
             TransferEntity transfer = transferDao.findByAttachmentId(message.attachmentId);
@@ -668,6 +767,21 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     && canReadAttachment(Uri.parse(transfer.localUri))) {
                 Uri uri = Uri.parse(transfer.localUri);
                 mainHandler.post(() -> callback.onAvailable(uri));
+                return;
+            }
+            if (transfer != null && transfer.sourceUri != null
+                    && canReadAttachment(Uri.parse(transfer.sourceUri))) {
+                Uri uri = Uri.parse(transfer.sourceUri);
+                mainHandler.post(() -> callback.onAvailable(uri));
+                return;
+            }
+            if (message.attachmentUrl == null || message.attachmentUrl.isEmpty()) {
+                mainHandler.post(() -> callback.onError("Download URL is unavailable."));
+                return;
+            }
+            if (transfer != null && ("queued".equals(transfer.status)
+                    || "downloading".equals(transfer.status))) {
+                mainHandler.post(callback::onQueued);
                 return;
             }
             if (transfer == null) transfer = new TransferEntity(UUID.randomUUID().toString());

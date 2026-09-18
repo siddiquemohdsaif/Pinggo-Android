@@ -212,6 +212,11 @@ public class AppFunctionManager {
     GroupHandler.get(appApi, userId, groupId, callback);
   }
 
+  public void createGroup(String userId, String name, String description, List<String> memberIds,
+                          String photoBase64, boolean adminsOnly, Callback callback) {
+    GroupHandler.create(appApi, userId, name, description, memberIds, photoBase64, adminsOnly, callback);
+  }
+
   public void getGroupDetails(String userId, String groupId, Callback callback) {
     GroupHandler.details(appApi, userId, groupId, callback);
   }

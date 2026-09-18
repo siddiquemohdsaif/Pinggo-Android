@@ -61,6 +61,9 @@
         <receiver
             android:name=".notification.NotificationActionReceiver"
             android:exported="false" />
+        <receiver
+            android:name=".notification.CallPipActionReceiver"
+            android:exported="false" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"
@@ -74,14 +77,23 @@
         <activity
             android:name=".activity.LiveKitCallActivity"
             android:exported="false"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
             android:windowSoftInputMode="adjustNothing" />
         <activity
             android:name=".activity.VideoCallActivity"
             android:exported="false"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
             android:windowSoftInputMode="adjustNothing" />
         <activity
             android:name=".activity.VoiceCallActivity"
             android:exported="false"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
             android:windowSoftInputMode="adjustNothing" />
         <activity
             android:name=".activity.NewChatActivity"

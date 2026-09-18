@@ -176,7 +176,35 @@ public final class ChatView extends View {
   private int stableIdleProbes;
   private long idleProbeDeadlineMs;
   private Runnable pendingScrollIdleAction;
+  private boolean visibleMessagesDispatchPosted;
+  private int reportedVisibleFirst = -1;
+  private int reportedVisibleLast = -1;
+  private long reportedVisibleSignature = Long.MIN_VALUE;
   private final Runnable finishScrollProfile = this::finishScrollProfile;
+  private final Runnable dispatchVisibleMessages = new Runnable() {
+    @Override public void run() {
+      visibleMessagesDispatchPosted = false;
+      if (list == null || adapter.getItemCount() == 0) return;
+      int first = Math.max(0, list.getFirstVisiblePosition());
+      int last = Math.min(adapter.getItemCount() - 1, list.getLastVisiblePosition());
+      if (last < first) return;
+      long signature = 1125899906842597L;
+      for (int index = first; index <= last; index++) {
+        MessageEntity message = adapter.getItem(index);
+        signature = signature * 31L + visibleDownloadSignature(message);
+      }
+      if (first == reportedVisibleFirst && last == reportedVisibleLast
+          && signature == reportedVisibleSignature) return;
+      reportedVisibleFirst = first;
+      reportedVisibleLast = last;
+      reportedVisibleSignature = signature;
+      List<MessageEntity> visibleBottomFirst = new ArrayList<>(last - first + 1);
+      for (int index = last; index >= first; index--) {
+        visibleBottomFirst.add(adapter.getItem(index));
+      }
+      listener.onVisibleMessagesChanged(visibleBottomFirst);
+    }
+  };
   private final Runnable probeScrollIdle = new Runnable() {
     @Override public void run() {
       if (!messageScrollActive || list == null) return;
@@ -355,6 +383,7 @@ public final class ChatView extends View {
     boolean wasNearBottom = oldCount == 0 || lastVisible >= oldCount - 2;
     boolean changed = prepared == null
         ? adapter.submit(values) : adapter.applyPreparedSubmission(prepared);
+    if (changed) reportedVisibleSignature = Long.MIN_VALUE;
     boolean selectionChanged = selection.retainLoaded(adapter);
     if (selectionChanged) refreshMessageSelectionHeader();
     boolean empty = adapter.getItemCount() == 0;
@@ -500,9 +529,9 @@ public final class ChatView extends View {
     return bounds.contains(x, y);
   }
 
-  private void onMediaMetricsChanged() {
+  private void onMediaMetricsChanged(String mediaSource) {
     if (list == null || adapter.getItemCount() == 0) {
-      adapter.refreshMeasuredRows();
+      adapter.refreshMeasuredRows(mediaSource);
       return;
     }
     int firstVisible = list.getFirstVisiblePosition();
@@ -516,7 +545,7 @@ public final class ChatView extends View {
     float anchorPixelOffset = oldOffset - oldAnchorStart;
     String anchorId = adapter.messageIdAt(firstVisible);
 
-    adapter.refreshMeasuredRows();
+    adapter.refreshMeasuredRows(mediaSource);
     if (keepBottom) {
       scrollListFullyToBottom();
     } else {
@@ -1766,6 +1795,7 @@ public final class ChatView extends View {
     super.onDraw(c);
     long drawStartedNanos = SystemClock.elapsedRealtimeNanos();
     layers.draw(c);
+    scheduleVisibleMessagesDispatch();
     if (profiler != null) {
       int first = list == null ? -1 : list.getFirstVisiblePosition();
       int last = list == null ? -1 : list.getLastVisiblePosition();
@@ -1773,6 +1803,26 @@ public final class ChatView extends View {
       profiler.viewDraw(SystemClock.elapsedRealtimeNanos() - drawStartedNanos, count, first, last);
       profiler.scrollProgress(first, last, count);
     }
+  }
+
+  private void scheduleVisibleMessagesDispatch() {
+    if (visibleMessagesDispatchPosted || list == null || adapter.getItemCount() == 0) return;
+    visibleMessagesDispatchPosted = true;
+    post(dispatchVisibleMessages);
+  }
+
+  private static long visibleDownloadSignature(MessageEntity message) {
+    if (message == null) return 0L;
+    long result = 17L;
+    result = result * 31L + stringHash(message.messageId);
+    result = result * 31L + stringHash(message.clientMessageId);
+    result = result * 31L + stringHash(message.attachmentId);
+    result = result * 31L + stringHash(message.attachmentLocalUri);
+    return result;
+  }
+
+  private static long stringHash(String value) {
+    return value == null ? 0L : value.hashCode();
   }
 
   /** Transparent timing wrapper around the AAR list's draw call. */
@@ -1968,6 +2018,8 @@ public final class ChatView extends View {
   public void release() {
     removeCallbacks(finishScrollProfile);
     removeCallbacks(probeScrollIdle);
+    removeCallbacks(dispatchVisibleMessages);
+    visibleMessagesDispatchPosted = false;
     finishScrollProfile();
     MediaPreviewCache.setDecodingPaused(false);
     layers.release();

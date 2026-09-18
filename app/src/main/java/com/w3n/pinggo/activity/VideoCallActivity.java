@@ -3,6 +3,7 @@ package com.w3n.pinggo.activity;
 import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.media.AudioManager;
 import android.media.Ringtone;
@@ -32,22 +33,30 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.call.ActiveCallRegistry;
 import com.w3n.pinggo.call.FloatingVideoCallController;
 import com.w3n.pinggo.call.VideoCallController;
+import com.w3n.pinggo.call.CallPictureInPicture;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.notification.PingGoNotificationManager;
 import com.w3n.pinggo.views.call.VideoActiveCallView;
 import java.util.Map;
 
 public class VideoCallActivity extends AppCompatActivity implements VideoActiveCallView.Listener,
-    VideoCallController.Listener {
+    VideoCallController.Listener, ActiveCallRegistry.PictureInPictureHangupListener {
   private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig = new com.ogfa.nativeviews.component.FigmaConfig(
       1080f);
   private static final String TAG = "PingGoVideoCall";
   private VideoActiveCallView callView;
   private AudioManager audioManager;
   private VideoCallController controller;
+  private FrameLayout videoRoot;
   private SurfaceView remoteSurface, localSurface;
   private TextView remoteCameraOffView, localCameraOffView;
   private boolean speakerOn = true;
+  private boolean callConnected;
+  private boolean pipEligible;
+  private boolean pipLayoutActive;
+  private boolean pipSessionActive;
+  private boolean pipActivityStopped;
+  private int pipExitCheckAttempts;
   private final Handler toneHandler = new Handler(Looper.getMainLooper());
   private Ringtone incomingRingtone;
   private ToneGenerator outgoingTone;
@@ -129,28 +138,38 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
         com.w3n.pinggo.Database.CloudFunction.RestApi.APIAuth.MEDIA_WS_URL);
     FloatingVideoCallController.getInstance().begin(controller::hangup,
         controller::attachRemoteSurface);
+    pipEligible = !controller.isIncomingUnanswered();
+    CallPictureInPicture.configure(this, pipEligible);
+    getOnBackPressedDispatcher().addCallback(this,
+        new androidx.activity.OnBackPressedCallback(true) {
+          @Override public void handleOnBackPressed() { minimizeCall(); }
+        });
     requestPermissionsAndStart();
   }
 
   private void buildCallScreen() {
-    FrameLayout root = new FrameLayout(this);
-    root.setBackgroundColor(Color.rgb(16, 24, 32));
+    videoRoot = new FrameLayout(this);
+    videoRoot.setBackgroundColor(Color.rgb(16, 24, 32));
     remoteSurface = new SurfaceView(this);
-    root.addView(remoteSurface, new FrameLayout.LayoutParams(-1, -1));
+    videoRoot.addView(remoteSurface, new FrameLayout.LayoutParams(-1, -1));
     remoteCameraOffView = cameraDisabledView();
     remoteCameraOffView.setVisibility(View.GONE);
-    root.addView(remoteCameraOffView, new FrameLayout.LayoutParams(-1, -1));
+    videoRoot.addView(remoteCameraOffView, new FrameLayout.LayoutParams(-1, -1));
     localSurface = new SurfaceView(this);
     localSurface.setZOrderMediaOverlay(true);
-    root.addView(localSurface, new FrameLayout.LayoutParams(-1, -1));
+    videoRoot.addView(localSurface, new FrameLayout.LayoutParams(-1, -1));
     localCameraOffView = cameraDisabledView();
     localCameraOffView.setVisibility(View.GONE);
-    root.addView(localCameraOffView, new FrameLayout.LayoutParams(-1, -1));
+    videoRoot.addView(localCameraOffView, new FrameLayout.LayoutParams(-1, -1));
     callView = new VideoActiveCallView(this, value(VoiceCallActivity.EXTRA_PHONE_NUMBER),
         value(VoiceCallActivity.EXTRA_PROFILE_PATH), this);
     callView.setAudioState(true, false);
-    root.addView(callView, new FrameLayout.LayoutParams(-1, -1));
-    setContentView(root);
+    videoRoot.addView(callView, new FrameLayout.LayoutParams(-1, -1));
+    videoRoot.addOnLayoutChangeListener((view, left, top, right, bottom,
+        oldLeft, oldTop, oldRight, oldBottom) -> {
+      if (pipLayoutActive && bottom > top) layoutPictureInPictureSurfaces(bottom - top);
+    });
+    setContentView(videoRoot);
     ViewCompat.setOnApplyWindowInsetsListener(callView, (view, insets) -> {
       Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
       callView.setInsets(bars.top, bars.bottom);
@@ -214,6 +233,13 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
   @Override
   protected void onResume() {
     super.onResume();
+    pipActivityStopped = false;
+    // Returning from PiP to the full activity is not a dismissal.
+    if (!CallPictureInPicture.isActive(this)) {
+      pipSessionActive = false;
+      pipExitCheckAttempts = 0;
+      applyPictureInPictureLayout(false);
+    }
     if (controller != null) {
       controller.onResume();
       if (remoteSurface.getHolder().getSurface().isValid())
@@ -224,22 +250,103 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
 
   @Override
   protected void onPause() {
-    if (controller != null && !FloatingVideoCallController.getInstance().isMinimized())
+    if (controller != null && !CallPictureInPicture.isActive(this) && !pipEligible
+        && !FloatingVideoCallController.getInstance().isMinimized())
       controller.onPause();
     super.onPause();
+  }
+
+  @Override protected void onUserLeaveHint() {
+    super.onUserLeaveHint();
+    if (pipEligible) CallPictureInPicture.enter(this);
+  }
+
+  @Override protected void onStop() {
+    super.onStop();
+    if (!pipSessionActive) return;
+    pipActivityStopped = true;
+    boolean stillInPip = CallPictureInPicture.isActive(this);
+    Log.i("PingGoDisconnectHook", "stage=pip_on_stop engine=webrtc media=video callId="
+        + value(VoiceCallActivity.EXTRA_CALL_ID) + " stillInPip=" + stillInPip);
+    // PiP dismissal does not reliably destroy the activity on every Android vendor build.
+    schedulePipExitCheck("on_stop");
+  }
+
+  private void schedulePipExitCheck(String trigger) {
+    if (!pipSessionActive
+        || pipExitCheckAttempts >= CallPictureInPicture.DISMISS_CONFIRMATION_MAX_ATTEMPTS) return;
+    int attempt = ++pipExitCheckAttempts;
+    toneHandler.postDelayed(() -> {
+      if (!pipSessionActive) return;
+      boolean inPip = CallPictureInPicture.isActive(this);
+      Log.i("PingGoDisconnectHook", "stage=pip_exit_check engine=webrtc media=video callId="
+          + value(VoiceCallActivity.EXTRA_CALL_ID) + " trigger=" + trigger
+          + " attempt=" + attempt + " inPip=" + inPip + " focus=" + hasWindowFocus());
+      if (!inPip) disconnectDismissedPip("exit_check");
+      else schedulePipExitCheck(trigger);
+    }, CallPictureInPicture.DISMISS_CONFIRMATION_MS);
+  }
+
+  private void disconnectDismissedPip(String lifecycle) {
+    if (!pipSessionActive || controller == null) return;
+    pipSessionActive = false;
+    Log.i("PingGoCallTrace", "video_pip_dismissed callId="
+        + value(VoiceCallActivity.EXTRA_CALL_ID));
+    Log.i("PingGoDisconnectHook", "stage=pip_dismissed engine=webrtc media=video callId="
+        + value(VoiceCallActivity.EXTRA_CALL_ID) + " action=hangup lifecycle=" + lifecycle);
+    controller.hangup();
+  }
+
+  @Override public void onPictureInPictureModeChanged(boolean inPictureInPictureMode,
+      @NonNull Configuration newConfig) {
+    super.onPictureInPictureModeChanged(inPictureInPictureMode, newConfig);
+    Log.i("PingGoDisconnectHook", "stage=pip_mode_changed engine=webrtc media=video callId="
+        + value(VoiceCallActivity.EXTRA_CALL_ID) + " inPip=" + inPictureInPictureMode);
+    if (inPictureInPictureMode) {
+      pipSessionActive = true;
+      pipActivityStopped = false;
+      pipExitCheckAttempts = 0;
+    } else {
+      pipExitCheckAttempts = 0;
+      if (pipSessionActive && pipActivityStopped && !hasWindowFocus()) {
+        Log.i("PingGoDisconnectHook", "stage=pip_exit_direct engine=webrtc media=video callId="
+            + value(VoiceCallActivity.EXTRA_CALL_ID) + " trigger=mode_changed");
+        disconnectDismissedPip("mode_changed_direct");
+      } else {
+        schedulePipExitCheck("mode_changed");
+      }
+    }
+    if (inPictureInPictureMode) applyPictureInPictureLayout(true);
   }
 
   @Override
   public void onBack() {
     if (controller.isIncomingUnanswered())
       controller.reject();
-    else
+    else minimizeCall();
+  }
+
+  private void minimizeCall() {
+    if (controller == null) return;
+    if (controller.isIncomingUnanswered()) {
+      controller.reject();
+      return;
+    }
+    if (!CallPictureInPicture.enter(this))
       FloatingVideoCallController.getInstance().minimizeAndReturn(this);
   }
 
   @Override
   public void onEnd() {
     controller.hangup();
+  }
+
+  @Override public void onPictureInPictureHangup() {
+    Log.i("PingGoDisconnectHook", "stage=pip_hangup_action engine=webrtc media=video callId="
+        + value(VoiceCallActivity.EXTRA_CALL_ID));
+    pipSessionActive = false;
+    if (controller != null) controller.hangup();
+    if (!isFinishing()) finish();
   }
 
   @Override
@@ -272,6 +379,8 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
         + value(VoiceCallActivity.EXTRA_CALL_ID) + " incomingUnanswered="
         + controller.isIncomingUnanswered());
     stopIncomingRingtone();
+    pipEligible = true;
+    CallPictureInPicture.configure(this, true);
     PingGoNotificationManager.clearCallNotification(this,
         value(VoiceCallActivity.EXTRA_CALL_ID));
     controller.accept();
@@ -299,7 +408,12 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
         return;
       callView.setCallStatus(status);
       FloatingVideoCallController.getInstance().updateStatus(status);
-      callView.setCallConnected(state == VideoCallController.CallState.CONNECTED);
+      callConnected = state == VideoCallController.CallState.CONNECTED;
+      callView.setCallConnected(callConnected);
+      if (callConnected && !pipEligible) {
+        pipEligible = true;
+        CallPictureInPicture.configure(this, true);
+      }
       if (state == VideoCallController.CallState.RINGING) {
         callView.showIncomingPrompt(true);
         startIncomingRingtone();
@@ -344,6 +458,7 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
   @Override
   public void onRemoteCameraEnabled(boolean enabled) {
     runOnUiThread(() -> {
+      if (callView != null) callView.setRemoteCameraEnabled(enabled);
       remoteCameraOffView.setVisibility(enabled ? View.GONE : View.VISIBLE);
       if (!enabled && remoteCameraOffView != null)
         remoteCameraOffView.bringToFront();
@@ -405,6 +520,46 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
       callView.bringToFront();
   }
 
+  /** PiP shows the remote and local callers as two equal vertical tiles. */
+  private void applyPictureInPictureLayout(boolean pip) {
+    if (remoteSurface == null || localSurface == null) return;
+    pipLayoutActive = pip;
+    if (callView != null) callView.setVisibility(pip ? View.GONE : View.VISIBLE);
+    int match = FrameLayout.LayoutParams.MATCH_PARENT;
+    if (pip) {
+      int height = videoRoot == null ? 0 : videoRoot.getHeight();
+      layoutPictureInPictureSurfaces(height > 0
+          ? height : getResources().getDisplayMetrics().heightPixels);
+    } else {
+      remoteSurface.setLayoutParams(new FrameLayout.LayoutParams(match, match));
+      if (remoteCameraOffView != null)
+        remoteCameraOffView.setLayoutParams(new FrameLayout.LayoutParams(match, match));
+      if (callConnected) showConnectedLayout();
+      else {
+        localSurface.setLayoutParams(new FrameLayout.LayoutParams(match, match));
+        if (localCameraOffView != null)
+          localCameraOffView.setLayoutParams(new FrameLayout.LayoutParams(match, match));
+      }
+      if (callView != null) callView.bringToFront();
+    }
+  }
+
+  private void layoutPictureInPictureSurfaces(int containerHeight) {
+    int match = FrameLayout.LayoutParams.MATCH_PARENT;
+    int half = Math.max(1, containerHeight / 2);
+    FrameLayout.LayoutParams remote = new FrameLayout.LayoutParams(match, half, Gravity.TOP);
+    remoteSurface.setLayoutParams(remote);
+    if (remoteCameraOffView != null)
+      remoteCameraOffView.setLayoutParams(new FrameLayout.LayoutParams(remote));
+    FrameLayout.LayoutParams local = new FrameLayout.LayoutParams(match, half, Gravity.BOTTOM);
+    localSurface.setLayoutParams(local);
+    if (localCameraOffView != null)
+      localCameraOffView.setLayoutParams(new FrameLayout.LayoutParams(local));
+    localSurface.bringToFront();
+    if (localCameraOffView != null && localCameraOffView.getVisibility() == View.VISIBLE)
+      localCameraOffView.bringToFront();
+  }
+
   private void startIncomingRingtone() {
     if (incomingToneActive)
       return;
@@ -455,7 +610,9 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
   @Override
   protected void onDestroy() {
     stopCallTones();
+    CallPictureInPicture.configure(this, false);
     FloatingVideoCallController.getInstance().clear();
+    disconnectDismissedPip("on_destroy");
     if (controller != null)
       controller.destroy();
     controller = null;

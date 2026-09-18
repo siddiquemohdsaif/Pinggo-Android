@@ -145,11 +145,16 @@ public final class MediaPreviewCache {
   }
 
   public static Thumbnail anyMemoryThumbnail(String source, boolean video) {
-    String prefix = String.valueOf(source) + '|' + video + '|';
+    if (source == null || source.trim().isEmpty()) return null;
+    String prefix = String.valueOf(source) + '|' + (video ? "first-frame-v2" : "image-v1") + '|';
+    Thumbnail best = null;
     for (java.util.Map.Entry<String, Thumbnail> entry : MEMORY.snapshot().entrySet()) {
-      if (entry.getKey().startsWith(prefix)) return entry.getValue();
+      Thumbnail candidate = entry.getValue();
+      if (entry.getKey().startsWith(prefix) && !candidate.bitmap.isRecycled()
+          && (best == null || candidate.bitmap.getAllocationByteCount()
+              > best.bitmap.getAllocationByteCount())) best = candidate;
     }
-    return null;
+    return best;
   }
 
   /** Returns true only when the media can be opened without another network request. */

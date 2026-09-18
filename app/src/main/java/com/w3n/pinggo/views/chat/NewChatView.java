@@ -57,6 +57,14 @@ public final class NewChatView extends View {
   private final Set<String> selectedMembers = new LinkedHashSet<>();
   private final List<Item> sourceItems = new ArrayList<>();
   private String searchQuery = "";
+  private boolean chatSections;
+  private final Set<String> existingAccounts = new LinkedHashSet<>();
+
+  public void setChatSections(List<String> accounts) {
+    chatSections = true;
+    existingAccounts.clear();
+    if (accounts != null) existingAccounts.addAll(accounts);
+  }
 
   public NewChatView(Context context, Listener listener) {
     super(context);
@@ -126,6 +134,7 @@ public final class NewChatView extends View {
     List<Item> selected = new ArrayList<>();
     List<Item> available = new ArrayList<>();
     List<Item> inviteItems = new ArrayList<>();
+    List<Item> existingChats = new ArrayList<>();
     for (Item item : sourceItems) {
       if (item.type == Item.DIVIDER) continue;
       String name = item.displayName == null || item.displayName.trim().isEmpty()
@@ -136,13 +145,19 @@ public final class NewChatView extends View {
       if (!matches) continue;
       if (item.type == Item.INVITE) inviteItems.add(item);
       else if (groupMode && selectedMembers.contains(item.phoneNumber)) selected.add(item);
+      else if (chatSections && existingAccounts.contains(item.phoneNumber)) existingChats.add(item);
       else available.add(item);
     }
     if (groupMode && !selected.isEmpty()) {
       visible.add(Item.divider("Selected"));
       visible.addAll(selected);
     }
-    if (groupMode && !available.isEmpty()) visible.add(Item.divider("Chats"));
+    if (groupMode && !chatSections && !available.isEmpty()) visible.add(Item.divider("Chats"));
+    if (chatSections && !existingChats.isEmpty()) {
+      visible.add(Item.divider("Chats"));
+      visible.addAll(existingChats);
+    }
+    if (chatSections && !available.isEmpty()) visible.add(Item.divider("PingGo chats"));
     visible.addAll(available);
     if (!inviteItems.isEmpty()) {
       visible.add(Item.divider("Invite"));
@@ -180,7 +195,7 @@ public final class NewChatView extends View {
         text(
             "title",
             titleValue,
-            new RectF(px(176f), top, w - (groupMode ? px(310f) : px(55f)), top + px(132f)),
+            new RectF(px(176f), top, w - (groupMode ? px(310f) : px(165f)), top + px(132f)),
             sp(24),
             PRIMARY,
             FontVariation.BOLD));
@@ -192,6 +207,10 @@ public final class NewChatView extends View {
             if (selectedMembers.isEmpty()) listener.onGroupSelectionRequired();
             else listener.onCreateGroup(new ArrayList<>(selectedMembers));
           });
+    } else {
+      addButton(content, "more", white, "⋮",
+          new RectF(w - px(154f), top, w - px(22f), top + px(132f)),
+          PRIMARY, id -> listener.onMore());
     }
     // Leave room for the platform EditText search field overlaid by NewChatActivity.
     float listTop = top + px(330f);
@@ -545,5 +564,7 @@ public final class NewChatView extends View {
     void onCreateGroup(List<String> memberIds);
 
     void onGroupSelectionRequired();
+
+    void onMore();
   }
 }

@@ -35,6 +35,7 @@ import org.webrtc.audio.AudioProcessingState;
 public final class WebRTCCallClient implements ChatRepository.CallEventListener {
   private static final String TAG = "PingGoRtcSignal";
   private static final String CONNECTION_TAG = "PingGoCallConnection";
+  private static final String DISCONNECT_HOOK_TAG = "PingGoDisconnectHook";
   public interface Listener {
     void onState(String state);
     void onRemoteMuteChanged(boolean muted);
@@ -306,12 +307,17 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
   }
   public void endCall() { endCall("hangup"); }
   public void endCall(String reason) {
+    if (ended) return;
     JsonObject event = new JsonObject();
     event.addProperty("type", "call_end"); event.addProperty("callId", callId);
+    event.addProperty("engine", "webrtc");
     event.addProperty("mediaType", mediaType); event.addProperty("senderId", localUserId);
     event.addProperty("receiverId", remoteUserId); event.addProperty("reason", reason);
     if (!chatId.isEmpty()) event.addProperty("chatId", chatId);
     boolean accepted = repository.sendCallEvent(event);
+    Log.i(DISCONNECT_HOOK_TAG, "stage=webrtc_end_requested callId=" + callId
+        + " media=" + mediaType + " reason=" + reason
+        + " acceptedBySignaling=" + accepted);
     Log.d(TAG, "send callId=" + callId + " type=call_end reason=" + reason
         + " acceptedByClient=" + accepted);
     close(false);
@@ -319,6 +325,7 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
   private void send(String type, String key, JsonObject value) {
     JsonObject event = new JsonObject();
     event.addProperty("type", type); event.addProperty("callId", callId);
+    event.addProperty("engine", "webrtc");
     event.addProperty("mediaType", mediaType);
     event.addProperty("senderId", localUserId); event.addProperty("receiverId", remoteUserId);
     if (!chatId.isEmpty()) event.addProperty("chatId", chatId);
@@ -352,6 +359,8 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
     Log.d(TAG, "close callId=" + callId + " notifyRemote=" + notifyRemote);
     if (notifyRemote) send("call_end", null, null);
     repository.clearCallEventListener(this);
+    Log.i(DISCONNECT_HOOK_TAG, "stage=webrtc_local_teardown callId=" + callId
+        + " media=" + mediaType + " notifyRemote=" + notifyRemote);
     rtcThread.execute(() -> {
       if (peerConnection != null) { peerConnection.close(); peerConnection.dispose(); }
       if (audioTrack != null) audioTrack.dispose();

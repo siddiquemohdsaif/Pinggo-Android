@@ -12,6 +12,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.SeekBar;
+import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.VideoView;
 import androidx.annotation.NonNull;
@@ -32,6 +33,7 @@ public final class VideoPreviewView extends NativeMediaScreenView {
   private final Listener listener;
   private final VideoView video;
   private final SeekBar seek;
+  private final TextView playbackTime;
   private final NativeMediaTopBarView header;
   private final NativeVideoControlsView controls;
   private final NativeReplyComposerView composer;
@@ -48,7 +50,11 @@ public final class VideoPreviewView extends NativeMediaScreenView {
       int duration = video.getDuration();
       if (duration > 0) {
         seek.setMax(duration);
-        if (!userSeeking) seek.setProgress(video.getCurrentPosition());
+        if (!userSeeking) {
+          int position = video.getCurrentPosition();
+          seek.setProgress(position);
+          updatePlaybackTime(position, duration);
+        }
       }
       handler.postDelayed(this, 250);
     }
@@ -72,6 +78,20 @@ public final class VideoPreviewView extends NativeMediaScreenView {
     seekParams.rightMargin = dp(110);
     seekParams.bottomMargin = dp(100);
     addView(seek, seekParams);
+    playbackTime = new TextView(context);
+    playbackTime.setText("0:00 / 0:00");
+    playbackTime.setTextColor(Color.WHITE);
+    playbackTime.setTextSize(12f);
+    playbackTime.setGravity(Gravity.CENTER);
+    playbackTime.setSingleLine(true);
+    playbackTime.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+    playbackTime.setContentDescription("Video playback time");
+    FrameLayout.LayoutParams playbackTimeParams = new FrameLayout.LayoutParams(
+        LayoutParams.MATCH_PARENT, dp(24), Gravity.BOTTOM);
+    playbackTimeParams.leftMargin = dp(70);
+    playbackTimeParams.rightMargin = dp(110);
+    playbackTimeParams.bottomMargin = dp(84);
+    addView(playbackTime, playbackTimeParams);
     controls = new NativeVideoControlsView(context, new NativeVideoControlsView.Listener() {
       @Override public void onPlayPause() { toggle(); }
       @Override public void onSpeed(View anchor) { showSpeed(anchor); }
@@ -88,6 +108,7 @@ public final class VideoPreviewView extends NativeMediaScreenView {
     // The controls view spans the full width and overlaps the seek bar vertically.
     // Keep the seek bar above it so its transparent center cannot consume scrub gestures.
     seek.bringToFront();
+    playbackTime.bringToFront();
     header = new NativeMediaTopBarView(context, senderId, sentTime, true,
         new NativeMediaTopBarView.Listener() {
           @Override public void onBack() { listener.onClose(); }
@@ -125,12 +146,19 @@ public final class VideoPreviewView extends NativeMediaScreenView {
       FrameLayout.LayoutParams updatedSeek = (FrameLayout.LayoutParams) seek.getLayoutParams();
       updatedSeek.bottomMargin = dp(100) + bottomInset;
       seek.setLayoutParams(updatedSeek);
+      FrameLayout.LayoutParams updatedPlaybackTime =
+          (FrameLayout.LayoutParams) playbackTime.getLayoutParams();
+      updatedPlaybackTime.bottomMargin = dp(84) + bottomInset;
+      playbackTime.setLayoutParams(updatedPlaybackTime);
       return insets;
     });
     video.setOnClickListener(view -> setControlsVisible(header.getVisibility() != VISIBLE));
     seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
       @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
-        if (fromUser) video.seekTo(progress);
+        if (fromUser) {
+          video.seekTo(progress);
+          updatePlaybackTime(progress, bar.getMax());
+        }
       }
       @Override public void onStartTrackingTouch(SeekBar bar) {
         userSeeking = true;
@@ -144,6 +172,11 @@ public final class VideoPreviewView extends NativeMediaScreenView {
     });
     video.setOnPreparedListener(prepared -> {
       player = prepared;
+      int duration = prepared.getDuration();
+      if (duration > 0) {
+        seek.setMax(duration);
+        updatePlaybackTime(video.getCurrentPosition(), duration);
+      }
       video.start();
       applySpeed();
       controls.setPlaying(true);
@@ -152,6 +185,7 @@ public final class VideoPreviewView extends NativeMediaScreenView {
     video.setOnCompletionListener(completed -> {
       controls.setPlaying(false);
       seek.setProgress(seek.getMax());
+      updatePlaybackTime(seek.getMax(), seek.getMax());
       handler.removeCallbacks(update);
     });
     video.setOnErrorListener((failed, what, extra) -> {
@@ -186,6 +220,7 @@ public final class VideoPreviewView extends NativeMediaScreenView {
     header.setVisibility(visibility);
     controls.setVisibility(visibility);
     seek.setVisibility(visibility);
+    playbackTime.setVisibility(visibility);
     composer.setVisibility(visibility);
     setNavigationBarState(visible, HEADER_COLOR);
   }
@@ -220,6 +255,25 @@ public final class VideoPreviewView extends NativeMediaScreenView {
       Toast.makeText(getContext(), "Playback speed is not supported for this video.",
           Toast.LENGTH_SHORT).show();
     }
+  }
+
+  private void updatePlaybackTime(int positionMs, int durationMs) {
+    int safeDuration = Math.max(0, durationMs);
+    int safePosition = Math.max(0, Math.min(positionMs, safeDuration));
+    String value = formatTime(safePosition) + " / " + formatTime(safeDuration);
+    playbackTime.setText(value);
+    playbackTime.setContentDescription("Video playback time " + value);
+  }
+
+  private static String formatTime(int milliseconds) {
+    long totalSeconds = Math.max(0L, milliseconds) / 1000L;
+    long hours = totalSeconds / 3600L;
+    long minutes = (totalSeconds % 3600L) / 60L;
+    long seconds = totalSeconds % 60L;
+    if (hours > 0L) {
+      return String.format(java.util.Locale.US, "%d:%02d:%02d", hours, minutes, seconds);
+    }
+    return String.format(java.util.Locale.US, "%d:%02d", minutes, seconds);
   }
 
   public void onHostPause() {

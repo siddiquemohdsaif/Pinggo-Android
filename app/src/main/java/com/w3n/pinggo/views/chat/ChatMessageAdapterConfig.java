@@ -12,7 +12,7 @@ final class ChatMessageAdapterConfig {
   }
 
   interface MediaMetricsListener {
-    void onMediaMetricsChanged();
+    void onMediaMetricsChanged(String source);
   }
 
   interface AudioPlaybackListener {

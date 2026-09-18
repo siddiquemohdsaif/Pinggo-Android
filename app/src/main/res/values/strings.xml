@@ -4,6 +4,7 @@
     <string name="exit_app_message">Are you sure you want to close the app?</string>
     <string name="exit_app_action">Exit</string>
     <string name="cancel">Cancel</string>
+    <string name="pip_hang_up">Hang up</string>
     <string name="app_logo">PingGo logo</string>
     <string name="login_title">Login</string>
     <string name="sign_up">Sign up</string>
@@ -63,6 +64,7 @@
     <string name="edit_profile_photo">Edit profile photo</string>
     <string name="preview_profile_photo">Preview profile photo</string>
     <string name="select_crop_region">Select crop region</string>
+    <string name="rotate">Rotate</string>
     <string name="select_profile_photo">Select profile photo</string>
     <string name="image_load_failed">Could not load image</string>
     <string name="retry">Retry</string>

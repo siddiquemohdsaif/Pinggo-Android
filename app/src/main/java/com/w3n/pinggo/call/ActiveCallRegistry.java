@@ -7,12 +7,18 @@ import java.lang.ref.WeakReference;
 
 /** Tracks the single call activity owned by this app process. */
 public final class ActiveCallRegistry {
+  public interface PictureInPictureHangupListener {
+    void onPictureInPictureHangup();
+  }
+
   public static final String TYPE_VOICE = "voice";
   public static final String TYPE_VIDEO = "video";
   private static final ActiveCallRegistry INSTANCE = new ActiveCallRegistry();
   private WeakReference<Activity> activity = new WeakReference<>(null);
   private String chatId = "", type = "";
   private boolean connected;
+  private WeakReference<Activity> callPicker = new WeakReference<>(null);
+  private String pickerCallId = "";
 
   private ActiveCallRegistry() {}
   public static ActiveCallRegistry getInstance() { return INSTANCE; }
@@ -24,7 +30,26 @@ public final class ActiveCallRegistry {
     connected = false;
   }
   public synchronized void setConnected(Activity owner, boolean value) {
-    if (activity.get() == owner) connected = value;
+    if (activity.get() != owner) return;
+    connected = value;
+    if (value && pickerCallId.equals(normalize(owner.getIntent().getStringExtra(
+        com.w3n.pinggo.activity.VoiceCallActivity.EXTRA_CALL_ID)))) {
+      Activity picker = callPicker.get();
+      callPicker.clear();
+      pickerCallId = "";
+      if (picker != null) picker.runOnUiThread(() -> {
+        if (!picker.isFinishing() && !picker.isDestroyed()) picker.finish();
+      });
+    }
+  }
+  public synchronized void closePickerWhenConnected(Activity picker, String callId) {
+    callPicker = new WeakReference<>(picker);
+    pickerCallId = normalize(callId);
+  }
+  public synchronized void clearCallPicker(Activity picker) {
+    if (callPicker.get() != picker) return;
+    callPicker.clear();
+    pickerCallId = "";
   }
   public synchronized boolean hasActiveCall() {
     Activity current = activity.get();
@@ -34,7 +59,27 @@ public final class ActiveCallRegistry {
     return hasActiveCall() && this.chatId.equals(normalize(chatId)) && this.type.equals(normalize(type));
   }
   public synchronized boolean isConnected() { return hasActiveCall() && connected; }
+  public synchronized boolean isInPictureInPicture() {
+    Activity current = activity.get();
+    return current != null && !current.isFinishing() && !current.isDestroyed()
+        && CallPictureInPicture.isActive(current);
+  }
   public synchronized String getType() { return type; }
+  public void requestPictureInPictureHangup() {
+    Activity current;
+    synchronized (this) {
+      current = activity.get();
+      if (current == null || current.isFinishing() || current.isDestroyed()
+          || !CallPictureInPicture.isActive(current)
+          || !(current instanceof PictureInPictureHangupListener)) return;
+    }
+    Activity owner = current;
+    owner.runOnUiThread(() -> {
+      if (!owner.isFinishing() && !owner.isDestroyed()) {
+        ((PictureInPictureHangupListener) owner).onPictureInPictureHangup();
+      }
+    });
+  }
   public synchronized void openExisting(Context context) {
     Activity current = activity.get();
     if (current == null) return;
@@ -45,6 +90,7 @@ public final class ActiveCallRegistry {
   public synchronized void clear(Activity owner) {
     if (activity.get() != owner) return;
     activity.clear(); chatId = ""; type = ""; connected = false;
+    callPicker.clear(); pickerCallId = "";
   }
   private static String normalize(String value) { return value == null ? "" : value.trim(); }
 }

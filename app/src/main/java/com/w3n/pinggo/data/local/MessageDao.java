@@ -11,6 +11,11 @@ import java.util.List;
 
 @Dao
 public interface MessageDao {
+    @Query("SELECT * FROM messages WHERE chatId = :chatId AND attachmentLocalUri IS NOT NULL AND attachmentId IS NOT NULL")
+    LiveData<List<MessageEntity>> observeLocalAttachments(String chatId);
+
+    @Query("SELECT * FROM messages WHERE attachmentId = :attachmentId AND attachmentLocalUri IS NOT NULL LIMIT 1")
+    MessageEntity findLocalAttachment(String attachmentId);
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     void upsert(MessageEntity message);
 
@@ -39,6 +44,21 @@ public interface MessageDao {
             + "AND (messageTypeCode IN (1, 2, 4) OR text LIKE '%http://%' OR text LIKE '%https://%') "
             + "AND sentTime < :before ORDER BY sentTime DESC, messageId DESC LIMIT :limit")
     List<MessageEntity> findStoredMediaPage(String chatId, long before, int limit);
+
+    @Query("SELECT * FROM messages WHERE chatId = :chatId AND invisible = 0 "
+            + "AND messageTypeCode IN (1, 2) AND sentTime < :before "
+            + "ORDER BY sentTime DESC, messageId DESC LIMIT :limit")
+    List<MessageEntity> findStoredImageVideoPage(String chatId, long before, int limit);
+
+    @Query("SELECT * FROM messages WHERE chatId = :chatId AND invisible = 0 "
+            + "AND messageTypeCode = 4 AND sentTime < :before "
+            + "ORDER BY sentTime DESC, messageId DESC LIMIT :limit")
+    List<MessageEntity> findStoredDocumentPage(String chatId, long before, int limit);
+
+    @Query("SELECT * FROM messages WHERE chatId = :chatId AND invisible = 0 "
+            + "AND (text LIKE '%http://%' OR text LIKE '%https://%') AND sentTime < :before "
+            + "ORDER BY sentTime DESC, messageId DESC LIMIT :limit")
+    List<MessageEntity> findStoredLinkPage(String chatId, long before, int limit);
 
     @Query("SELECT * FROM messages WHERE chatId = :chatId AND "
             + "(messageId IN (:messageIds) OR clientMessageId IN (:messageIds))")

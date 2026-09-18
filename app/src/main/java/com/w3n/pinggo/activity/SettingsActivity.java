@@ -15,6 +15,7 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.RestApi.APIAuth;
 import com.w3n.pinggo.Database.CloudFunction.RestApi.AppRestAPI;
@@ -28,7 +29,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
 import com.w3n.pinggo.modals.UserData;
-import com.w3n.pinggo.views.common.NativeCropDialogView;
+import com.w3n.pinggo.views.common.NativeCropView;
 import com.w3n.pinggo.views.common.NativePromptDialogView;
 import com.w3n.pinggo.views.settings.SettingsView;
 import java.io.File;
@@ -42,9 +43,11 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
   private SettingsView settingsView;
   private ActivityResultLauncher<String> picker;
   private Bitmap selectedPhoto;
-  private NativeCropDialogView cropDialog;
+  private NativeCropView cropView;
   private NativePromptDialogView promptDialog;
   private String phone = "";
+  private static final int MIN_CROP_BOX_SIZE_PX = 495;
+  private static final int MAX_CROP_BOX_SIZE_PX = 1155;
 
   @Override
   protected void onCreate(Bundle state) {
@@ -61,6 +64,14 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
         });
     ViewCompat.requestApplyInsets(settingsView);
     picker = registerForActivityResult(new ActivityResultContracts.GetContent(), this::photoSelected);
+    getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
+      @Override public void handleOnBackPressed() {
+        if (cropView != null && cropView.dismissIfShowing()) return;
+        setEnabled(false);
+        try { getOnBackPressedDispatcher().onBackPressed(); }
+        finally { setEnabled(true); }
+      }
+    });
     refresh();
   }
 
@@ -252,8 +263,14 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
   }
 
   private void showCrop(Bitmap bitmap) {
-    cropDialog = new NativeCropDialogView(this, bitmap, 180, 420,
-        new NativeCropDialogView.Listener() {
+    removeCropView();
+    WindowInsetsControllerCompat bars = WindowCompat.getInsetsController(
+        getWindow(), getWindow().getDecorView());
+    bars.setSystemBarsBehavior(
+        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+    bars.hide(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.ime());
+    cropView = new NativeCropView(this, bitmap, MIN_CROP_BOX_SIZE_PX, MAX_CROP_BOX_SIZE_PX,
+        new NativeCropView.Listener() {
           @Override
           public void onRetry() {
             picker.launch("image/*");
@@ -272,19 +289,21 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
 
           @Override
           public void onDismiss() {
-            removeCropDialog();
+            removeCropView();
           }
         });
-    ((ViewGroup) findViewById(android.R.id.content)).addView(cropDialog,
+    ((ViewGroup) findViewById(android.R.id.content)).addView(cropView,
         new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT));
   }
 
-  private void removeCropDialog() {
-    NativeCropDialogView current = cropDialog;
-    cropDialog = null;
+  private void removeCropView() {
+    NativeCropView current = cropView;
+    cropView = null;
     if (current == null)
       return;
+    WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView())
+        .show(WindowInsetsCompat.Type.systemBars());
     if (current.getParent() instanceof ViewGroup) {
       ((ViewGroup) current.getParent()).removeView(current);
     }
@@ -438,7 +457,7 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
 
   @Override
   protected void onDestroy() {
-    removeCropDialog();
+    removeCropView();
     removePrompt();
     if (settingsView != null)
       settingsView.release();

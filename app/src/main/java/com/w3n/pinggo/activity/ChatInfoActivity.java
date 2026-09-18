@@ -5,14 +5,12 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.HorizontalScrollView;
-import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -33,21 +31,21 @@ import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
+import com.w3n.pinggo.data.cache.MediaPreviewCache;
 import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.local.TransferEntity;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.views.chat.ChatHeaderComponent;
+import com.w3n.pinggo.views.chat.MediaAttachmentOpener;
+import com.w3n.pinggo.views.chat.MediaRecordTypes;
 import com.w3n.pinggo.views.common.NativePromptDialogView;
 import com.w3n.pinggo.views.home.HomeMenuDialogView;
 
-import java.io.InputStream;
 import java.util.HashMap;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /** WhatsApp-style details page shared by direct chats and groups. */
 public final class ChatInfoActivity extends AppCompatActivity {
@@ -67,7 +65,6 @@ public final class ChatInfoActivity extends AppCompatActivity {
   private final AppFunctionManager api = AppFunctionManager.getInstance();
   private final Map<String, ImageView> mediaImages = new HashMap<>();
   private final Map<String, MessageEntity> mediaMessages = new HashMap<>();
-  private final ExecutorService thumbnailExecutor = Executors.newFixedThreadPool(2);
   private ChatRepository repository;
   private String chatId;
   private String userId;
@@ -100,6 +97,8 @@ public final class ChatInfoActivity extends AppCompatActivity {
   private Long mediaCursor;
   private boolean mediaLoading;
   private boolean mediaHasMore = true;
+  private boolean localMediaChecked;
+  private MediaAttachmentOpener attachmentOpener;
 
   @Override
   protected void onCreate(Bundle state) {
@@ -115,6 +114,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
     ownGroupAdmin = group && "admin".equalsIgnoreCase(value(EXTRA_ROLE, ""));
     userId = LoginStateManager.getInstance().getUID(this);
     repository = ChatRepository.getInstance(this);
+    attachmentOpener = new MediaAttachmentOpener(this, repository, chatId);
     setContentView(buildPage());
     detailsMenu = new HomeMenuDialogView(this,
         java.util.Arrays.asList("Clear chat", group ? "Report group" : "Report " + name),
@@ -123,6 +123,15 @@ public final class ChatInfoActivity extends AppCompatActivity {
         new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT));
     repository.observeTransfers(chatId).observe(this, this::showCompletedTransfers);
+    repository.observeLocalAttachments(chatId).observe(this, values -> {
+      if (values == null) return;
+      for (MessageEntity stored : values) {
+        ImageView image = mediaImages.get(stored.attachmentId);
+        MessageEntity message = mediaMessages.get(stored.attachmentId);
+        if (image != null && message != null && stored.attachmentLocalUri != null)
+          renderThumbnail(image, Uri.parse(stored.attachmentLocalUri), message);
+      }
+    });
     loadMedia();
     if (!group)
       loadDirectDetails();
@@ -450,7 +459,29 @@ public final class ChatInfoActivity extends AppCompatActivity {
       return;
     mediaLoading = true;
     showMediaProgressTile();
-    api.getChatMedia(userId, chatId, 10, mediaCursor, "media",
+    if (!localMediaChecked) {
+      localMediaChecked = true;
+      repository.loadStoredMedia(chatId, "media", 10, mediaCursor,
+          (stored, next, localHasMore) -> {
+            if (isFinishing() || isDestroyed()) return;
+            for (MessageEntity message : stored) addMediaTile(mediaRecord(message));
+            mediaCursor = next;
+            if (mediaTileCount >= 10) {
+              mediaLoading = false;
+              mediaHasMore = localHasMore;
+              removeMediaProgressTile();
+              showMediaArrowTile();
+            } else {
+              loadRemoteMedia(10 - mediaTileCount);
+            }
+          });
+      return;
+    }
+    loadRemoteMedia(10 - mediaTileCount);
+  }
+
+  private void loadRemoteMedia(int pageSize) {
+    api.getChatMedia(userId, chatId, Math.max(1, pageSize), mediaCursor, "media",
         new AppFunctionManager.Callback() {
       @Override
       public void onSuccess(Object result) {
@@ -500,6 +531,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
       a.addProperty("mimeType", message.attachmentMimeType);
       a.addProperty("url", message.attachmentUrl);
       a.addProperty("sha256", message.attachmentSha256);
+      a.addProperty("localUri", message.attachmentLocalUri);
       if (message.attachmentSize != null)
         a.addProperty("size", message.attachmentSize);
       value.add("attachment", a);
@@ -508,7 +540,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
   }
 
   private void addMediaTile(JsonObject item) {
-    String type = string(item, "messageType");
+    String type = MediaRecordTypes.type(item);
     if (!"image".equalsIgnoreCase(type) && !"video".equalsIgnoreCase(type))
       return;
     if (mediaTileCount >= 10) {
@@ -522,8 +554,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
     LinearLayout tile = column();
     tile.setGravity(Gravity.CENTER);
     tile.setBackgroundColor(0xFFE4E9EE);
-    tile.setOnClickListener(v -> {
-      /* Reserved for the media preview action. */ });
+    tile.setOnClickListener(v -> attachmentOpener.open(mediaMessage(item)));
     ImageView thumbnail = new ImageView(this);
     thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
     thumbnail.setImageResource(android.R.drawable.ic_menu_gallery);
@@ -541,6 +572,18 @@ public final class ChatInfoActivity extends AppCompatActivity {
       return;
     mediaImages.put(message.attachmentId, thumbnail);
     mediaMessages.put(message.attachmentId, message);
+    boolean cachedVideo = "video".equalsIgnoreCase(message.messageType);
+    String cachedSource = message.attachmentLocalUri;
+    MediaPreviewCache.Thumbnail loaded = MediaPreviewCache.anyMemoryThumbnail(cachedSource, cachedVideo);
+    if (loaded == null) {
+      cachedSource = message.attachmentUrl;
+      loaded = MediaPreviewCache.anyMemoryThumbnail(cachedSource, cachedVideo);
+    }
+    if (loaded != null) {
+      thumbnail.setTag(cachedSource);
+      thumbnail.setImageBitmap(loaded.bitmap);
+      return;
+    }
     repository.downloadAttachment(message, new ChatRepository.DownloadCallback() {
       @Override
       public void onAvailable(Uri uri) {
@@ -610,7 +653,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
     message.senderId = string(item, "senderId");
     message.receiverId = string(item, "receiverId");
     message.text = string(item, "text");
-    message.setMessageType(string(item, "messageType"));
+    message.setMessageType(MediaRecordTypes.type(item));
     JsonObject attachment = object(item, "attachment");
     if (attachment != null) {
       message.attachmentId = string(attachment, "id");
@@ -619,6 +662,8 @@ public final class ChatInfoActivity extends AppCompatActivity {
       message.attachmentMimeType = string(attachment, "mimeType");
       message.attachmentUrl = string(attachment, "url");
       message.attachmentSha256 = string(attachment, "sha256");
+      String localUri = string(attachment, "localUri");
+      message.attachmentLocalUri = localUri.isEmpty() ? null : localUri;
       if (attachment.has("size") && !attachment.get("size").isJsonNull())
         message.attachmentSize = attachment.get("size").getAsLong();
     }
@@ -640,38 +685,35 @@ public final class ChatInfoActivity extends AppCompatActivity {
   }
 
   private void renderThumbnail(ImageView target, Uri uri, MessageEntity message) {
-    thumbnailExecutor.execute(() -> {
-      Bitmap bitmap = null;
-      try {
-        if ("video".equalsIgnoreCase(message.messageType)) {
-          MediaMetadataRetriever retriever = new MediaMetadataRetriever();
-          try {
-            retriever.setDataSource(this, uri);
-            bitmap = retriever.getFrameAtTime(0);
-          } finally {
-            retriever.release();
+    if (isFinishing() || isDestroyed()) return;
+    String key = uri.toString();
+    if (key.equals(target.getTag())) return;
+    target.setTag(key);
+    boolean video = "video".equalsIgnoreCase(message.messageType);
+    int size = dp(112);
+    MediaPreviewCache.Thumbnail cached =
+        MediaPreviewCache.memoryThumbnail(key, video, size, size);
+    if (cached == null) cached = MediaPreviewCache.anyMemoryThumbnail(key, video);
+    if (cached == null && message.attachmentUrl != null)
+      cached = MediaPreviewCache.anyMemoryThumbnail(message.attachmentUrl, video);
+    if (cached != null) {
+      target.setImageBitmap(cached.bitmap);
+      return;
+    }
+    MediaPreviewCache.loadThumbnail(this, key, video, size, size,
+        new MediaPreviewCache.Callback<MediaPreviewCache.Thumbnail>() {
+          @Override public void onSuccess(MediaPreviewCache.Thumbnail result) {
+            if (!isFinishing() && !isDestroyed() && key.equals(target.getTag()))
+              target.setImageBitmap(result.bitmap);
           }
-        } else if ("image".equalsIgnoreCase(message.messageType)) {
-          try (InputStream stream = getContentResolver().openInputStream(uri)) {
-            BitmapFactory.Options options = new BitmapFactory.Options();
-            options.inSampleSize = 4;
-            bitmap = BitmapFactory.decodeStream(stream, null, options);
+
+          @Override public void onError() {
+            if (!isFinishing() && !isDestroyed() && key.equals(target.getTag())) {
+              target.setTag(null);
+              target.setImageResource(android.R.drawable.ic_menu_gallery);
+            }
           }
-        }
-      } catch (Exception ignored) {
-      }
-      Bitmap result = bitmap;
-      runOnUiThread(() -> {
-        if (isFinishing() || isDestroyed())
-          return;
-        if (result != null)
-          target.setImageBitmap(result);
-        else
-          target.setImageResource("file".equalsIgnoreCase(message.messageType)
-              ? android.R.drawable.ic_menu_save
-              : android.R.drawable.ic_menu_gallery);
-      });
-    });
+        });
   }
 
   private void confirmClear() {
@@ -912,7 +954,6 @@ public final class ChatInfoActivity extends AppCompatActivity {
     removePrompt();
     if (detailsMenu != null) detailsMenu.release();
     detailsMenu = null;
-    thumbnailExecutor.shutdownNow();
     super.onDestroy();
   }
 }

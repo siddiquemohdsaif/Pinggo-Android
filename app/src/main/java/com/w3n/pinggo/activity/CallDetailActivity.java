@@ -11,8 +11,10 @@ import com.w3n.pinggo.R;
 import com.w3n.pinggo.modals.CallLog;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
 import com.w3n.pinggo.views.call.CallDetailView;
+import java.util.ArrayList;
 import java.util.UUID;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 
 public class CallDetailActivity extends AppCompatActivity implements CallDetailView.Listener {
   public static final String EXTRA_CHAT_ID = "com.w3n.pinggo.EXTRA_CALL_CHAT_ID";
@@ -26,6 +28,8 @@ public class CallDetailActivity extends AppCompatActivity implements CallDetailV
   public static final String EXTRA_IS_OUTGOING = "com.w3n.pinggo.EXTRA_IS_OUTGOING";
   public static final String EXTRA_IS_MISSED = "com.w3n.pinggo.EXTRA_IS_MISSED";
   public static final String EXTRA_PROFILE_PATH = "com.w3n.pinggo.EXTRA_PROFILE_PATH";
+  public static final String EXTRA_PARTICIPANT_IDS =
+      "com.w3n.pinggo.EXTRA_CALL_PARTICIPANT_IDS";
   private CallDetailView detailView;
 
   @Override
@@ -43,6 +47,8 @@ public class CallDetailActivity extends AppCompatActivity implements CallDetailV
         value(EXTRA_DURATION, getString(R.string.unknown_duration)),
         getIntent().getBooleanExtra(EXTRA_IS_VIDEO_CALL, false),
         value(EXTRA_PROFILE_PATH, ""),
+        getIntent().getBooleanExtra(EXTRA_IS_CONFERENCE, false),
+        getIntent().getStringArrayListExtra(EXTRA_PARTICIPANT_IDS),
         this);
     setContentView(detailView);
     ViewCompat.setOnApplyWindowInsetsListener(
@@ -106,13 +112,46 @@ public class CallDetailActivity extends AppCompatActivity implements CallDetailV
 
   private void openCall(boolean video) {
     String phone = value(EXTRA_PHONE_NUMBER, "");
-    Intent intent = new Intent(this, video ? VideoCallActivity.class : VoiceCallActivity.class);
+    boolean conference = getIntent().getBooleanExtra(EXTRA_IS_CONFERENCE, false);
+    ArrayList<String> participants = conferenceParticipants();
+    Intent intent = new Intent(this, conference ? LiveKitCallActivity.class
+        : video ? VideoCallActivity.class : VoiceCallActivity.class);
     intent.putExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID, value(EXTRA_CHAT_ID, ""));
     intent.putExtra(VoiceCallActivity.EXTRA_CALL_ID, UUID.randomUUID().toString());
-    intent.putExtra(VoiceCallActivity.EXTRA_CALLER_ID, phone);
+    intent.putExtra(VoiceCallActivity.EXTRA_CALLER_ID,
+        conference && !participants.isEmpty() ? participants.get(0) : phone);
     intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER,
-        DeviceContactResolver.cachedNameOrPhone(phone));
+        conference ? value(EXTRA_CONTACT_NAME, "Conference call")
+            : DeviceContactResolver.cachedNameOrPhone(phone));
+    intent.putExtra(VoiceCallActivity.EXTRA_PROFILE_PATH, value(EXTRA_PROFILE_PATH, ""));
+    if (conference) {
+      intent.putExtra(LiveKitCallActivity.EXTRA_MEDIA_TYPE, video ? "video" : "audio");
+      intent.putExtra(LiveKitCallActivity.EXTRA_CONFERENCE_CALL, true);
+      intent.putStringArrayListExtra(LiveKitCallActivity.EXTRA_PARTICIPANT_IDS, participants);
+    }
     startActivity(intent);
+  }
+
+  private ArrayList<String> conferenceParticipants() {
+    LinkedHashSet<String> unique = new LinkedHashSet<>();
+    ArrayList<String> saved = getIntent().getStringArrayListExtra(EXTRA_PARTICIPANT_IDS);
+    if (saved != null) {
+      for (String participant : saved) {
+        String normalized = normalizeAccountId(participant);
+        if (!normalized.isEmpty()) unique.add(normalized);
+      }
+    }
+    String fallback = normalizeAccountId(value(EXTRA_PHONE_NUMBER, ""));
+    if (!fallback.isEmpty()) unique.add(fallback);
+    return new ArrayList<>(unique);
+  }
+
+  private static String normalizeAccountId(String value) {
+    if (value == null) return "";
+    String normalized = value.trim();
+    if (normalized.startsWith("<plus>")) normalized = normalized.substring(6);
+    else if (normalized.startsWith("+")) normalized = normalized.substring(1);
+    return normalized;
   }
 
   @Override

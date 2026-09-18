@@ -48,10 +48,6 @@ final class MediaPreviewComponent implements Component {
   private final Runnable animateSpinner = new Runnable() {
     @Override public void run() {
       if (!loading || released || !visible) return;
-      if (totalBytes > 0L) {
-        invalidate();
-        return;
-      }
       spinnerAngle = (spinnerAngle + 12f) % 360f;
       invalidate();
       MAIN.postDelayed(this, 16L);
@@ -96,10 +92,14 @@ final class MediaPreviewComponent implements Component {
         Log.d("PingGoMessageTrace", "stage=media_thumbnail_ready source=memory"
             + " mediaType=" + (video ? "video" : "image")
             + " sourceKey=" + Integer.toHexString(source.hashCode()));
-        bitmap = cached.bitmap;
-        if (!cached.duration.isEmpty()) duration = cached.duration;
         loading = false;
-        notifyOrientation(cached);
+        if (orientationMatchesBounds(cached)) {
+          bitmap = cached.bitmap;
+          if (!cached.duration.isEmpty()) duration = cached.duration;
+        } else {
+          bitmap = null;
+          notifyOrientation(cached);
+        }
       } else if (!MediaPreviewCache.isDecodingPaused()) {
         Log.d("PingGoMessageTrace", "stage=media_thumbnail_loading"
             + " mediaType=" + (video ? "video" : "image")
@@ -110,14 +110,21 @@ final class MediaPreviewComponent implements Component {
             new MediaPreviewCache.Callback<MediaPreviewCache.Thumbnail>() {
               @Override public void onSuccess(MediaPreviewCache.Thumbnail result) {
                 if (request != generation || released) return;
-                bitmap = result.bitmap;
-                if (!result.duration.isEmpty()) duration = result.duration;
                 loading = false;
                 Log.d("PingGoMessageTrace", "stage=media_thumbnail_ready source=async"
                     + " mediaType=" + (video ? "video" : "image")
                     + " sourceKey=" + Integer.toHexString(source.hashCode()));
                 MAIN.removeCallbacks(animateSpinner);
-                notifyOrientation(result);
+                if (orientationMatchesBounds(result)) {
+                  bitmap = result.bitmap;
+                  if (!result.duration.isEmpty()) duration = result.duration;
+                } else {
+                  // Do not draw portrait content into the landscape placeholder (or vice
+                  // versa). First update row metrics; the rebind then supplies matching
+                  // media, caption and timestamp bounds as one atomic layout.
+                  bitmap = null;
+                  notifyOrientation(result);
+                }
                 invalidate();
               }
 
@@ -145,9 +152,12 @@ final class MediaPreviewComponent implements Component {
       MediaPreviewCache.Thumbnail warmed = MediaPreviewCache.memoryThumbnail(
           source, video, targetWidth, targetHeight);
       if (warmed != null) {
-        bitmap = warmed.bitmap;
-        if (!warmed.duration.isEmpty()) duration = warmed.duration;
-        notifyOrientation(warmed);
+        if (orientationMatchesBounds(warmed)) {
+          bitmap = warmed.bitmap;
+          if (!warmed.duration.isEmpty()) duration = warmed.duration;
+        } else {
+          notifyOrientation(warmed);
+        }
       }
     }
     invalidate();
@@ -239,7 +249,9 @@ final class MediaPreviewComponent implements Component {
     float radius = px(44f) * contentScale;
     RectF ring = new RectF(bounds.centerX() - radius, bounds.centerY() - radius,
         bounds.centerX() + radius, bounds.centerY() + radius);
-    boolean determinate = totalBytes > 0L;
+    // A queued request often knows its final size before the worker has delivered its
+    // first byte. Drawing a determinate zero-degree arc makes the indicator disappear.
+    boolean determinate = totalBytes > 0L && downloadedBytes > 0L;
     if (determinate) {
       paint.setColor(0x40019CC4);
       canvas.drawArc(ring, 0f, 360f, false, paint);
@@ -316,6 +328,9 @@ final class MediaPreviewComponent implements Component {
       String loadedSource = source;
       MAIN.post(() -> orientationListener.onOrientationAvailable(loadedSource, thumbnail.portrait));
     }
+  }
+  private boolean orientationMatchesBounds(MediaPreviewCache.Thumbnail thumbnail) {
+    return thumbnail.portrait == (bounds.height() > bounds.width());
   }
   private void invalidate() { if (host != null) host.invalidateComponent(); }
 }

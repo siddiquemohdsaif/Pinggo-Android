@@ -43,6 +43,8 @@ public final class VoiceActiveCallView extends View {
   private boolean callConnected;
   private boolean addMemberVisible;
   private boolean participantTileMode;
+  private boolean pictureInPictureMode;
+  private boolean pictureInPictureParticipantGrid;
 
   public VoiceActiveCallView(Context context, String phone, String profilePath, Listener listener) {
     super(context);
@@ -58,21 +60,31 @@ public final class VoiceActiveCallView extends View {
     if (getWidth() > 0) build();
   }
   public void setAudioState(boolean speaker, boolean mute) {
+    if (speakerOn == speaker && muted == mute) return;
     speakerOn = speaker; muted = mute;
-    if (getWidth() > 0) build();
+    requestBuild();
+  }
+  private boolean buildPosted, released;
+  private void requestBuild() {
+    if (released || getWidth() <= 0 || buildPosted) return;
+    buildPosted = true;
+    post(() -> { buildPosted = false; if (!released) build(); });
   }
   public void setCallStatus(String status) {
+    if (java.util.Objects.equals(callStatus, status)) return;
     callStatus = status == null || status.trim().isEmpty() ? "Calling…" : status;
     if (getWidth() > 0) build();
   }
   public void setConferenceParticipants(boolean conference, String participants) {
+    if (conferenceMode == conference && java.util.Objects.equals(participantSummary, participants)) return;
     conferenceMode = conference;
     participantSummary = participants == null ? "" : participants.trim();
     if (getWidth() > 0) build();
   }
   public void setRemoteMuted(boolean muted) {
+    if (remoteMuted == muted) return;
     remoteMuted = muted;
-    if (getWidth() > 0) build();
+    requestBuild();
   }
   public void showIncomingPrompt() {
     incomingPrompt = true;
@@ -84,6 +96,7 @@ public final class VoiceActiveCallView extends View {
     if (getWidth() > 0) build();
   }
   public void setCallConnected(boolean connected) {
+    if (callConnected == connected) return;
     callConnected = connected;
     if (!connected) muted = false;
     if (getWidth() > 0) build();
@@ -93,7 +106,13 @@ public final class VoiceActiveCallView extends View {
     if (getWidth() > 0) build();
   }
   public void setParticipantTileMode(boolean enabled) {
+    if (participantTileMode == enabled) return;
     participantTileMode = enabled;
+    if (getWidth() > 0) build();
+  }
+  public void setPictureInPictureMode(boolean enabled, boolean participantGridVisible) {
+    pictureInPictureMode = enabled;
+    pictureInPictureParticipantGrid = enabled && participantGridVisible;
     if (getWidth() > 0) build();
   }
   @Override protected void onSizeChanged(int w, int h, int oldw, int oldh) {
@@ -103,6 +122,11 @@ public final class VoiceActiveCallView extends View {
   private void build() {
     background.clear(); content.clear();
     float w = getWidth(), h = getHeight(), top = topInset + px(27.5f);
+    if (pictureInPictureMode) {
+      buildPictureInPicture(w, h);
+      invalidate();
+      return;
+    }
     background.add(new Image.Builder(getContext(), "bg",
         participantTileMode ? transparent : light, new RectF(0, 0, w, h))
         .setScaleType(Image.ScaleType.FIT_XY));
@@ -130,12 +154,37 @@ public final class VoiceActiveCallView extends View {
           FontVariation.REGULAR, Text.Alignment.CENTER);
     }
     if (remoteMuted) {
-      text("remote_mute", "Muted himself",
+      text("remote_mute", phone + " • Mic off",
           new RectF(px(66f), avatarTop + size + px(181.5f), w - px(66f), avatarTop + size + px(286f)),
           sp(14), 0xFF687382, FontVariation.REGULAR, Text.Alignment.CENTER);
     }
     if (incomingPrompt) incomingControls(w, h); else controls(w, h);
     invalidate();
+  }
+
+  private void buildPictureInPicture(float w, float h) {
+    background.add(new Image.Builder(getContext(), "pip_bg",
+        pictureInPictureParticipantGrid ? transparent : light, new RectF(0, 0, w, h))
+        .setScaleType(Image.ScaleType.FIT_XY));
+    if (!pictureInPictureParticipantGrid) {
+      float avatarSize = Math.min(w * .58f, h * .46f);
+      float avatarTop = Math.max(px(24f), h * .10f);
+      content.add(new Image.Builder(getContext(), "pip_profile", profile,
+          new RectF(w / 2f - avatarSize / 2f, avatarTop,
+              w / 2f + avatarSize / 2f, avatarTop + avatarSize))
+          .setScaleType(Image.ScaleType.CENTER_CROP));
+      text("pip_phone", phone,
+          new RectF(px(16f), avatarTop + avatarSize + px(8f), w - px(16f), h * .78f),
+          sp(14), 0xFF000E1A, FontVariation.SEMI_BOLD, Text.Alignment.CENTER);
+    }
+    if (pictureInPictureParticipantGrid) {
+      content.add(new Image.Builder(getContext(), "pip_status_bg", control,
+          new RectF(0, h * .78f, w, h)).setScaleType(Image.ScaleType.FIT_XY));
+    }
+    int statusColor = pictureInPictureParticipantGrid ? Color.WHITE : ACCENT;
+    text("pip_status", callStatus,
+        new RectF(px(8f), h * .78f, w - px(8f), h), sp(12), statusColor,
+        FontVariation.SEMI_BOLD, Text.Alignment.CENTER);
   }
 
   private void incomingControls(float w, float h) {
@@ -175,22 +224,27 @@ public final class VoiceActiveCallView extends View {
 
   private void text(String id, String value, RectF rect, float size, int color,
       FontVariation weight, Text.Alignment alignment) {
-    content.add(new Text.Builder(getContext(), id, value, rect).setFont(NativeFonts.INTER)
-        .setFontVariations(weight).setTextSizePx(size).setTextColor(color).setAlignment(alignment)
+    content.add(new Text.Builder(getContext(), id, value, rect)
+        .setFont(com.w3n.pinggo.views.home.ListFonts.inter(getContext(), weight))
+        .clearFontVariations().setTextSizePx(size).setTextColor(color).setAlignment(alignment)
         .setVerticalAlignment(Text.VerticalAlignment.CENTER).setMaxLines(1));
   }
   private Button button(String id, Bitmap image, String label, RectF rect, int color,
       Button.OnClickListener click) {
     return content.add(new Button.Builder(getContext(), id, image, label, rect)
-        .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(px(66f)).setFont(NativeFonts.INTER)
-        .setFontVariations(FontVariation.SEMI_BOLD).setTextSizePx(sp(13)).setTextColor(color)
+        .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(px(66f))
+        .setTextStyle(new com.ogfa.nativeviews.text.TextStyle.Builder()
+            .setFont(com.w3n.pinggo.views.home.ListFonts.inter(getContext(), FontVariation.SEMI_BOLD))
+            .clearFontVariations().setTextSizePx(sp(13)).setTextColor(color)
+            .setAlignment(Text.Alignment.CENTER).setVerticalAlignment(Text.VerticalAlignment.CENTER)
+            .setMaxLines(1).build())
         .setRippleEnabled(true).setWaitForRippleBeforeClick(false).setRippleColor(0x33FFFFFF).setOnClickListener(click));
   }
   @Override protected void onDraw(Canvas canvas) { super.onDraw(canvas); layers.draw(canvas); }
   @Override public boolean onTouchEvent(MotionEvent event) {
     return layers.onTouchEvent(event) || super.onTouchEvent(event);
   }
-  public void release() { layers.release(); recycle(light, white, transparent, control, selected, danger, accept, disabled, profile); }
+  public void release() { released = true; layers.release(); recycle(light, white, transparent, control, selected, danger, accept, disabled, profile); }
   private Bitmap avatar() {
     int size = Math.round(px(495f)); Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
     Canvas canvas = new Canvas(bitmap); Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);

@@ -200,6 +200,10 @@ public final class VideoCallController {
     if (terminated) return;
     terminated = true; state = CallState.ENDING; publish("Ending…");
     handler.removeCallbacks(timer); handler.removeCallbacks(mediaRetry);
+    if (notifyServer) Log.i("PingGoDisconnectHook",
+        "stage=video_controller_disconnect callId=" + callId
+            + " engine=webrtc media=video reason=" + reason.name().toLowerCase(Locale.US)
+            + " signalingClientAvailable=" + (audioClient != null));
     if (audioClient != null) { if (notifyServer) audioClient.endCall(reason.name().toLowerCase(Locale.US));
       else audioClient.close(false); }
     audioClient = null; audio = ChannelState.CLOSED;

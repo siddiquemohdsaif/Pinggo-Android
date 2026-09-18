@@ -1009,6 +1009,24 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     if (!messages.isEmpty()) notifyItemRangeChanged(0, messages.size());
   }
 
+  void refreshMeasuredRows(String mediaSource) {
+    if (mediaSource == null || mediaSource.isEmpty()) {
+      refreshMeasuredRows();
+      return;
+    }
+    ArrayList<Integer> affected = new ArrayList<>();
+    for (int index = 0; index < messages.size(); index++) {
+      if (mediaSource.equals(attachmentSource(messages.get(index)))) affected.add(index);
+    }
+    if (affected.isEmpty()) return;
+    // ComponentList binds changed items before rebuilding its variable-height layout.
+    // The first pass therefore installs the portrait row height; the second pass binds
+    // the bubble, preview, caption and metadata against that new height. Both passes are
+    // synchronous, so drawing can never expose a portrait preview inside the old bubble.
+    for (int position : affected) notifyItemChanged(position);
+    for (int position : affected) notifyItemChanged(position);
+  }
+
   private MessageMetrics metrics(MessageEntity message, float availableWidth) {
     return metrics(renderModel(message), availableWidth);
   }
@@ -1746,7 +1764,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
     if (previous != null && previous == portrait) return;
     // Orientation participates in MetricKey, so only rows using this source are
     // remeasured. Existing text and media rows retain their cached metrics.
-    if (mediaMetricsListener != null) mediaMetricsListener.onMediaMetricsChanged();
+    if (mediaMetricsListener != null) mediaMetricsListener.onMediaMetricsChanged(source);
   }
 
   private static boolean isDeletedMessage(MessageEntity message) {

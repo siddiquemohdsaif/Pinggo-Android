@@ -9,6 +9,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ChatProfilePhotoStore {
   private static final String PREFS_NAME = "ChatProfilePhotos";
@@ -17,6 +18,9 @@ public class ChatProfilePhotoStore {
   private static final String FILE_EXTENSION = ".jpg";
   private static final int JPEG_QUALITY = 92;
   private static final long MAX_PROFILE_PHOTO_BYTES = 25L * 1024L * 1024L;
+  private static final String NO_LOCAL_PATH = "\u0000";
+  private static final ConcurrentHashMap<String, String> LOCAL_PATH_CACHE =
+      new ConcurrentHashMap<>();
 
   private ChatProfilePhotoStore() {}
 
@@ -25,16 +29,22 @@ public class ChatProfilePhotoStore {
       return null;
     }
 
-    String localPath = getPrefs(context).getString(normalizePhoneNumber(phoneNumber), null);
+    String normalized = normalizePhoneNumber(phoneNumber);
+    String cached = LOCAL_PATH_CACHE.get(normalized);
+    if (cached != null) return NO_LOCAL_PATH.equals(cached) ? null : cached;
+    String localPath = getPrefs(context).getString(normalized, null);
     if (localPath == null || !new File(localPath).exists()) {
+      LOCAL_PATH_CACHE.put(normalized, NO_LOCAL_PATH);
       return null;
     }
+    LOCAL_PATH_CACHE.put(normalized, localPath);
     return localPath;
   }
 
   public static void remove(Context context, String phoneNumber) {
     if (context == null || phoneNumber == null) return;
     String normalized = normalizePhoneNumber(phoneNumber);
+    LOCAL_PATH_CACHE.remove(normalized);
     String path = getPrefs(context).getString(normalized, null);
     if (path != null) {
       File file = new File(path);
@@ -66,6 +76,7 @@ public class ChatProfilePhotoStore {
       String localPath = save(context, normalizedPhoneNumber, bitmap);
       bitmap.recycle();
       if (localPath != null) {
+        LOCAL_PATH_CACHE.put(normalizedPhoneNumber, localPath);
         getPrefs(context).edit()
             .putString(normalizedPhoneNumber, localPath)
             .putString(URL_KEY_PREFIX + normalizedPhoneNumber, normalizedUrl)

@@ -251,6 +251,7 @@ public class LoginHandler {
     UserData parsedUserData = UserData.fromJson(userData.toString());
     LoginStateManager.getInstance().setLogin(context, uid, encryptedCredential, parsedUserData);
     AppFunctionManager.getInstance().applyAuth(context);
+    com.w3n.pinggo.notification.UserDeviceSessionReporter.onLogin(context);
     FcmTokenManager.refreshAndUpload(context);
     Log.d(
         TAG,

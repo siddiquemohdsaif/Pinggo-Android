@@ -11,6 +11,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.fragment.app.FragmentManager;
+import com.w3n.pinggo.call.ActiveCallRegistry;
 
 /** Installs task-root back handling backed by {@link ExitAppDialogView}. */
 public final class ExitAppController {
@@ -36,6 +37,10 @@ public final class ExitAppController {
                 if (hideKeyboardIfVisible(activity, content)) return;
                 if (fragmentManager != null && fragmentManager.getBackStackEntryCount() > 0) {
                   fragmentManager.popBackStack();
+                  return;
+                }
+                if (ActiveCallRegistry.getInstance().isInPictureInPicture()) {
+                  activity.moveTaskToBack(true);
                   return;
                 }
                 if (!activity.isTaskRoot()) {
