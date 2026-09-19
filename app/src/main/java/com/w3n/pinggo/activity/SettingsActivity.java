@@ -4,6 +4,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.ViewGroup;
@@ -40,6 +41,7 @@ import java.util.List;
 import java.util.ArrayList;
 
 public class SettingsActivity extends AppCompatActivity implements SettingsView.Listener {
+  private static final int SYSTEM_BAR_COLOR = 0xFFF7F9FB;
   private SettingsView settingsView;
   private ActivityResultLauncher<String> picker;
   private Bitmap selectedPhoto;
@@ -52,7 +54,7 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+    configureSystemBars();
     settingsView = new SettingsView(this, this);
     setContentView(settingsView);
     ViewCompat.setOnApplyWindowInsetsListener(
@@ -73,6 +75,18 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
       }
     });
     refresh();
+  }
+
+  private void configureSystemBars() {
+    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+    getWindow().setStatusBarColor(SYSTEM_BAR_COLOR);
+    getWindow().setNavigationBarColor(SYSTEM_BAR_COLOR);
+    WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(
+        getWindow(), getWindow().getDecorView());
+    controller.setAppearanceLightStatusBars(true);
+    controller.setAppearanceLightNavigationBars(true);
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+      getWindow().setNavigationBarContrastEnforced(false);
   }
 
   private void refresh() {
@@ -304,6 +318,7 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
       return;
     WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView())
         .show(WindowInsetsCompat.Type.systemBars());
+    configureSystemBars();
     if (current.getParent() instanceof ViewGroup) {
       ((ViewGroup) current.getParent()).removeView(current);
     }

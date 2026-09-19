@@ -54,6 +54,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
+import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.local.ChatEntity;
 import com.w3n.pinggo.data.local.PresenceEntity;
@@ -69,6 +70,7 @@ import com.w3n.pinggo.call.ActiveCallRegistry;
 import com.w3n.pinggo.call.WebRtcAudioMessageRecorder;
 import com.w3n.pinggo.views.common.NativePromptDialogView;
 import com.w3n.pinggo.views.ImagePreviewView;
+import com.w3n.pinggo.views.home.ProfilePhotoPreviewView;
 import com.w3n.pinggo.views.NativeMediaScreenView;
 import com.w3n.pinggo.views.VideoPreviewView;
 import com.w3n.pinggo.views.SelectedMediaOverlayView;
@@ -103,7 +105,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private static final long LOCATION_FALLBACK_MAX_AGE_MS = 120_000L;
   private static final float LOCATION_ACCEPTABLE_ACCURACY_M = 100f;
   private static final int SELECTION_STATUS_BAR_COLOR = 0xFFE9EDF0;
-  private static final int DEFAULT_STATUS_BAR_COLOR = 0xFFF9FBFE;
+  private static final int DEFAULT_STATUS_BAR_COLOR = 0xFFF7F9FB;
   private static final int INITIAL_RENDER_WINDOW_SIZE = 15;
   private static final int PROGRESSIVE_RENDER_INCREMENT = ChatRepository.MESSAGE_PAGE_SIZE;
   private static final int MESSAGE_WINDOW_INCREMENT = ChatRepository.MESSAGE_PAGE_SIZE;
@@ -125,6 +127,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private EmojiDrawerView emojiDrawer;
   private boolean groupMemberActive = true;
   private boolean groupSendingAllowed = true;
+  private boolean groupCallsAllowed = true;
   private ImagePreviewView imagePreviewView;
   private VideoPreviewView videoPreviewView;
   private SelectedMediaPreviewView selectedMediaPreviewView;
@@ -218,6 +221,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   private boolean groupChat;
   private ChatEntity currentChatDetails;
   private String profilePhotoPath;
+  private String groupProfilePhotoUrl;
+  private ProfilePhotoPreviewView profilePhotoPreview;
   private boolean typingStarted, peerTyping, locationPending, attachmentSending;
   private WebRtcAudioMessageRecorder audioRecorder;
   private File recordedAudioFile;
@@ -340,7 +345,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   protected void onCreate(Bundle state) {
     super.onCreate(state);
     long createStartedNanos = SystemClock.elapsedRealtimeNanos();
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+    configureDefaultSystemBars();
     String name;
     chatId = getIntent().getStringExtra(EXTRA_CHAT_ID);
     groupChat = chatId != null && chatId.startsWith("grp_");
@@ -357,6 +362,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         : DeviceContactResolver.nameOrPhone(this, receiverId);
     chatName = name;
     profilePhotoPath = getIntent().getStringExtra(EXTRA_LOCAL_PROFILE_PHOTO_PATH);
+    groupProfilePhotoUrl = getIntent().getStringExtra(EXTRA_PROFILE_PHOTO_URL);
     chatView = new ChatView(
         this,
         name,
@@ -366,7 +372,6 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         this,
         profiler);
     setContentView(chatView);
-    getWindow().setStatusBarColor(DEFAULT_STATUS_BAR_COLOR);
     ensurePingGoStorageAccess();
     conversationMenuDialog = new ConversationMenuDialogView(
         this,
@@ -392,6 +397,10 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
         new OnBackPressedCallback(true) {
           @Override
           public void handleOnBackPressed() {
+            if (profilePhotoPreview != null) {
+              closeProfilePhotoPreview();
+              return;
+            }
             if (imagePreviewView != null) {
               if (imagePreviewView.dismissMenu())
                 return;
@@ -452,9 +461,19 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       long mutedUntil = chat == null ? 0L : chat.notificationMuted;
       notificationsMuted = mutedUntil == -1L || mutedUntil > System.currentTimeMillis();
       if (groupChat && chat != null) {
-        chatName = chat.contactName == null || chat.contactName.trim().isEmpty()
+        String observedName = chat.contactName == null || chat.contactName.trim().isEmpty()
             ? "Group"
             : chat.contactName.trim();
+        if (!observedName.equals(chatName)) {
+          chatName = observedName;
+          chatView.setChatName(chatName);
+        }
+        if (chat.localProfilePhotoPath != null
+            && !chat.localProfilePhotoPath.trim().isEmpty()
+            && !chat.localProfilePhotoPath.equals(profilePhotoPath)) {
+          profilePhotoPath = chat.localProfilePhotoPath;
+          chatView.setProfilePhoto(profilePhotoPath);
+        }
         chatView.setPresence(chat.groupMemberCount > 0
             ? chat.groupMemberCount + (chat.groupMemberCount == 1 ? " member" : " members")
             : "group");
@@ -552,6 +571,18 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       });
     observe();
     profiler.activityCreated(createStartedNanos);
+  }
+
+  private void configureDefaultSystemBars() {
+    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+    getWindow().setStatusBarColor(DEFAULT_STATUS_BAR_COLOR);
+    getWindow().setNavigationBarColor(DEFAULT_STATUS_BAR_COLOR);
+    WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(
+        getWindow(), getWindow().getDecorView());
+    controller.setAppearanceLightStatusBars(true);
+    controller.setAppearanceLightNavigationBars(true);
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+      getWindow().setNavigationBarContrastEnforced(false);
   }
 
   private void ensurePingGoStorageAccess() {
@@ -1773,7 +1804,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onVideoCall() {
-    if (!requireGroupSendPermission())
+    if (!requireGroupCallPermission())
       return;
     if (isGroupChat()) {
       openCall(VideoCallActivity.class);
@@ -1788,7 +1819,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   public void onVoiceCall() {
-    if (!requireGroupSendPermission())
+    if (!requireGroupCallPermission())
       return;
     if (isGroupChat()) {
       openCall(VoiceCallActivity.class);
@@ -3785,6 +3816,31 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   }
 
   @Override
+  public void onProfilePhoto() {
+    closeProfilePhotoPreview();
+    String source = profilePhotoPath;
+    if (source == null || source.trim().isEmpty())
+      source = getIntent().getStringExtra(EXTRA_PROFILE_PHOTO_URL);
+    profilePhotoPreview = new ProfilePhotoPreviewView(this);
+    ((ViewGroup) findViewById(android.R.id.content)).addView(profilePhotoPreview,
+        new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    profilePhotoPreview.show(null, source, groupChat ? "" : receiverId,
+        this::closeProfilePhotoPreview);
+    ViewCompat.requestApplyInsets(profilePhotoPreview);
+  }
+
+  private void closeProfilePhotoPreview() {
+    ProfilePhotoPreviewView current = profilePhotoPreview;
+    profilePhotoPreview = null;
+    if (current == null) return;
+    current.dismiss();
+    if (current.getParent() instanceof ViewGroup)
+      ((ViewGroup) current.getParent()).removeView(current);
+    current.release();
+  }
+
+  @Override
   public long attachmentDownloadedBytes(MessageEntity message) {
     Long value = attachmentDownloadedBytes.get(attachmentKey(message));
     return value == null ? 0L : value;
@@ -3921,7 +3977,14 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       return false;
     if (!groupChat || groupSendingAllowed)
       return true;
-    Toast.makeText(this, "Only group admins can message or call.", Toast.LENGTH_SHORT).show();
+    Toast.makeText(this, "Only group admins can send messages.", Toast.LENGTH_SHORT).show();
+    return false;
+  }
+
+  private boolean requireGroupCallPermission() {
+    if (!requireActiveGroupMember()) return false;
+    if (!groupChat || groupCallsAllowed) return true;
+    Toast.makeText(this, "Only group admins can start calls.", Toast.LENGTH_SHORT).show();
     return false;
   }
 
@@ -3947,15 +4010,26 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
             && group.get("permissions").isJsonObject()
                 ? group.getAsJsonObject("permissions")
                 : null;
-        boolean adminOnly = permissions != null && "admins".equalsIgnoreCase(
-            JsonParserUtil.getString(permissions, "sendMessages"));
+        boolean messagesAdminOnly = permissionAdminsOnly(permissions, "sendMessages", null);
+        boolean callsAdminOnly = permissionAdminsOnly(
+            permissions, "startCalls", "sendMessages");
+        String fetchedName = group == null ? "" : JsonParserUtil.getString(group, "name");
+        String fetchedIcon = group == null ? "" : JsonParserUtil.getString(group, "icon");
         runOnUiThread(() -> {
           groupMemberActive = active;
-          groupSendingAllowed = !adminOnly || admin;
+          groupSendingAllowed = !messagesAdminOnly || admin;
+          groupCallsAllowed = !callsAdminOnly || admin;
+          if (!fetchedName.isEmpty() && !fetchedName.equals(chatName)) {
+            chatName = fetchedName;
+            if (chatView != null) chatView.setChatName(chatName);
+          }
+          if (!fetchedIcon.isEmpty()) refreshGroupProfilePhoto(fetchedIcon);
           if (chatView != null)
             chatView.setGroupMemberActive(active);
           if (chatView != null)
             chatView.setGroupSendingAllowed(groupSendingAllowed);
+          if (chatView != null)
+            chatView.setGroupCallsAllowed(groupCallsAllowed);
           if (conversationMenuDialog != null)
             conversationMenuDialog.setGroupMemberActive(active);
         });
@@ -3964,6 +4038,33 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       @Override
       public void onError(String error) {
       }
+    });
+  }
+
+  private static boolean permissionAdminsOnly(
+      JsonObject permissions, String key, String fallbackKey) {
+    if (permissions == null) return false;
+    String mode = JsonParserUtil.getString(permissions, key);
+    if (mode.isEmpty() && fallbackKey != null)
+      mode = JsonParserUtil.getString(permissions, fallbackKey);
+    return "admins".equalsIgnoreCase(mode);
+  }
+
+  private void refreshGroupProfilePhoto(String url) {
+    if (url == null || url.trim().isEmpty()) return;
+    String normalizedUrl = url.trim();
+    if (normalizedUrl.equals(groupProfilePhotoUrl)
+        && profilePhotoPath != null && !profilePhotoPath.trim().isEmpty()) return;
+    groupProfilePhotoUrl = normalizedUrl;
+    previewActionExecutor.execute(() -> {
+      String localPath = ChatProfilePhotoStore.downloadAndStore(
+          getApplicationContext(), chatId, normalizedUrl);
+      if (localPath == null || localPath.trim().isEmpty()) return;
+      runOnUiThread(() -> {
+        if (isFinishing() || isDestroyed()) return;
+        profilePhotoPath = localPath;
+        if (chatView != null) chatView.setProfilePhoto(localPath);
+      });
     });
   }
 
@@ -3980,6 +4081,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
 
   @Override
   protected void onDestroy() {
+    closeProfilePhotoPreview();
     closeEmojiDrawer();
     closeImagePreview();
     closeVideoPreview();

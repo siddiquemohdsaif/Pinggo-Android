@@ -688,7 +688,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             } else {
                 values = messageDao.findStoredMediaPage(chatId, cursor, limit);
             }
-            Long next = values.isEmpty() ? before : values.get(values.size() - 1).sentTime;
+            // Keep both branches boxed. A conditional expression mixing nullable Long
+            // with primitive long unboxes `before`, which crashes on the initial empty page.
+            final Long next;
+            if (values.isEmpty()) next = before;
+            else next = Long.valueOf(values.get(values.size() - 1).sentTime);
             mainHandler.post(() -> callback.onLoaded(values, next, values.size() == limit));
         });
     }
@@ -2124,8 +2128,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         if (chats == null || chats.isEmpty()) return;
         List<ChatEntity> pending = new ArrayList<>();
         for (ChatEntity chat : chats) {
+            String photoOwnerId = chat == null ? ""
+                    : chat.isGroup ? chat.chatId : chat.otherUserId;
             if (chat == null || chat.chatId == null || chat.chatId.isEmpty()
-                    || chat.otherUserId == null || chat.otherUserId.isEmpty()
+                    || photoOwnerId == null || photoOwnerId.isEmpty()
                     || chat.profilePhotoUrl == null || chat.profilePhotoUrl.trim().isEmpty()
                     || !profilePhotoDownloads.add(chat.chatId)) {
                 continue;
@@ -2141,7 +2147,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 try {
                     String localPath = ChatProfilePhotoStore.downloadAndStore(
                             appContext,
-                            chat.otherUserId,
+                            chat.isGroup ? chat.chatId : chat.otherUserId,
                             chat.profilePhotoUrl
                     );
                     if (localPath != null) {
@@ -2240,7 +2246,6 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                             && (cursor == null || cursor.isEmpty());
                     preserveLocalAttachmentUris(pinnedPage);
                     preserveLocalAttachmentUris(page);
-                    if (authoritativeGroupRefresh) messageDao.deleteByChatId(chatId);
                     int uniqueCount = 0;
                     for (MessageEntity message : page) {
                         if (message != null && message.messageId != null
@@ -2249,8 +2254,12 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                             uniqueCount++;
                         }
                     }
-                    if (!pinnedPage.isEmpty()) messageDao.upsertAll(pinnedPage);
-                    if (!page.isEmpty()) messageDao.upsertAll(page);
+                    if (authoritativeGroupRefresh) {
+                        messageDao.replaceChatMessages(chatId, pinnedPage, page);
+                    } else {
+                        if (!pinnedPage.isEmpty()) messageDao.upsertAll(pinnedPage);
+                        if (!page.isEmpty()) messageDao.upsertAll(page);
+                    }
                     Log.d(TESTING_TAG, "message_list source=routes phase=room_write_complete chatId="
                             + chatId + " messages=" + page.size());
                     final int addedCount = uniqueCount;
@@ -3448,8 +3457,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             case "admin_promoted": return actor + " made " + targets + " an admin";
             case "admin_demoted": return actor + " removed " + targets + " as admin";
             case "group_info_updated": return actor + " updated the group info";
-            case "admin_only_enabled": return actor + " allowed only admins to message and call";
-            case "admin_only_disabled": return actor + " allowed all members to message and call";
+            case "admin_only_enabled": return actor + " allowed only admins to message, call, and edit the group profile";
+            case "admin_only_disabled": return actor + " allowed all members to message, call, and edit the group profile";
             default: return "Group updated";
         }
     }

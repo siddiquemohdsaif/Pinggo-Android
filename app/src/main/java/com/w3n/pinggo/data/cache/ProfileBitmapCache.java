@@ -38,6 +38,16 @@ public final class ProfileBitmapCache {
 
   public static ProfileBitmapCache get() { return INSTANCE; }
 
+  /** Drops decoded variants for a file that has been overwritten in place. */
+  public void invalidatePath(String path) {
+    if (path == null || path.trim().isEmpty()) return;
+    String circularPrefix = "photo|" + path + '|';
+    String squarePrefix = "photo_square|" + path + '|';
+    for (String key : new ArrayList<>(cache.snapshot().keySet())) {
+      if (key.startsWith(circularPrefix) || key.startsWith(squarePrefix)) cache.remove(key);
+    }
+  }
+
   /**
    * Returns a cache-owned bitmap and invokes onLoaded on the main thread after an async decode.
    * Callers may retain the bitmap while visible but must never call {@link Bitmap#recycle()}.

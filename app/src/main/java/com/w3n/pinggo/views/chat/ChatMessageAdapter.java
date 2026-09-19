@@ -433,14 +433,17 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
           notifyItemRangeChanged(changedStart, changedEnd - changedStart + 1);
         }
       } else {
-        // Rebind the affected range without invalidating unrelated list chrome.
-        int common = Math.min(oldCount, nextMessages.size());
-        if (common > 0) notifyItemRangeChanged(0, common);
-        if (nextMessages.size() > oldCount) {
-          notifyItemRangeInserted(oldCount, nextMessages.size() - oldCount);
-        } else if (oldCount > nextMessages.size()) {
-          for (int index = oldCount - 1; index >= nextMessages.size(); index--) {
-            notifyItemRemoved(index);
+        if (oldCount > nextMessages.size()) {
+          // ComponentList validates removals against the adapter's current (already reduced)
+          // count. Notifying old tail positions therefore crashes when more than one row is
+          // removed (for example, a transient Room emission changing 5 rows to 0).
+          notifyDataSetChanged();
+        } else {
+          // Rebind the affected range without invalidating unrelated list chrome.
+          int common = Math.min(oldCount, nextMessages.size());
+          if (common > 0) notifyItemRangeChanged(0, common);
+          if (nextMessages.size() > oldCount) {
+            notifyItemRangeInserted(oldCount, nextMessages.size() - oldCount);
           }
         }
       }
@@ -1539,8 +1542,8 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
       case "admin_promoted": return actor + " made " + targetLabels(targets) + " an admin";
       case "admin_demoted": return actor + " removed " + targetLabels(targets) + " as admin";
       case "group_info_updated": return actor + " updated the group info";
-      case "admin_only_enabled": return actor + " allowed only admins to message and call";
-      case "admin_only_disabled": return actor + " allowed all members to message and call";
+      case "admin_only_enabled": return actor + " allowed only admins to message, call, and edit the group profile";
+      case "admin_only_disabled": return actor + " allowed all members to message, call, and edit the group profile";
       default: return "Group updated";
     }
   }

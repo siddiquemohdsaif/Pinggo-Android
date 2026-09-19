@@ -77,6 +77,7 @@ public final class HomeView extends ZLayerViewGroup {
     private final CallsView callsView;
     private final MeetsView meetsView;
     private final BottomNavigationView bottomNavigationView;
+    private final ProfilePhotoPreviewView profilePhotoPreview;
     private Text title;
     private Image logo;
     private Image searchBackground;
@@ -117,16 +118,22 @@ public final class HomeView extends ZLayerViewGroup {
             if (getWidth() > 0) buildScreen();
             invalidate();
         });
+        chatsView.setOnProfilePhotoClickListener((chat, fallback, originalSource) ->
+                showProfilePhoto(fallback, originalSource, chat.getPhoneNumber()));
+        callsView.setOnProfilePhotoClickListener((call, fallback, originalSource) ->
+                showProfilePhoto(fallback, originalSource, call.getPhoneNumber()));
         meetsView = new MeetsView(context);
         bottomNavigationView = new BottomNavigationView(context, new BottomNavigationView.Listener() {
             @Override public void onChatsSelected() { clearCallSelection(); showChats(); }
             @Override public void onCallsSelected() { clearChatSelection(); showCalls(); }
             @Override public void onMeetSelected() { clearSelections(); showMeet(); }
         });
+        profilePhotoPreview = new ProfilePhotoPreviewView(context);
         addView(chatsView);
         addView(callsView);
         addView(meetsView);
         addView(bottomNavigationView);
+        addView(profilePhotoPreview);
     }
 
     public void setInsets(int top, int bottom) {
@@ -135,6 +142,7 @@ public final class HomeView extends ZLayerViewGroup {
         if (topInset == top && bottomInset == bottom) return;
         topInset = top;
         bottomInset = bottom;
+        profilePhotoPreview.setInsets(top, bottom);
         if (getWidth() > 0) buildScreen();
     }
 
@@ -186,6 +194,8 @@ public final class HomeView extends ZLayerViewGroup {
                 Math.max(0, getMeasuredHeight() - navHeight - chatsTop), MeasureSpec.EXACTLY));
         meetsView.measure(exactWidth, exactSecondaryHeight);
         bottomNavigationView.measure(exactWidth, MeasureSpec.makeMeasureSpec(navHeight, MeasureSpec.EXACTLY));
+        profilePhotoPreview.measure(exactWidth, MeasureSpec.makeMeasureSpec(
+                getMeasuredHeight(), MeasureSpec.EXACTLY));
     }
 
     @Override protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
@@ -199,6 +209,7 @@ public final class HomeView extends ZLayerViewGroup {
         callsView.layout(0, chatsTop, width, navTop);
         meetsView.layout(0, secondaryTop, width, navTop);
         bottomNavigationView.layout(0, navTop, width, height);
+        profilePhotoPreview.layout(0, 0, width, height);
     }
 
     @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
@@ -386,6 +397,17 @@ public final class HomeView extends ZLayerViewGroup {
         return chatsCleared || callsCleared;
     }
 
+    private void showProfilePhoto(Bitmap fallback, String originalSource, String phoneNumber) {
+        clearSelections();
+        actionTouchActive = false;
+        profilePhotoPreview.show(fallback, originalSource, phoneNumber,
+                profilePhotoPreview::dismiss);
+    }
+
+    public boolean dismissProfilePhotoPreview() {
+        return profilePhotoPreview.dismiss();
+    }
+
     private void showCalls() {
         boolean changedTab = showingChats || showingMeet;
         showingChats = false;
@@ -467,9 +489,13 @@ public final class HomeView extends ZLayerViewGroup {
     }
     @Override protected void dispatchDraw(Canvas canvas) {
         super.dispatchDraw(canvas);
-        contentLayer.draw(canvas);
+        if (profilePhotoPreview.getVisibility() != VISIBLE) contentLayer.draw(canvas);
     }
     @Override public boolean onInterceptTouchEvent(MotionEvent event) {
+        if (profilePhotoPreview.getVisibility() == VISIBLE) {
+            actionTouchActive = false;
+            return false;
+        }
         if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
             actionTouchActive = !showingChats && !showingMeet && action != null
                     && actionBounds.contains(event.getX(), event.getY());
@@ -502,6 +528,7 @@ public final class HomeView extends ZLayerViewGroup {
         chatsView.release();
         callsView.release();
         bottomNavigationView.release();
+        profilePhotoPreview.release();
         layers.release();
         for (Bitmap bitmap : new Bitmap[]{backgroundBitmap, accentBitmap,
                 transparentBitmap, logoBitmap,

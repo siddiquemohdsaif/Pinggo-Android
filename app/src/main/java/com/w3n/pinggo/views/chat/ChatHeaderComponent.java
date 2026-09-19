@@ -20,7 +20,7 @@ public final class ChatHeaderComponent {
   private static final int PRIMARY = 0xFF000E1A;
   private static final int SECONDARY = 0xFF687382;
   private final Context context;
-  private final String chatName;
+  private String chatName;
   private final ChatViewListener listener;
   private final Bitmap statusBarBackground;
   private final Bitmap headerBackground;
@@ -32,6 +32,7 @@ public final class ChatHeaderComponent {
   private final Bitmap videoCall;
   private final Bitmap more;
   private Text presence;
+  private Text nameText;
   private String presenceValue = "connecting...";
   private boolean callActionsVisible = true;
   private boolean profileVisible = true;
@@ -113,7 +114,7 @@ public final class ChatHeaderComponent {
         new RectF(152f * scale, top + 34f * scale, 254f * scale, top + 136f * scale))
         .setScaleType(Image.ScaleType.CENTER_CROP));
     profileImage.setVisible(profileVisible);
-    text(content, "name", chatName,
+    nameText = text(content, "name", chatName,
         new RectF(285f * scale, top + 42f * scale, 742f * scale, top + 91f * scale),
         38f * scale, PRIMARY, FontVariation.MEDIUM);
     presence = text(content, "presence", presenceValue,
@@ -129,6 +130,14 @@ public final class ChatHeaderComponent {
         .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
         .setRippleColor(0x10019CC4)
         .setOnClickListener(id -> listener.onChatDetails()));
+    // Keep the avatar action independent from the name/details target.
+    content.add(new Button.Builder(context, "profile_photo_touch", transparent, "",
+        new RectF(135f * scale, top + 20f * scale, 270f * scale, top + 150f * scale))
+        .setImageScaleType(Image.ScaleType.FIT_XY)
+        .setCornerRadiusPx(0)
+        .setRippleEnabled(true).setWaitForRippleBeforeClick(true)
+        .setRippleColor(0x18FFFFFF)
+        .setOnClickListener(id -> listener.onProfilePhoto()));
     if (callActionsVisible) {
       iconButton(content, "video_call", videoCall,
           new RectF(869f * scale, top + 55f * scale, 926f * scale, top + 112f * scale),
@@ -149,6 +158,11 @@ public final class ChatHeaderComponent {
   void setPresence(String value) {
     presenceValue = value == null ? "" : value;
     if (presence != null) presence.setText(presenceValue).setVisible(!presenceValue.isEmpty());
+  }
+
+  void setName(String value) {
+    chatName = value == null ? "" : value;
+    if (nameText != null) nameText.setText(chatName);
   }
 
   void setProfileVisible(boolean visible) {

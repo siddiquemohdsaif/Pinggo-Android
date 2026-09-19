@@ -148,6 +148,15 @@ public interface MessageDao {
     @Query("DELETE FROM messages WHERE chatId = :chatId")
     void deleteByChatId(String chatId);
 
+    /** Replaces an authoritative chat snapshot without exposing an intermediate empty list. */
+    @Transaction
+    default void replaceChatMessages(String chatId, List<MessageEntity> pinnedMessages,
+                                     List<MessageEntity> messages) {
+        deleteByChatId(chatId);
+        if (pinnedMessages != null && !pinnedMessages.isEmpty()) upsertAll(pinnedMessages);
+        if (messages != null && !messages.isEmpty()) upsertAll(messages);
+    }
+
     @Query("SELECT MAX(sentTime) FROM messages")
     Long getLastSyncTime();
 }

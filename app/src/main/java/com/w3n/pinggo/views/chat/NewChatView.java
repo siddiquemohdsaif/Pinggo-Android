@@ -437,7 +437,17 @@ public final class NewChatView extends View {
         holder.find("label", Text.class).setText(value.phoneNumber);
         return;
       }
-      holder.find("avatar", Image.class).setBitmap(photo(value));
+      Bitmap avatar = photo(value);
+      Image avatarImage = holder.find("avatar", Image.class);
+      avatarImage.setBitmap(avatar);
+      if (value.type == Item.FOUND) {
+        avatarImage.setOnClickListener(id -> {
+          String source = ChatProfilePhotoStore.getLocalPath(getContext(), value.phoneNumber);
+          if ((source == null || source.trim().isEmpty())
+              && value.profilePhotoUrl != null) source = value.profilePhotoUrl;
+          listener.onProfilePhoto(value, avatarImage.getBitmap(), source);
+        });
+      }
       boolean selected = groupMode && selectedMembers.contains(value.phoneNumber);
       holder.find("selection_background", Image.class).setVisible(selected);
       holder.find("selection_check", Image.class).setVisible(selected);
@@ -577,6 +587,8 @@ public final class NewChatView extends View {
     void onBack();
 
     void onOpenChat(Item item);
+
+    void onProfilePhoto(Item item, Bitmap fallback, String originalSource);
 
     void onInvite(String phoneNumber);
 

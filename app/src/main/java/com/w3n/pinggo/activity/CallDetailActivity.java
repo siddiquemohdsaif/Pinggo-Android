@@ -1,12 +1,14 @@
 package com.w3n.pinggo.activity;
 
 import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.modals.CallLog;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
@@ -17,6 +19,7 @@ import java.util.Collections;
 import java.util.LinkedHashSet;
 
 public class CallDetailActivity extends AppCompatActivity implements CallDetailView.Listener {
+  private static final int SYSTEM_BAR_COLOR = 0xFFF7F9FB;
   public static final String EXTRA_CHAT_ID = "com.w3n.pinggo.EXTRA_CALL_CHAT_ID";
   public static final String EXTRA_PHONE_NUMBER = "com.w3n.pinggo.EXTRA_CALL_PHONE_NUMBER";
   public static final String EXTRA_CONTACT_NAME = "com.w3n.pinggo.EXTRA_CONTACT_NAME";
@@ -35,7 +38,7 @@ public class CallDetailActivity extends AppCompatActivity implements CallDetailV
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+    configureSystemBars();
     String calledTime = value(EXTRA_CALLED_TIME, getString(R.string.unknown_time));
     detailView = new CallDetailView(
         this,
@@ -69,6 +72,18 @@ public class CallDetailActivity extends AppCompatActivity implements CallDetailV
         getIntent().getBooleanExtra(EXTRA_IS_MISSED, false),
         getIntent().getBooleanExtra(EXTRA_IS_CONFERENCE, false));
     detailView.submitCalls(Collections.singletonList(selectedCall));
+  }
+
+  private void configureSystemBars() {
+    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+    getWindow().setStatusBarColor(SYSTEM_BAR_COLOR);
+    getWindow().setNavigationBarColor(SYSTEM_BAR_COLOR);
+    WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(
+        getWindow(), getWindow().getDecorView());
+    controller.setAppearanceLightStatusBars(true);
+    controller.setAppearanceLightNavigationBars(true);
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+      getWindow().setNavigationBarContrastEnforced(false);
   }
 
   private String value(String key, String fallback) {

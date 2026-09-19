@@ -73,7 +73,7 @@ public class ChatProfilePhotoStore {
           normalizedUrl, temporaryFile, MAX_PROFILE_PHOTO_BYTES);
       Bitmap bitmap = BitmapFactory.decodeFile(downloadedFile.getAbsolutePath());
       if (bitmap == null) return null;
-      String localPath = save(context, normalizedPhoneNumber, bitmap);
+      String localPath = saveBitmap(context, normalizedPhoneNumber, bitmap);
       bitmap.recycle();
       if (localPath != null) {
         LOCAL_PATH_CACHE.put(normalizedPhoneNumber, localPath);
@@ -90,7 +90,26 @@ public class ChatProfilePhotoStore {
     }
   }
 
-  private static String save(Context context, String phoneNumber, Bitmap bitmap) {
+  /** Persists an already decoded photo, including group icons keyed by group id. */
+  public static String storeBitmap(
+      Context context, String identifier, Bitmap bitmap, String profilePhotoUrl) {
+    if (context == null || isEmpty(identifier) || bitmap == null || bitmap.isRecycled()) {
+      return null;
+    }
+    String normalized = normalizePhoneNumber(identifier);
+    String localPath = saveBitmap(context, normalized, bitmap);
+    if (localPath == null) return null;
+    LOCAL_PATH_CACHE.put(normalized, localPath);
+    SharedPreferences.Editor editor = getPrefs(context).edit().putString(normalized, localPath);
+    if (!isEmpty(profilePhotoUrl)) {
+      editor.putString(URL_KEY_PREFIX + normalized,
+          normalizeProfilePhotoUrl(profilePhotoUrl));
+    }
+    editor.apply();
+    return localPath;
+  }
+
+  private static String saveBitmap(Context context, String phoneNumber, Bitmap bitmap) {
     File file = new File(context.getFilesDir(), FILE_PREFIX + phoneNumber + FILE_EXTENSION);
     try (FileOutputStream outputStream = new FileOutputStream(file)) {
       bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, outputStream);

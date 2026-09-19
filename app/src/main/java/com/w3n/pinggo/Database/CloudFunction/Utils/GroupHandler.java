@@ -19,17 +19,31 @@ public final class GroupHandler {
     public static void create(AppRestAPI api, String userId, String name, String description,
                               java.util.List<String> memberIds,
                               AppFunctionManager.Callback callback) {
-        create(api, userId, name, description, memberIds, null, false, callback);
+        create(api, userId, name, description, memberIds, false, callback);
     }
 
     public static void create(AppRestAPI api, String userId, String name, String description,
-                              java.util.List<String> memberIds, String photoBase64, boolean adminsOnly,
+                              java.util.List<String> memberIds, boolean adminsOnly,
+                              AppFunctionManager.Callback callback) {
+        create(api, userId, name, description, memberIds, adminsOnly, adminsOnly,
+            adminsOnly, adminsOnly, callback);
+    }
+
+    public static void create(AppRestAPI api, String userId, String name, String description,
+                              java.util.List<String> memberIds, boolean profileAdminsOnly,
+                              boolean nameAdminsOnly, boolean messageAdminsOnly,
+                              boolean callAdminsOnly,
                               AppFunctionManager.Callback callback) {
         JsonObject body = identity(userId, null);
-        if (photoBase64 != null) body.addProperty("profilePhotoBase64", photoBase64);
-        body.addProperty("adminsOnly", adminsOnly);
         body.addProperty("name", name);
         body.addProperty("description", description == null ? "" : description);
+        JsonObject permissions = new JsonObject();
+        permissions.addProperty("editProfilePhoto",
+            profileAdminsOnly ? "admins" : "members");
+        permissions.addProperty("editName", nameAdminsOnly ? "admins" : "members");
+        permissions.addProperty("sendMessages", messageAdminsOnly ? "admins" : "members");
+        permissions.addProperty("startCalls", callAdminsOnly ? "admins" : "members");
+        body.add("permissions", permissions);
         JsonArray ids = new JsonArray();
         if (memberIds != null) for (String id : memberIds) ids.add(normalize(id));
         body.add("memberIds", ids);
@@ -69,6 +83,17 @@ public final class GroupHandler {
         String mode = enabled ? "admins" : "members";
         permissions.addProperty("sendMessages", mode);
         permissions.addProperty("startCalls", mode);
+        permissions.addProperty("editInfo", mode);
+        body.add("permissions", permissions);
+        enqueue(api.updateGroup(request(body)), callback);
+    }
+
+    public static void updatePermission(AppRestAPI api, String userId, String groupId,
+                                        String permission, boolean adminsOnly,
+                                        AppFunctionManager.Callback callback) {
+        JsonObject body = identity(userId, groupId);
+        JsonObject permissions = new JsonObject();
+        permissions.addProperty(permission, adminsOnly ? "admins" : "members");
         body.add("permissions", permissions);
         enqueue(api.updateGroup(request(body)), callback);
     }

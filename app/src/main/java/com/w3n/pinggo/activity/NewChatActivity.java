@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.ContactsContract;
 import android.view.ViewGroup;
@@ -22,6 +23,7 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -32,6 +34,7 @@ import com.w3n.pinggo.data.local.ChatEntity;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.views.chat.NewChatView;
 import com.w3n.pinggo.views.common.NativePromptDialogView;
+import com.w3n.pinggo.views.home.ProfilePhotoPreviewView;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -44,6 +47,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class NewChatActivity extends AppCompatActivity implements NewChatView.Listener {
+  private static final int SYSTEM_BAR_COLOR = 0xFFF7F9FB;
   public static final String EXTRA_SHOW_CHAT_LIST = "com.w3n.pinggo.EXTRA_SHOW_CHAT_LIST";
   private boolean showChatList;
   public static final String EXTRA_CREATE_GROUP = "com.w3n.pinggo.EXTRA_CREATE_GROUP";
@@ -67,9 +71,9 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
   private final Set<String> photoDownloads = Collections.newSetFromMap(new ConcurrentHashMap<>());
   private final AtomicInteger discoveryGeneration = new AtomicInteger();
   private NewChatView newChatView;
+  private ProfilePhotoPreviewView profilePhotoPreview;
   private boolean creatingGroup;
   private com.w3n.pinggo.views.chat.CreateGroupView groupDetails;
-  private String groupPhotoBase64;
   private com.w3n.pinggo.views.common.NativeCropView groupCropView;
   private final List<String> groupMembers = new ArrayList<>();
   private final androidx.activity.result.ActivityResultLauncher<String> groupPhotoPicker =
@@ -124,7 +128,7 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
       @Override public void handleOnBackPressed() { onBack(); }
     });
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+    configureSystemBars();
     newChatView = new NewChatView(this, this);
     forwardSourceChatId = getIntent().getStringExtra(EXTRA_FORWARD_SOURCE_CHAT_ID);
     forwardMessageIds = getIntent().getStringArrayListExtra(EXTRA_FORWARD_MESSAGE_IDS);
@@ -177,6 +181,18 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
         });
     ViewCompat.requestApplyInsets(newChatView);
     loadContactsWithPermission();
+  }
+
+  private void configureSystemBars() {
+    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+    getWindow().setStatusBarColor(SYSTEM_BAR_COLOR);
+    getWindow().setNavigationBarColor(SYSTEM_BAR_COLOR);
+    WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(
+        getWindow(), getWindow().getDecorView());
+    controller.setAppearanceLightStatusBars(true);
+    controller.setAppearanceLightNavigationBars(true);
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+      getWindow().setNavigationBarContrastEnforced(false);
   }
 
   private void loadContactsWithPermission() {
@@ -261,13 +277,11 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
                 runOnUiThread(
                     () -> {
                       if (generation != discoveryGeneration.get()) return;
-                      Toast.makeText(
-                        this,
-                        error.getMessage() == null
-                            ? "Contact discovery failed."
-                            : error.getMessage(),
-                        Toast.LENGTH_SHORT)
-                        .show();
+                      String message = error.getMessage();
+                      if (isNoUserFound(message)) return;
+                      Toast.makeText(this,
+                          message == null ? "Contact discovery failed." : message,
+                          Toast.LENGTH_SHORT).show();
                     });
               }
               discoverNextBatch(contacts, end, generation);
@@ -297,6 +311,13 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
               }
             });
     return future;
+  }
+
+  private static boolean isNoUserFound(String message) {
+    if (message == null) return false;
+    String normalized = message.trim();
+    return "No user found".equalsIgnoreCase(normalized)
+        || "No user found.".equalsIgnoreCase(normalized);
   }
 
   private List<String> readPhoneContacts() {
@@ -499,6 +520,7 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
 
   @Override
   public void onBack() {
+    if (profilePhotoPreview != null) { closeProfilePhotoPreview(); return; }
     if (promptDialog != null) { removePrompt(); return; }
     if (groupCropView != null) { groupCropView.dismissIfShowing(); return; }
     if (groupDetails != null) {
@@ -511,7 +533,6 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
         ((ViewGroup) groupDetails.getParent()).removeView(groupDetails);
         groupDetails.release();
         groupDetails = null;
-        groupPhotoBase64 = null;
       }
       return;
     }
@@ -552,6 +573,37 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     startActivity(intent);
     if (isForwarding())
       finish();
+  }
+
+  @Override
+  public void onProfilePhoto(NewChatView.Item item, android.graphics.Bitmap fallback,
+      String originalSource) {
+    showProfilePhoto(fallback, originalSource, item.phoneNumber);
+  }
+
+  private void showProfilePhoto(android.graphics.Bitmap fallback, String originalSource,
+      String phoneNumber) {
+    closeProfilePhotoPreview();
+    profilePhotoPreview = new ProfilePhotoPreviewView(this);
+    ((ViewGroup) findViewById(android.R.id.content)).addView(profilePhotoPreview,
+        new ViewGroup.LayoutParams(-1, -1));
+    profilePhotoPreview.show(fallback, originalSource, phoneNumber,
+        this::closeProfilePhotoPreview);
+    ViewCompat.requestApplyInsets(profilePhotoPreview);
+  }
+
+  private void showGroupPhotoPreview() {
+    if (groupDetails != null) showProfilePhoto(groupDetails.photo(), null, "");
+  }
+
+  private void closeProfilePhotoPreview() {
+    ProfilePhotoPreviewView current = profilePhotoPreview;
+    profilePhotoPreview = null;
+    if (current == null) return;
+    current.dismiss();
+    if (current.getParent() instanceof ViewGroup)
+      ((ViewGroup) current.getParent()).removeView(current);
+    current.release();
   }
 
   private boolean isForwarding() {
@@ -619,7 +671,7 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     List<String> selected = groupMembers;
     List<String> labels = groupMemberLabels();
     groupDetails = new com.w3n.pinggo.views.chat.CreateGroupView(this, labels, this::onBack,
-        () -> groupPhotoPicker.launch("image/*"), () -> {
+        () -> groupPhotoPicker.launch("image/*"), this::showGroupPhotoPreview, () -> {
           if (creatingGroup) return;
           if (selected.isEmpty()) { onGroupSelectionRequired(); return; }
           String name = groupDetails.groupName();
@@ -630,7 +682,8 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
           creatingGroup = true;
           groupDetails.setBusy(true);
           AppFunctionManager.getInstance().createGroup(currentPhone(), name, "", selected,
-              groupPhotoBase64, groupDetails.adminsOnly(),
+              groupDetails.profileAdminsOnly(), groupDetails.nameAdminsOnly(),
+              groupDetails.messageAdminsOnly(), groupDetails.callAdminsOnly(),
               new AppFunctionManager.Callback() {
                 @Override
                 public void onSuccess(Object value) {
@@ -652,13 +705,13 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
                     finish();
                     return;
                   }
-                  repository.refreshChatList(currentPhone());
-                  Intent intent = new Intent(NewChatActivity.this, ChatActivity.class);
-                  intent.putExtra(ChatActivity.EXTRA_CHAT_NAME, name);
-                  intent.putExtra(ChatActivity.EXTRA_CHAT_ID, groupId);
-                  intent.putExtra(ChatActivity.EXTRA_PROFILE_PHOTO_URL, string(group, "icon"));
-                  startActivity(intent);
-                  finish();
+                  android.graphics.Bitmap selectedPhoto = groupDetails == null
+                      ? null : groupDetails.photo();
+                  if (selectedPhoto == null) {
+                    openCreatedGroup(groupId, name, "", null);
+                  } else {
+                    uploadCreatedGroupPhoto(groupId, name, selectedPhoto);
+                  }
                 }
 
                 @Override
@@ -676,7 +729,6 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
           ((android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE))
               .hideSoftInputFromWindow(groupDetails.getWindowToken(), 0);
         }, () -> {
-          groupPhotoBase64 = null;
           groupDetails.clearPhoto();
         }, index -> {
           if (creatingGroup || index < 0 || index >= groupMembers.size()) return;
@@ -691,6 +743,49 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
       return insets;
     });
     ViewCompat.requestApplyInsets(groupDetails);
+  }
+
+  private void openCreatedGroup(String groupId, String name, String icon, String localPath) {
+    if (isClosing()) return;
+    repository.refreshChatList(currentPhone());
+    Intent intent = new Intent(this, ChatActivity.class);
+    intent.putExtra(ChatActivity.EXTRA_CHAT_NAME, name);
+    intent.putExtra(ChatActivity.EXTRA_CHAT_ID, groupId);
+    intent.putExtra(ChatActivity.EXTRA_PROFILE_PHOTO_URL, icon);
+    intent.putExtra(ChatActivity.EXTRA_LOCAL_PROFILE_PHOTO_PATH, localPath);
+    startActivity(intent);
+    finish();
+  }
+
+  private void uploadCreatedGroupPhoto(
+      String groupId, String name, android.graphics.Bitmap selectedPhoto) {
+    AppFunctionManager.getInstance().uploadGroupProfilePhoto(
+        currentPhone(), groupId, selectedPhoto, new AppFunctionManager.Callback() {
+          @Override public void onSuccess(Object value) {
+            if (isClosing()) return;
+            JsonObject response = value instanceof JsonObject ? (JsonObject) value : null;
+            String icon = response == null ? "" : string(response, "profilePhotoUrl");
+            if (icon.isEmpty() && response != null && response.has("group")
+                && response.get("group").isJsonObject()) {
+              icon = string(response.getAsJsonObject("group"), "icon");
+            }
+            String uploadedIcon = icon;
+            photoExecutor.execute(() -> {
+              String localPath = ChatProfilePhotoStore.storeBitmap(
+                  getApplicationContext(), groupId, selectedPhoto, uploadedIcon);
+              runOnUiThread(() -> openCreatedGroup(
+                  groupId, name, uploadedIcon, localPath));
+            });
+          }
+
+          @Override public void onError(String error) {
+            if (isClosing()) return;
+            Toast.makeText(NewChatActivity.this,
+                "Group created, but its photo could not be uploaded. "
+                    + (error == null ? "" : error), Toast.LENGTH_LONG).show();
+            openCreatedGroup(groupId, name, "", null);
+          }
+        });
   }
 
   private void showPrompt(NativePromptDialogView prompt) {
@@ -787,9 +882,6 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
           @Override public void onRetry() { groupPhotoPicker.launch("image/*"); }
           @Override public void onConfirm(android.graphics.Bitmap cropped) {
             if (groupDetails == null || isClosing()) return;
-            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
-            cropped.compress(android.graphics.Bitmap.CompressFormat.JPEG, 88, bytes);
-            groupPhotoBase64 = android.util.Base64.encodeToString(bytes.toByteArray(), android.util.Base64.NO_WRAP);
             groupDetails.setPhoto(cropped);
           }
           @Override public void onInvalidCrop() {
@@ -848,6 +940,7 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
 
   @Override
   protected void onDestroy() {
+    closeProfilePhotoPreview();
     if (groupDetails != null) { groupDetails.release(); groupDetails = null; }
     com.w3n.pinggo.call.ActiveCallRegistry.getInstance().clearCallPicker(this);
     removeGroupCrop();

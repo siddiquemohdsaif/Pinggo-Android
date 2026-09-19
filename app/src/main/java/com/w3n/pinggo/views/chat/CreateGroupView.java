@@ -6,10 +6,10 @@ import android.view.*;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.widget.FrameLayout;
+import android.widget.ScrollView;
 import com.ogfa.nativeviews.button.Button;
 import com.ogfa.nativeviews.font.NativeFonts;
 import com.ogfa.nativeviews.image.Image;
-import com.ogfa.nativeviews.list.ComponentList;
 import com.ogfa.nativeviews.switchcomponent.Switch;
 import com.ogfa.nativeviews.text.FontVariation;
 import com.ogfa.nativeviews.text.Text;
@@ -20,137 +20,86 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.IntConsumer;
 
-/** Native AAR form whose vertical scrolling is driven by ComponentList. */
+/** Native AAR group form hosted in an Android ScrollView. */
 public final class CreateGroupView extends FrameLayout {
-  private final ZLayerGroup scrollLayers = new ZLayerGroup(this);
-  private final ZLayer scrollLayer = scrollLayers.addLayer("group_scroll");
-  private ComponentList<String> scrollList;
-  private float lastScrollOffset;
-  private boolean listDragging;
-  private float downY;
+  private final ScrollView scrollView;
   private final FormView form;
   private final List<String> members = new ArrayList<>();
-  private final Runnable onBack, onPhoto, onCreate, onAddMember, onRemovePhoto;
+  private final Runnable onBack, onPhoto, onPreviewPhoto, onCreate, onAddMember, onRemovePhoto;
   private final IntConsumer onRemoveMember;
   private String nameValue = "";
-  private boolean adminValue, busy, nameError;
+  private boolean profileAdminValue, nameAdminValue, messageAdminValue, callAdminValue;
+  private boolean busy, nameError;
   private Bitmap photoBitmap;
   public CreateGroupView(Context context, List<String> members, Runnable onBack,
-      Runnable onPhoto, Runnable onCreate, Runnable onAddMember, Runnable onRemovePhoto,
+      Runnable onPhoto, Runnable onPreviewPhoto, Runnable onCreate, Runnable onAddMember,
+      Runnable onRemovePhoto,
       IntConsumer onRemoveMember) {
     super(context);
     this.members.addAll(members);
-    this.onBack = onBack; this.onPhoto = onPhoto; this.onCreate = onCreate;
+    this.onBack = onBack; this.onPhoto = onPhoto; this.onPreviewPhoto = onPreviewPhoto;
+    this.onCreate = onCreate;
     this.onAddMember = onAddMember; this.onRemovePhoto = onRemovePhoto;
     this.onRemoveMember = onRemoveMember;
     setBackgroundColor(0xFFF7F9FB);
     form = new FormView(context);
-    addView(form, new FrameLayout.LayoutParams(-1, contentHeight()));
+    scrollView = new ScrollView(context);
+    scrollView.setFillViewport(true);
+    scrollView.addView(form, new ScrollView.LayoutParams(-1, contentHeight()));
+    addView(scrollView, new FrameLayout.LayoutParams(-1, -1));
   }
   public String groupName() { return nameValue.trim(); }
-  public boolean adminsOnly() { return adminValue; }
+  public boolean profileAdminsOnly() { return profileAdminValue; }
+  public boolean nameAdminsOnly() { return nameAdminValue; }
+  public boolean messageAdminsOnly() { return messageAdminValue; }
+  public boolean callAdminsOnly() { return callAdminValue; }
   public void showNameError() {
     nameError = true;
     if (form.error != null) form.error.setVisible(true);
     if (form.name != null) form.name.requestFocus();
-    if (scrollList != null) scrollList.scrollBy(0f, dp(240));
-    syncScroll(); form.invalidate();
+    scrollView.smoothScrollTo(0, dp(240));
+    form.invalidate();
   }
   public void setPhoto(Bitmap bitmap) { photoBitmap = bitmap; form.rebuild(); }
+  public Bitmap photo() { return photoBitmap; }
   public void clearPhoto() { photoBitmap = null; form.rebuild(); }
   public void setMembers(List<String> values) {
     members.clear(); members.addAll(values);
     ViewGroup.LayoutParams params = form.getLayoutParams();
     params.height = contentHeight();
     form.setLayoutParams(params);
-    rebuildScroll();
     form.requestLayout(); form.rebuild();
   }
   public void setBusy(boolean value) {
     busy = value;
     for (Button button : form.buttons) button.setEnabled(!busy);
     if (form.name != null) form.name.setEnabled(!busy);
-    if (form.admin != null) form.admin.setEnabled(!busy);
+    for (Switch permission : form.permissions) permission.setEnabled(!busy);
     if (form.create != null) form.create.setLabel(busy ? "Creating…" : "Create group");
     form.invalidate();
   }
   public void release() {
-    scrollLayers.release();
     form.layers.release(); form.white.recycle(); form.accent.recycle(); form.transparent.recycle();
   }
-  @Override protected void onSizeChanged(int w, int h, int ow, int oh) {
-    super.onSizeChanged(w, h, ow, oh);
-    rebuildScroll();
-  }
-  private void rebuildScroll() {
-    if (getWidth() <= 0 || getHeight() <= 0) return;
-    float offset = scrollList == null ? lastScrollOffset : scrollList.getScrollOffset();
-    scrollLayer.clear();
-    scrollList = scrollLayer.add(new ComponentList.Builder<String>(getContext(), "group_scroll_list",
-        new RectF(0, 0, getWidth(), getHeight()))
-        .setOrientation(ComponentList.Orientation.VERTICAL).setItemSize(contentHeight())
-        .setAdapter(new ComponentList.Adapter<String>() {
-          @Override public int getItemCount() { return 1; }
-          @Override public String getItem(int position) { return "form"; }
-          @Override public void onCreateItem(ComponentList.Item item, int type) { item.addLayer("scroll_item"); }
-          @Override public void onBindItem(ComponentList.Item item, String value, int position) { }
-        }).setScrollEnabled(true).setFlingEnabled(true).setOverscrollEnabled(false)
-        .setClipToBounds(true));
-    if (offset > 0f) scrollList.scrollBy(0f, offset);
-    syncScroll();
-  }
-  private void syncScroll() {
-    if (scrollList == null) return;
-    lastScrollOffset = scrollList.getScrollOffset();
-    form.setTranslationY(-lastScrollOffset);
-    invalidate();
-  }
-  @Override public boolean dispatchTouchEvent(MotionEvent event) {
-    if (scrollList == null) return super.dispatchTouchEvent(event);
-    if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
-      downY = event.getY(); listDragging = false; scrollLayers.onTouchEvent(event);
-      return super.dispatchTouchEvent(event);
-    }
-    if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
-      if (!listDragging && Math.abs(event.getY() - downY) > dp(6)) {
-        listDragging = true;
-        MotionEvent cancel = MotionEvent.obtain(event);
-        cancel.setAction(MotionEvent.ACTION_CANCEL);
-        super.dispatchTouchEvent(cancel);
-        cancel.recycle();
-      }
-      scrollLayers.onTouchEvent(event); syncScroll();
-      if (listDragging) return true;
-    } else if (event.getActionMasked() == MotionEvent.ACTION_UP
-        || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
-      scrollLayers.onTouchEvent(event); syncScroll();
-      if (listDragging) { listDragging = false; return true; }
-    }
-    return super.dispatchTouchEvent(event);
-  }
-  @Override protected void dispatchDraw(Canvas canvas) {
-    syncScroll();
-    super.dispatchDraw(canvas);
-  }
-  private int contentHeight() { return dp(554 + members.size() * 64); }
+  private int contentHeight() { return dp(718 + members.size() * 64); }
   private final class FormView extends View {
     private final ZLayerGroup layers = new ZLayerGroup(this);
     private final ZLayer content = layers.addLayer("group_form");
     private final Bitmap white = colorBitmap(Color.WHITE), accent = colorBitmap(0xFF019CC4),
         transparent = colorBitmap(Color.TRANSPARENT);
     private final List<Button> buttons = new ArrayList<>();
+    private final List<Switch> permissions = new ArrayList<>();
     private TextField name;
-    private Switch admin;
     private Text error;
     private Button create;
     FormView(Context context) { super(context); setClickable(true); setFocusableInTouchMode(true); }
     @Override protected void onMeasure(int widthSpec, int heightSpec) {
-      setMeasuredDimension(MeasureSpec.getSize(widthSpec), resolveSize(dp(554 + members.size() * 64), heightSpec));
+      setMeasuredDimension(MeasureSpec.getSize(widthSpec), resolveSize(contentHeight(), heightSpec));
     }
     @Override protected void onSizeChanged(int w, int h, int ow, int oh) { rebuild(); }
     void rebuild() {
       if (getWidth() <= 0) return;
-      content.clear(); buttons.clear();
+      content.clear(); buttons.clear(); permissions.clear();
       float width = getWidth(), pad = dp(24), left = (width - dp(96)) / 2f;
       button("back", "‹  New group", new RectF(pad, dp(8), width - pad, dp(56)), false, onBack);
       if (photoBitmap != null) content.add(new Image.Builder(getContext(), "group_photo", photoBitmap,
@@ -158,7 +107,9 @@ public final class CreateGroupView extends FrameLayout {
       else text("photo_placeholder", "Group photo", new RectF(left - dp(24), dp(64), left + dp(120), dp(160)), 16);
       Button photoTouch = content.add(new Button.Builder(getContext(), "photo_touch", transparent, "",
           new RectF(left, dp(64), left + dp(96), dp(160))).setRippleEnabled(false)
-          .setOnClickListener(id -> { if (!busy) onPhoto.run(); }));
+          .setOnClickListener(id -> {
+            if (!busy) (photoBitmap == null ? onPhoto : onPreviewPhoto).run();
+          }));
       photoTouch.setEnabled(!busy); buttons.add(photoTouch);
       button("choose_photo", photoBitmap == null ? "Add group photo" : "Change group photo",
           new RectF(pad, dp(166), width - pad, dp(210)), false, onPhoto);
@@ -177,21 +128,43 @@ public final class CreateGroupView extends FrameLayout {
           }));
       error = text("name_error", "Enter a group name", new RectF(pad, dp(340), width - pad, dp(360)), 12);
       error.setTextColor(0xFFD92D20).setVisible(nameError);
-      text("admin_label", "Only admins can message", new RectF(pad, dp(366), width - dp(94), dp(414)), 16);
-      admin = content.add(new Switch.Builder(getContext(), "admin_only", new RectF(width - dp(80), dp(376), width - pad, dp(406)))
-          .setChecked(adminValue).setCheckedTrackColor(0xFF019CC4).setUncheckedTrackColor(0xFFBAC4CE)
-          .setThumbColor(Color.WHITE).setOnCheckedChangeListener((id, checked, fromUser) -> adminValue = checked));
-      text("member_count", "Selected members (" + members.size() + ")", new RectF(pad, dp(422), width - dp(146), dp(462)), 15);
-      button("add_members", "Add members", new RectF(width - dp(142), dp(420), width - pad, dp(464)), false, onAddMember);
+      text("profile_permission_label", "Only admins can edit group photo",
+          new RectF(pad, dp(366), width - dp(94), dp(414)), 15);
+      permissions.add(permissionSwitch("profile_permission", width, 376, profileAdminValue,
+          checked -> profileAdminValue = checked));
+      text("name_permission_label", "Only admins can edit group name",
+          new RectF(pad, dp(418), width - dp(94), dp(466)), 15);
+      permissions.add(permissionSwitch("name_permission", width, 428, nameAdminValue,
+          checked -> nameAdminValue = checked));
+      text("message_permission_label", "Only admins can send messages",
+          new RectF(pad, dp(470), width - dp(94), dp(518)), 15);
+      permissions.add(permissionSwitch("message_permission", width, 480, messageAdminValue,
+          checked -> messageAdminValue = checked));
+      text("call_permission_label", "Only admins can start calls",
+          new RectF(pad, dp(522), width - dp(94), dp(570)), 15);
+      permissions.add(permissionSwitch("call_permission", width, 532, callAdminValue,
+          checked -> callAdminValue = checked));
+      text("member_count", "Selected members (" + members.size() + ")", new RectF(pad, dp(582), width - dp(146), dp(622)), 15);
+      button("add_members", "Add members", new RectF(width - dp(142), dp(580), width - pad, dp(624)), false, onAddMember);
       for (int i = 0; i < members.size(); i++) {
-        final int index = i; float top = dp(470 + i * 64);
+        final int index = i; float top = dp(630 + i * 64);
         text("member_" + i, members.get(i), new RectF(pad, top, width - dp(124), top + dp(56)), 15);
         button("remove_" + i, "Remove", new RectF(width - dp(116), top + dp(4), width - pad, top + dp(52)), false,
             () -> onRemoveMember.accept(index));
       }
-      float top = dp(478 + members.size() * 64);
+      float top = dp(638 + members.size() * 64);
       create = button("create", busy ? "Creating…" : "Create group", new RectF(pad, top, width - pad, top + dp(52)), true, onCreate);
-      name.setEnabled(!busy); admin.setEnabled(!busy); invalidate();
+      name.setEnabled(!busy);
+      for (Switch permission : permissions) permission.setEnabled(!busy);
+      invalidate();
+    }
+    private Switch permissionSwitch(String id, float width, int top, boolean checked,
+        java.util.function.Consumer<Boolean> changed) {
+      return content.add(new Switch.Builder(getContext(), id,
+          new RectF(width - dp(80), dp(top), width - dp(24), dp(top + 30)))
+          .setChecked(checked).setCheckedTrackColor(0xFF019CC4)
+          .setUncheckedTrackColor(0xFFBAC4CE).setThumbColor(Color.WHITE)
+          .setOnCheckedChangeListener((value, enabled, fromUser) -> changed.accept(enabled)));
     }
     private Button button(String id, String label, RectF rect, boolean primary, Runnable callback) {
       Button button = content.add(new Button.Builder(getContext(), id, primary ? accent : white, label, rect)

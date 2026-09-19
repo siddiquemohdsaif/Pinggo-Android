@@ -83,6 +83,7 @@ public final class ChatsView extends View {
     private final ChatAdapter adapter = new ChatAdapter();
     private final ChatRepository repository;
     private final OnChatClickListener clickListener;
+    private OnProfilePhotoClickListener profilePhotoClickListener;
     private OnSelectionChangedListener selectionChangedListener;
     private final Set<String> selectedChatIds = new LinkedHashSet<>();
     private Runnable newChatListener;
@@ -354,6 +355,9 @@ public final class ChatsView extends View {
     }
     public void setOnSelectionChangedListener(OnSelectionChangedListener listener) {
         selectionChangedListener = listener;
+    }
+    public void setOnProfilePhotoClickListener(OnProfilePhotoClickListener listener) {
+        profilePhotoClickListener = listener;
     }
     public boolean isSelecting() { return !selectedChatIds.isEmpty(); }
     public boolean clearSelection() {
@@ -1452,7 +1456,19 @@ public final class ChatsView extends View {
                     if (released) return;
                     adapter.applyLoadedAvatar(chat.getChatId(), path, size);
                 });
-        item.find("avatar", Image.class).setBitmap(avatar);
+        Image avatarImage = item.find("avatar", Image.class);
+        avatarImage.setBitmap(avatar).setOnClickListener(id -> {
+            if (isSelecting()) toggleSelection(chat);
+            else if (profilePhotoClickListener != null) {
+                String source = resolveAvatarPath(chat);
+                if ((source == null || source.trim().isEmpty())
+                        && chat.getProfilePhotoUrl() != null) {
+                    source = chat.getProfilePhotoUrl();
+                }
+                profilePhotoClickListener.onProfilePhotoClick(
+                        chat, avatarImage.getBitmap(), source);
+            }
+        });
         logAvatarBind(started, path == null || path.trim().isEmpty()
                 ? "placeholder" : "shared-cache", chat.getChatId());
     }
@@ -1470,8 +1486,9 @@ public final class ChatsView extends View {
     private String resolveAvatarPath(Chat chat) {
         String path = chat.getLocalProfilePhotoPath();
         boolean groupChat = chat.getChatId() != null && chat.getChatId().startsWith("grp_");
-        if (!groupChat && (path == null || path.trim().isEmpty())) {
-            path = ChatProfilePhotoStore.getLocalPath(getContext(), chat.getPhoneNumber());
+        if (path == null || path.trim().isEmpty()) {
+            path = ChatProfilePhotoStore.getLocalPath(getContext(),
+                    groupChat ? chat.getChatId() : chat.getPhoneNumber());
         }
         return path;
     }
@@ -1604,6 +1621,9 @@ public final class ChatsView extends View {
         return bitmap;
     }
     public interface OnChatClickListener { void onChatClick(Chat chat); }
+    public interface OnProfilePhotoClickListener {
+        void onProfilePhotoClick(Chat chat, Bitmap fallback, String originalSource);
+    }
     public interface OnSelectionChangedListener {
         void onSelectionChanged(List<Chat> selectedChats);
     }

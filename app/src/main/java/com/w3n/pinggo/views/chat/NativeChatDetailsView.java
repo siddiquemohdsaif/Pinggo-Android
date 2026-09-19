@@ -33,13 +33,15 @@ public final class NativeChatDetailsView extends View {
   private final Bitmap avatar;
   private final List<String> details = new ArrayList<>();
   private final Runnable back;
+  private final Runnable profileClick;
   private int topInset;
   private int bottomInset;
 
   public NativeChatDetailsView(@NonNull android.content.Context context, String title, String name,
-      Bitmap avatar, List<String> details, Runnable back) {
+      Bitmap avatar, List<String> details, Runnable back, Runnable profileClick) {
     super(context);
     this.title = title; this.name = name; this.avatar = avatar; this.back = back;
+    this.profileClick = profileClick;
     if (details != null) this.details.addAll(details);
     setClickable(true);
     setBackgroundColor(0xFFF7F9FB);
@@ -76,6 +78,11 @@ public final class NativeChatDetailsView extends View {
         new RectF((width - avatarSize) / 2f, avatarTop,
             (width + avatarSize) / 2f, avatarTop + avatarSize))
         .setScaleType(Image.ScaleType.CENTER_CROP));
+    content.add(new Button.Builder(getContext(), "details_avatar_touch", transparent, "",
+        new RectF((width - avatarSize) / 2f, avatarTop,
+            (width + avatarSize) / 2f, avatarTop + avatarSize))
+        .setImageScaleType(Image.ScaleType.FIT_XY).setRippleEnabled(true)
+        .setRippleColor(0x18FFFFFF).setOnClickListener(id -> profileClick.run()));
     float nameTop = avatarTop + avatarSize + 32f * scale;
     content.add(new Text.Builder(getContext(), "details_name", name,
         new RectF(60f * scale, nameTop, width - 60f * scale, nameTop + 95f * scale))

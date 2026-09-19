@@ -59,6 +59,7 @@ public final class CallsView extends View {
     private final ZLayer stateLayer = layers.addLayer("call_state");
     private final CallAdapter adapter = new CallAdapter();
     private final OnCallClickListener clickListener;
+    private OnProfilePhotoClickListener profilePhotoClickListener;
     private final OnCallStartListener callStartListener;
     private final Runnable loadMoreListener;
     private final Bitmap dividerBitmap = colorBitmap(0xFFE5EAF0);
@@ -123,6 +124,9 @@ public final class CallsView extends View {
 
     public void setOnSelectionChangedListener(OnSelectionChangedListener listener) {
         selectionChangedListener = listener;
+    }
+    public void setOnProfilePhotoClickListener(OnProfilePhotoClickListener listener) {
+        profilePhotoClickListener = listener;
     }
 
     public boolean clearSelection() {
@@ -508,6 +512,13 @@ public final class CallsView extends View {
                     () -> { if (isSelecting()) toggleSelection(call); else clickListener.onCallClick(call); },
                     () -> toggleSelection(call));
             bindAvatar(item, call);
+            Image avatarImage = item.find("avatar", Image.class);
+            avatarImage.setOnClickListener(id -> {
+                if (isSelecting()) toggleSelection(call);
+                else if (profilePhotoClickListener != null)
+                    profilePhotoClickListener.onProfilePhotoClick(
+                            call, avatarImage.getBitmap(), resolveAvatarPath(call));
+            });
             item.find("name", Text.class).setText(call.getContactName());
             String duration = call.getDuration() == null ? "" : call.getDuration().trim();
             String details = call.getCalledTime() == null ? "" : call.getCalledTime().trim();
@@ -865,6 +876,9 @@ public final class CallsView extends View {
     }
 
     public interface OnCallClickListener { void onCallClick(CallLog callLog); }
+    public interface OnProfilePhotoClickListener {
+        void onProfilePhotoClick(CallLog callLog, Bitmap fallback, String originalSource);
+    }
     public interface OnSelectionChangedListener {
         void onSelectionChanged(List<CallLog> selectedCalls);
     }

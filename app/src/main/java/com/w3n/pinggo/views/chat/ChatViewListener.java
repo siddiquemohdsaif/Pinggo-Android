@@ -10,6 +10,7 @@ public interface ChatViewListener {
   void onVoiceCall();
   void onMore();
   void onChatDetails();
+  void onProfilePhoto();
   void onSend();
   void onEmojiRequested();
   void onAudioRecordingStart();

@@ -12,6 +12,7 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.LiveKitTokenHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.EmailOtpHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.GoogleAuthHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.GroupHandler;
+import com.w3n.pinggo.Database.CloudFunction.Utils.GroupProfilePhotoHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.OtpHandler;
@@ -213,8 +214,20 @@ public class AppFunctionManager {
   }
 
   public void createGroup(String userId, String name, String description, List<String> memberIds,
-                          String photoBase64, boolean adminsOnly, Callback callback) {
-    GroupHandler.create(appApi, userId, name, description, memberIds, photoBase64, adminsOnly, callback);
+                          boolean adminsOnly, Callback callback) {
+    GroupHandler.create(appApi, userId, name, description, memberIds, adminsOnly, callback);
+  }
+
+  public void createGroup(String userId, String name, String description, List<String> memberIds,
+                          boolean profileAdminsOnly, boolean nameAdminsOnly,
+                          boolean messageAdminsOnly, boolean callAdminsOnly, Callback callback) {
+    GroupHandler.create(appApi, userId, name, description, memberIds, profileAdminsOnly,
+        nameAdminsOnly, messageAdminsOnly, callAdminsOnly, callback);
+  }
+
+  public void uploadGroupProfilePhoto(String userId, String groupId, Bitmap photo,
+                                      Callback callback) {
+    GroupProfilePhotoHandler.upload(appApi, userId, groupId, photo, callback);
   }
 
   public void getGroupDetails(String userId, String groupId, Callback callback) {
@@ -244,6 +257,11 @@ public class AppFunctionManager {
   public void updateGroupAdminOnly(String userId, String groupId, boolean enabled,
                                    Callback callback) {
     GroupHandler.updateAdminOnly(appApi, userId, groupId, enabled, callback);
+  }
+
+  public void updateGroupPermission(String userId, String groupId, String permission,
+                                    boolean adminsOnly, Callback callback) {
+    GroupHandler.updatePermission(appApi, userId, groupId, permission, adminsOnly, callback);
   }
 
   public void updateGroupMembers(String userId, String groupId, List<String> memberIds,

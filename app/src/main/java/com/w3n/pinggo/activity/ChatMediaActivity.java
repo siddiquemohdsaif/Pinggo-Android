@@ -6,8 +6,12 @@ import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.RectF;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
+import android.text.Layout;
+import android.text.StaticLayout;
+import android.text.TextPaint;
 import android.util.Log;
 import android.view.MotionEvent;
 import android.view.Gravity;
@@ -23,6 +27,7 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.core.widget.NestedScrollView;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -38,7 +43,6 @@ import com.w3n.pinggo.views.chat.MediaAttachmentOpener;
 import com.w3n.pinggo.views.chat.MediaRecordTypes;
 import com.w3n.pinggo.views.home.HomeMenuDialogView;
 import com.ogfa.nativeviews.image.Image;
-import com.ogfa.nativeviews.list.ComponentList;
 import com.ogfa.nativeviews.progress.Progress;
 import com.ogfa.nativeviews.text.FontVariation;
 import com.ogfa.nativeviews.text.Text;
@@ -84,7 +88,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
   private HomeMenuDialogView mediaMenu;
   private MediaAttachmentOpener attachmentOpener;
   private int pageGeneration;
-  private ComponentScrollHost mediaScroll;
+  private NestedScrollView mediaScroll;
   private FrameLayout mediaViewport;
   private int traceScrollY;
   private int tracePage;
@@ -139,17 +143,19 @@ public final class ChatMediaActivity extends AppCompatActivity {
     root.addView(tabs, new LinearLayout.LayoutParams(-1, dp(52)));
     updateTabs();
 
-    ComponentScrollHost scroll = new ComponentScrollHost();
+    NestedScrollView scroll = new NestedScrollView(this);
+    scroll.setFillViewport(true);
     mediaScroll = scroll;
     scroll.setBackgroundColor(0xFFF7F9FB);
     content = column();
     content.setPadding(dp(12), dp(12), dp(12), dp(28));
-    scroll.setScrollContent(content);
+    scroll.addView(content);
     content.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
       if (b - t != ob - ot) traceMedia("layout", "oldHeight=" + (ob - ot));
     });
-    scroll.setOnOffsetChanged(() -> {
-      int y = scroll.currentScrollY();
+    scroll.setOnScrollChangeListener((NestedScrollView.OnScrollChangeListener)
+        (view, scrollX, scrollY, oldScrollX, oldScrollY) -> {
+      int y = scroll.getScrollY();
       if (y != traceScrollY) {
         traceMedia("scroll", "deltaY=" + (y - traceScrollY));
         traceScrollY = y;
@@ -200,7 +206,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
     loading = false;
     removePageProgress();
     updateTabs();
-    mediaScroll.scrollToStart();
+    mediaScroll.scrollTo(0, 0);
     loadNext();
     render();
   }
@@ -309,7 +315,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
     boolean appendTiles = mediaGrid != null && renderedGeneration == pageGeneration
         && !"links".equals(selected);
     if (appendTiles) {
-      // Keep existing rows attached so paging preserves the current ComponentList offset.
+      // Keep existing rows attached so paging preserves the current scroll offset.
       for (int i = content.getChildCount() - 1; i >= 0; i--)
         if (content.getChildAt(i) != mediaGrid) content.removeViewAt(i);
     } else {
@@ -333,7 +339,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
   private void maybeLoadNext() {
     if (loading || !hasMore || pagingFailed || isFinishing() || isDestroyed()
         || mediaScroll.getHeight() <= 0) return;
-    int viewportBottom = mediaScroll.currentScrollY() + mediaScroll.getHeight();
+    int viewportBottom = mediaScroll.getScrollY() + mediaScroll.getHeight();
     boolean nearEnd = viewportBottom >= content.getHeight() - dp(160);
     boolean incompleteVisibleRow = false;
     if (mediaGrid != null && mediaGrid.getChildCount() > 0) {
@@ -358,9 +364,9 @@ public final class ChatMediaActivity extends AppCompatActivity {
     if (mediaGrid != null) {
       for (int i = 0; i < mediaGrid.getChildCount(); i++) {
         View tile = mediaGrid.getChildAt(i);
-        if (mediaGrid.getTop() + tile.getBottom() > mediaScroll.currentScrollY()) {
+        if (mediaGrid.getTop() + tile.getBottom() > mediaScroll.getScrollY()) {
           anchor = i;
-          offset = mediaGrid.getTop() + tile.getTop() - mediaScroll.currentScrollY();
+          offset = mediaGrid.getTop() + tile.getTop() - mediaScroll.getScrollY();
           break;
         }
       }
@@ -368,7 +374,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
     Log.d("PingGoMediaPaging", "event=" + event + " category=" + selected
         + " generation=" + pageGeneration + " page=" + tracePage + " records=" + records.size()
         + " tiles=" + (mediaGrid == null ? 0 : mediaGrid.getChildCount())
-        + " scrollY=" + mediaScroll.currentScrollY() + " viewport=" + mediaScroll.getHeight()
+        + " scrollY=" + mediaScroll.getScrollY() + " viewport=" + mediaScroll.getHeight()
         + " contentHeight=" + content.getHeight() + " anchor=" + anchor + " offset=" + offset
         + " cursor=" + cursor + " loading=" + loading + " hasMore=" + hasMore
         + " footer=" + (pageProgress != null) + " " + detail);
@@ -397,7 +403,10 @@ public final class ChatMediaActivity extends AppCompatActivity {
   private void renderTiles() {
     GridLayout grid = mediaGrid == null ? new GridLayout(this) : mediaGrid;
     mediaGrid = grid;
-    grid.setColumnCount("media".equals(selected) ? 3 : 2);
+    boolean mediaCategory = "media".equals(selected);
+    grid.setColumnCount(mediaCategory ? 3 : 1);
+    grid.setAlignmentMode(GridLayout.ALIGN_BOUNDS);
+    grid.setUseDefaultMargins(false);
     int existingTiles = grid.getChildCount();
     int count = 0;
     for (JsonObject record : records) {
@@ -410,21 +419,47 @@ public final class ChatMediaActivity extends AppCompatActivity {
       count++;
       if (count <= existingTiles) continue;
       MessageEntity message = message(record);
-      LinearLayout tile = column();
+      LinearLayout tile = mediaCategory ? column() : row();
       tile.setOnClickListener(v -> attachmentOpener.open(message));
-      tile.setGravity(Gravity.CENTER);
-      tile.setPadding(dp(4), dp(4), dp(4), dp(8));
       NativeImageSlot image = new NativeImageSlot();
       image.setImageResource("file".equalsIgnoreCase(type) ? android.R.drawable.ic_menu_save
           : android.R.drawable.ic_menu_gallery);
-      tile.addView(image, new LinearLayout.LayoutParams(-1, dp("media".equals(selected) ? 112 : 82)));
-      tile.addView(label(message.attachmentName == null || message.attachmentName.isEmpty()
-          ? type
-          : message.attachmentName, 12, false));
+      if (mediaCategory) {
+        tile.setGravity(Gravity.CENTER);
+        tile.addView(image, new LinearLayout.LayoutParams(-1, -1));
+      } else {
+        tile.setGravity(Gravity.CENTER_VERTICAL);
+        tile.setPadding(dp(12), dp(10), dp(12), dp(10));
+        tile.setBackground(cardBackground());
+        tile.addView(image, new LinearLayout.LayoutParams(dp(46), dp(46)));
+        LinearLayout details = column();
+        details.setPadding(dp(12), 0, 0, 0);
+        NativeTextSlot fileName = label(
+            message.attachmentName == null || message.attachmentName.isEmpty()
+                ? "Document" : message.attachmentName, 14, true);
+        fileName.setMaxLines(2);
+        details.addView(fileName, new LinearLayout.LayoutParams(-1, -2));
+        NativeTextSlot fileMeta = label(fileMetadata(message), 12, false);
+        fileMeta.setTextColor(0xFF687382);
+        fileMeta.setMaxLines(1);
+        details.addView(fileMeta, new LinearLayout.LayoutParams(-1, -2));
+        tile.addView(details, new LinearLayout.LayoutParams(0, -2, 1f));
+        NativeTextSlot arrow = label("›", 24, false);
+        arrow.setTextColor(0xFF8792A2);
+        arrow.setGravity(Gravity.CENTER);
+        tile.addView(arrow, new LinearLayout.LayoutParams(dp(20), -1));
+      }
       GridLayout.LayoutParams params = new GridLayout.LayoutParams();
       params.width = 0;
       params.columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f);
-      params.setMargins(dp(3), dp(3), dp(3), dp(3));
+      if (mediaCategory) {
+        int available = getResources().getDisplayMetrics().widthPixels - dp(24) - dp(12);
+        params.height = Math.max(dp(88), available / 3);
+        params.setMargins(dp(2), dp(2), dp(2), dp(2));
+      } else {
+        params.height = GridLayout.LayoutParams.WRAP_CONTENT;
+        params.setMargins(dp(2), dp(4), dp(2), dp(4));
+      }
       grid.addView(tile, params);
       if (message.attachmentId != null && !message.attachmentId.isEmpty()) {
         images.put(message.attachmentId, image);
@@ -447,15 +482,19 @@ public final class ChatMediaActivity extends AppCompatActivity {
         count++;
         NativeTextSlot link = label(matcher.group(), 15, false);
         link.setTextColor(0xFF087EA4);
+        link.setMaxLines(2);
         String url = matcher.group();
-        link.setPadding(dp(8), dp(16), dp(8), dp(16));
+        link.setPadding(dp(14), dp(14), dp(14), dp(14));
+        link.setBackground(cardBackground());
         link.setOnClickListener(v -> {
           try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
           catch (android.content.ActivityNotFoundException unavailable) {
             Toast.makeText(this, "No browser available to open this link.", Toast.LENGTH_SHORT).show();
           }
         });
-        content.addView(link, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.setMargins(dp(2), dp(4), dp(2), dp(4));
+        content.addView(link, params);
       }
     }
     if (count == 0)
@@ -617,83 +656,27 @@ public final class ChatMediaActivity extends AppCompatActivity {
     return Math.round(value * getResources().getDisplayMetrics().density);
   }
 
-  /** Screen-owned host whose vertical scrolling is supplied by the AAR ComponentList. */
-  private final class ComponentScrollHost extends FrameLayout {
-    private final ZLayerGroup scrollLayers = new ZLayerGroup(this);
-    private final ZLayer scrollLayer = scrollLayers.addLayer("chat_media_scroll");
-    private ComponentList<String> scrollList;
-    private View scrollContent;
-    private Runnable offsetChanged;
-    private float lastOffset;
-    private float downY;
-    private boolean dragging;
-    ComponentScrollHost() { super(ChatMediaActivity.this); setClipChildren(true); }
-    void setScrollContent(View child) {
-      removeAllViews(); scrollContent=child;
-      addView(child,new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-          ViewGroup.LayoutParams.WRAP_CONTENT));
-      child.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob) -> {
-        if (b-t != ob-ot || r-l != or-ol) rebuildScroll();
-      });
-    }
-    void setOnOffsetChanged(Runnable listener) { offsetChanged=listener; }
-    int currentScrollY() { return Math.round(lastOffset); }
-    void scrollToStart() {
-      lastOffset=0f; rebuildScroll(); syncScroll();
-    }
-    @Override protected void onSizeChanged(int w,int h,int ow,int oh){
-      super.onSizeChanged(w,h,ow,oh); rebuildScroll();
-    }
-    private void rebuildScroll() {
-      if(getWidth()<=0||getHeight()<=0||scrollContent==null)return;
-      float offset=scrollList==null?lastOffset:scrollList.getScrollOffset();
-      scrollLayer.clear();
-      scrollList=scrollLayer.add(new ComponentList.Builder<String>(getContext(),"media_scroll_list",
-          new RectF(0,0,getWidth(),getHeight())).setOrientation(ComponentList.Orientation.VERTICAL)
-          .setItemSize(Math.max(getHeight()+1,scrollContent.getHeight()))
-          .setAdapter(new ComponentList.Adapter<String>(){
-            @Override public int getItemCount(){return 1;}
-            @Override public String getItem(int position){return "content";}
-            @Override public void onCreateItem(ComponentList.Item item,int type){item.addLayer("spacer");}
-            @Override public void onBindItem(ComponentList.Item item,String value,int position){}
-          }).setScrollEnabled(true).setFlingEnabled(true).setOverscrollEnabled(false)
-          .setClipToBounds(true));
-      if(offset>0f)scrollList.scrollBy(0f,offset);
-      syncScroll();
-    }
-    private void syncScroll(){
-      if(scrollList==null||scrollContent==null)return;
-      float previous=lastOffset;
-      lastOffset=scrollList.getScrollOffset();
-      scrollContent.setTranslationY(-lastOffset);
-      if(offsetChanged!=null&&Math.abs(previous-lastOffset)>=.5f)offsetChanged.run();
-    }
-    @Override public boolean dispatchTouchEvent(MotionEvent event){
-      if(scrollList==null)return super.dispatchTouchEvent(event);
-      if(event.getActionMasked()==MotionEvent.ACTION_DOWN){
-        downY=event.getY();dragging=false;scrollLayers.onTouchEvent(event);
-        traceMedia("touch","action="+event.getActionMasked());
-        return super.dispatchTouchEvent(event);
-      }
-      if(event.getActionMasked()==MotionEvent.ACTION_MOVE){
-        if(!dragging&&Math.abs(event.getY()-downY)>dp(6)){
-          dragging=true;
-          MotionEvent cancel=MotionEvent.obtain(event);
-          cancel.setAction(MotionEvent.ACTION_CANCEL);
-          super.dispatchTouchEvent(cancel);
-          cancel.recycle();
-        }
-        scrollLayers.onTouchEvent(event);syncScroll();if(dragging)return true;
-      }else if(event.getActionMasked()==MotionEvent.ACTION_UP
-          ||event.getActionMasked()==MotionEvent.ACTION_CANCEL){
-        scrollLayers.onTouchEvent(event);syncScroll();
-        traceMedia("touch","action="+event.getActionMasked());
-        if(dragging){dragging=false;return true;}
-      }
-      return super.dispatchTouchEvent(event);
-    }
-    @Override protected void dispatchDraw(Canvas canvas){syncScroll();super.dispatchDraw(canvas);}
-    void release(){scrollLayers.release();}
+  private GradientDrawable cardBackground() {
+    GradientDrawable background = new GradientDrawable();
+    background.setColor(Color.WHITE);
+    background.setCornerRadius(dp(12));
+    background.setStroke(dp(1), 0xFFE5EAF0);
+    return background;
+  }
+
+  private String fileMetadata(MessageEntity message) {
+    String type = message.attachmentMimeType == null ? "" : message.attachmentMimeType.trim();
+    String size = readableSize(message.attachmentSize);
+    if (type.isEmpty()) return size.isEmpty() ? "Document" : size;
+    return size.isEmpty() ? type : type + "  •  " + size;
+  }
+
+  private static String readableSize(Long bytes) {
+    if (bytes == null || bytes <= 0) return "";
+    if (bytes < 1024) return bytes + " B";
+    double kb = bytes / 1024d;
+    if (kb < 1024) return String.format(java.util.Locale.US, "%.1f KB", kb);
+    return String.format(java.util.Locale.US, "%.1f MB", kb / 1024d);
   }
 
   /** Activity-owned AAR text surface; no compatibility widget class is created. */
@@ -703,6 +686,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
     private String value;
     private final int sizeSp;
     private final boolean bold;
+    private int maxLines = 3;
     private int color = 0xFF07131E;
     private int gravity = Gravity.START | Gravity.CENTER_VERTICAL;
     NativeTextSlot(String value, int sizeSp, boolean bold) {
@@ -710,9 +694,14 @@ public final class ChatMediaActivity extends AppCompatActivity {
       this.value = value == null ? "" : value; this.sizeSp = sizeSp; this.bold = bold;
       setClickable(false);
     }
-    void setText(String text) { value = text == null ? "" : text; rebuild(); }
+    void setText(String text) { value = text == null ? "" : text; requestLayout(); rebuild(); }
     void setTextColor(int color) { this.color = color; rebuild(); }
     void setGravity(int gravity) { this.gravity = gravity; rebuild(); }
+    void setMaxLines(int lines) {
+      maxLines = Math.max(1, lines);
+      requestLayout();
+      rebuild();
+    }
     private void rebuild() {
       if (getWidth() <= 0 || getHeight() <= 0) return;
       layer.clear();
@@ -726,15 +715,32 @@ public final class ChatMediaActivity extends AppCompatActivity {
           .setFontVariations(bold ? FontVariation.BOLD : FontVariation.REGULAR)
           .setTextColor(color).setTextSizePx(sizeSp * getResources().getDisplayMetrics().scaledDensity)
           .setAlignment(alignment).setVerticalAlignment(Text.VerticalAlignment.CENTER)
-          .setMaxLines(3));
+          .setMaxLines(maxLines));
       invalidate();
     }
     @Override protected void onMeasure(int widthSpec, int heightSpec) {
-      android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+      TextPaint paint = new TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG);
       paint.setTextSize(sizeSp * getResources().getDisplayMetrics().scaledDensity);
-      int desiredWidth = (int) Math.ceil(paint.measureText(value)) + getPaddingLeft() + getPaddingRight();
-      int desiredHeight = (int) Math.ceil(paint.getFontMetrics().descent - paint.getFontMetrics().ascent)
-          + getPaddingTop() + getPaddingBottom();
+      paint.setFakeBoldText(bold);
+      int horizontalPadding = getPaddingLeft() + getPaddingRight();
+      int widthMode = MeasureSpec.getMode(widthSpec);
+      int widthSize = MeasureSpec.getSize(widthSpec);
+      int contentWidth;
+      if (widthMode == MeasureSpec.UNSPECIFIED) {
+        float widest = 0f;
+        for (String line : value.split("\\n", -1)) widest = Math.max(widest, paint.measureText(line));
+        contentWidth = Math.max(1, (int) Math.ceil(widest));
+      } else {
+        contentWidth = Math.max(1, widthSize - horizontalPadding);
+      }
+      StaticLayout layout = StaticLayout.Builder.obtain(value, 0, value.length(), paint, contentWidth)
+          .setAlignment(Layout.Alignment.ALIGN_NORMAL).setIncludePad(true)
+          .setMaxLines(maxLines).build();
+      float widestLine = 0f;
+      for (int i = 0; i < layout.getLineCount(); i++)
+        widestLine = Math.max(widestLine, layout.getLineWidth(i));
+      int desiredWidth = (int) Math.ceil(widestLine) + horizontalPadding;
+      int desiredHeight = layout.getHeight() + getPaddingTop() + getPaddingBottom();
       setMeasuredDimension(resolveSize(desiredWidth, widthSpec), resolveSize(desiredHeight, heightSpec));
     }
     @Override protected void onSizeChanged(int w, int h, int ow, int oh) { rebuild(); }
@@ -795,7 +801,6 @@ public final class ChatMediaActivity extends AppCompatActivity {
 
   @Override
   protected void onDestroy() {
-    if (mediaScroll != null) mediaScroll.release();
     for (NativeImageSlot image : images.values()) image.release();
     if (mediaTab != null) mediaTab.release();
     if (docsTab != null) docsTab.release();

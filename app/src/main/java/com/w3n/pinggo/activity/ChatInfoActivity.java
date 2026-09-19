@@ -6,16 +6,23 @@ import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.RectF;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
+import android.text.Layout;
+import android.text.StaticLayout;
+import android.text.TextPaint;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.activity.OnBackPressedCallback;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
@@ -25,10 +32,12 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
+import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
 import com.w3n.pinggo.data.cache.MediaPreviewCache;
+import com.w3n.pinggo.data.cache.ProfileBitmapCache;
 import com.w3n.pinggo.data.local.MessageEntity;
 import com.w3n.pinggo.data.local.TransferEntity;
 import com.w3n.pinggo.data.repository.ChatRepository;
@@ -36,9 +45,10 @@ import com.w3n.pinggo.views.chat.ChatHeaderComponent;
 import com.w3n.pinggo.views.chat.MediaAttachmentOpener;
 import com.w3n.pinggo.views.chat.MediaRecordTypes;
 import com.w3n.pinggo.views.common.NativePromptDialogView;
+import com.w3n.pinggo.views.common.NativeCropView;
 import com.w3n.pinggo.views.home.HomeMenuDialogView;
+import com.w3n.pinggo.views.home.ProfilePhotoPreviewView;
 import com.ogfa.nativeviews.image.Image;
-import com.ogfa.nativeviews.list.ComponentList;
 import com.ogfa.nativeviews.progress.Progress;
 import com.ogfa.nativeviews.text.FontVariation;
 import com.ogfa.nativeviews.text.Text;
@@ -51,11 +61,20 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /** WhatsApp-style details page shared by direct chats and groups. */
 public final class ChatInfoActivity extends AppCompatActivity {
   private NativePromptDialogView promptDialog;
   private HomeMenuDialogView detailsMenu;
+  private ProfilePhotoPreviewView profilePhotoPreview;
+  private NativeCropView groupPhotoCrop;
+  private final ExecutorService photoExecutor = Executors.newSingleThreadExecutor();
+  private final androidx.activity.result.ActivityResultLauncher<String> groupPhotoPicker =
+      registerForActivityResult(
+          new androidx.activity.result.contract.ActivityResultContracts.GetContent(),
+          this::onGroupPhotoSelected);
   public static final String EXTRA_CHAT_ID = "pinggo.details.CHAT_ID";
   public static final String EXTRA_IS_GROUP = "pinggo.details.IS_GROUP";
   public static final String EXTRA_NAME = "pinggo.details.NAME";
@@ -79,6 +98,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
   private boolean group;
   private LinearLayout mediaRow;
   private LinearLayout members;
+  private LinearLayout membersSection;
   private NativeTextSlot membersTitle;
   private NativeTextSlot subtitle;
   private NativeTextSlot description;
@@ -86,10 +106,18 @@ public final class ChatInfoActivity extends AppCompatActivity {
   private NativeTextSlot emptyMedia;
   private NativeTextSlot membershipNotice;
   private LinearLayout callActions;
-  private ComponentScrollHost pageScroll;
   private PagingMediaScroll mediaScroll;
   private NativeTextSlot groupBlockAction;
-  private NativeTextSlot adminOnlyAction;
+  private NativeTextSlot groupNameView;
+  private NativeTextSlot editGroupNameAction;
+  private PermissionRow profilePermissionAction;
+  private PermissionRow namePermissionAction;
+  private PermissionRow messagePermissionAction;
+  private PermissionRow callPermissionAction;
+  private NativeTextSlot editGroupPhotoAction;
+  private NativeImageSlot groupAvatar;
+  private LinearLayout permissionsSection;
+  private Bitmap profileBitmap;
   private boolean groupMemberActive = true;
   private boolean ownGroupAdmin;
   private boolean ownGroupOwner;
@@ -97,7 +125,11 @@ public final class ChatInfoActivity extends AppCompatActivity {
   private int activeGroupAdminCount;
   private final List<String> successorIds = new ArrayList<>();
   private final List<String> successorLabels = new ArrayList<>();
-  private boolean adminOnlyMode;
+  private boolean profileAdminOnly;
+  private boolean nameAdminOnly;
+  private boolean messagesAdminOnly;
+  private boolean callsAdminOnly;
+  private String groupProfilePhotoUrl = "";
   private View mediaProgressTile;
   private View mediaArrowTile;
   private int mediaTileCount;
@@ -123,6 +155,17 @@ public final class ChatInfoActivity extends AppCompatActivity {
     repository = ChatRepository.getInstance(this);
     attachmentOpener = new MediaAttachmentOpener(this, repository, chatId);
     setContentView(buildPage());
+    getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+      @Override public void handleOnBackPressed() {
+        if (groupPhotoCrop != null && groupPhotoCrop.dismissIfShowing()) return;
+        if (profilePhotoPreview != null) { closeProfilePhotoPreview(); return; }
+        if (detailsMenu != null && detailsMenu.dismissIfShowing()) return;
+        if (promptDialog != null) { removePrompt(); return; }
+        setEnabled(false);
+        getOnBackPressedDispatcher().onBackPressed();
+        setEnabled(true);
+      }
+    });
     detailsMenu = new HomeMenuDialogView(this,
         java.util.Arrays.asList("Clear chat", group ? "Report group" : "Report " + name),
         index -> { if (index == 0) confirmClear(); else confirmReport(); });
@@ -152,22 +195,48 @@ public final class ChatInfoActivity extends AppCompatActivity {
         group ? "Group details" : "Chat details", this::finish, this::showDetailsMenu),
         new LinearLayout.LayoutParams(-1, -2));
 
-    ComponentScrollHost scroll = pageScroll = new ComponentScrollHost(false, null);
+    ScrollView scroll = new ScrollView(this);
+    scroll.setFillViewport(true);
     scroll.setBackgroundColor(0xFFF7F9FB);
     LinearLayout body = column();
     body.setGravity(Gravity.CENTER_HORIZONTAL);
-    body.setPadding(0, dp(18), 0, dp(34));
+    body.setPadding(0, dp(16), 0, dp(28));
     NativeImageSlot avatar = new NativeImageSlot();
+    if (group) groupAvatar = avatar;
     Bitmap bitmap = profilePath.isEmpty() ? null : BitmapFactory.decodeFile(profilePath);
+    profileBitmap = bitmap;
     if (bitmap == null)
       avatar.setImageResource(R.drawable.pinggo_logo);
     else
       avatar.setImageBitmap(bitmap);
-    body.addView(avatar, new LinearLayout.LayoutParams(dp(132), dp(132)));
+    avatar.setOnClickListener(view -> showProfilePhoto(profileBitmap));
+    body.addView(avatar, new LinearLayout.LayoutParams(dp(112), dp(112)));
+    if (group) {
+      editGroupPhotoAction = text("Edit group photo", 15, true);
+      editGroupPhotoAction.setTextColor(0xFF019BC5);
+      editGroupPhotoAction.setGravity(Gravity.CENTER);
+      editGroupPhotoAction.setPadding(dp(12), dp(8), dp(12), dp(8));
+      editGroupPhotoAction.setVisibility(View.GONE);
+      editGroupPhotoAction.setOnClickListener(v -> editGroupPhoto());
+      body.addView(editGroupPhotoAction, margins(0, 4, 0, 0));
+    }
     NativeTextSlot nameView = text(name, 25, true);
+    if (group) groupNameView = nameView;
     nameView.setGravity(Gravity.CENTER);
     add(body, nameView, 16);
-    subtitle = text(group ? memberCountText(getIntent().getIntExtra(EXTRA_MEMBER_COUNT, 0)) : phone, 15, false);
+    if (group) {
+      editGroupNameAction = text("Edit group name", 15, true);
+      editGroupNameAction.setTextColor(0xFF019BC5);
+      editGroupNameAction.setGravity(Gravity.CENTER);
+      editGroupNameAction.setPadding(dp(12), dp(6), dp(12), dp(6));
+      editGroupNameAction.setVisibility(View.GONE);
+      editGroupNameAction.setOnClickListener(v -> editGroupName());
+      body.addView(editGroupNameAction, full());
+    }
+    boolean directTitleIsPhone = !group && (name.equals(phone)
+        || name.equals(DeviceContactResolver.fallback(phone)));
+    subtitle = text(group ? memberCountText(getIntent().getIntExtra(EXTRA_MEMBER_COUNT, 0))
+        : directTitleIsPhone ? "" : phone, 15, false);
     subtitle.setTextColor(0xFF687382);
     subtitle.setGravity(Gravity.CENTER);
     add(body, subtitle, 5);
@@ -182,41 +251,68 @@ public final class ChatInfoActivity extends AppCompatActivity {
     membershipNotice.setVisibility(View.GONE);
     if (group) body.addView(membershipNotice, margins(0, 12, 0, 0));
     callActions = actionRow();
-    body.addView(callActions, margins(0, 24, 0, 22));
+    callActions.setPadding(dp(6), dp(6), dp(6), dp(6));
+    callActions.setBackground(cardBackground(0xFFFFFFFF));
+    body.addView(callActions, margins(0, 20, 0, 16));
 
     LinearLayout mediaSection = column();
+    mediaSection.setPadding(dp(14), dp(10), dp(14), dp(8));
+    mediaSection.setBackground(cardBackground(0xFFFFFFFF));
     mediaSection.setOnClickListener(v -> openMediaLibrary());
     mediaHeading = text("Media, links, and docs", 17, true);
-    mediaHeading.setPadding(0, dp(8), 0, dp(4));
+    mediaHeading.setPadding(0, dp(4), 0, dp(2));
     mediaSection.addView(mediaHeading, full());
     PagingMediaScroll mediaScroll = this.mediaScroll = new PagingMediaScroll();
     mediaScroll.setOnClickListener(v -> openMediaLibrary());
     mediaRow = row();
     mediaRow.setPadding(0, dp(12), 0, dp(12));
-    mediaScroll.setScrollContent(mediaRow);
+    mediaScroll.addView(mediaRow);
     mediaSection.addView(mediaScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(132)));
-    body.addView(mediaSection, full());
+    body.addView(mediaSection, margins(0, 0, 0, 12));
 
     if (group) {
-      adminOnlyAction = text("Only admins can message and call: Off", 16, false);
-      adminOnlyAction.setTextColor(0xFF019BC5);
-      adminOnlyAction.setPadding(dp(16), dp(18), dp(16), dp(18));
-      adminOnlyAction.setVisibility(View.GONE);
-      adminOnlyAction.setOnClickListener(v -> toggleAdminOnlyMode());
-      body.addView(adminOnlyAction, margins(0, 8, 0, 0));
+      LinearLayout permissions = permissionsSection = column();
+      permissions.setPadding(dp(14), dp(10), dp(14), dp(8));
+      permissions.setBackground(cardBackground(0xFFFFFFFF));
+      permissions.setVisibility(View.GONE);
+      NativeTextSlot permissionTitle = text("Group permissions", 17, true);
+      permissionTitle.setPadding(0, dp(2), 0, dp(6));
+      permissions.addView(permissionTitle, full());
+      profilePermissionAction = permissionAction("Edit group photo");
+      profilePermissionAction.setOnClickListener(v -> toggleGroupPermission("editProfilePhoto"));
+      permissions.addView(profilePermissionAction, full());
+      namePermissionAction = permissionAction("Edit group name");
+      namePermissionAction.setOnClickListener(v -> toggleGroupPermission("editName"));
+      permissions.addView(namePermissionAction, full());
+      messagePermissionAction = permissionAction("Send messages");
+      messagePermissionAction.setOnClickListener(v -> toggleGroupPermission("sendMessages"));
+      permissions.addView(messagePermissionAction, full());
+      callPermissionAction = permissionAction("Start calls");
+      callPermissionAction.setOnClickListener(v -> toggleGroupPermission("startCalls"));
+      permissions.addView(callPermissionAction, full());
+      body.addView(permissions, margins(0, 0, 0, 12));
+      LinearLayout memberSection = membersSection = column();
+      memberSection.setBackground(cardBackground(0xFFFFFFFF));
       members = column();
       membersTitle = text("Members", 17, true);
-      body.addView(membersTitle, margins(0, 18, 0, 6));
-      body.addView(members, full());
+      membersTitle.setPadding(dp(14), dp(10), dp(14), dp(8));
+      membersTitle.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+      memberSection.addView(membersTitle, full());
+      memberSection.addView(members, full());
+      body.addView(memberSection, full());
     }
-    body.addView(dangerAction("Clear chat", this::confirmClear), margins(0, 24, 0, 0));
+    LinearLayout dangerSection = column();
+    dangerSection.setBackground(cardBackground(0xFFFFFFFF));
+    dangerSection.addView(dangerAction("Clear chat", this::confirmClear), full());
     if (group) {
       groupBlockAction = dangerAction("Exit group", this::confirmBlockGroup);
-      body.addView(groupBlockAction, full());
+      dangerSection.addView(groupBlockAction, full());
     } else
-      body.addView(dangerAction("Block " + name, this::confirmBlockContact), full());
-    body.addView(dangerAction(group ? "Report group" : "Report " + name, this::confirmReport), full());
-    scroll.setScrollContent(body);
+      dangerSection.addView(dangerAction("Block " + name, this::confirmBlockContact), full());
+    dangerSection.addView(
+        dangerAction(group ? "Report group" : "Report " + name, this::confirmReport), full());
+    body.addView(dangerSection, margins(0, 18, 0, 0));
+    scroll.addView(body);
     page.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
     ViewCompat.setOnApplyWindowInsetsListener(page, (v, insets) -> {
       Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
@@ -264,13 +360,19 @@ public final class ChatInfoActivity extends AppCompatActivity {
     return box;
   }
 
+  private PermissionRow permissionAction(String label) {
+    PermissionRow action = new PermissionRow(label);
+    action.setVisibility(View.GONE);
+    return action;
+  }
+
   private void openCall(boolean video) {
     if (group && !groupMemberActive) {
       toast("You are not an active member.");
       return;
     }
-    if (group && adminOnlyMode && !ownGroupAdmin) {
-      toast("Only group admins can message or call.");
+    if (group && callsAdminOnly && !ownGroupAdmin) {
+      toast("Only group admins can start calls.");
       return;
     }
     if (group) {
@@ -293,8 +395,11 @@ public final class ChatInfoActivity extends AppCompatActivity {
       if (data == null)
         return;
       String fetchedName = string(data, "name");
-      if (!fetchedName.isEmpty())
+      if (!fetchedName.isEmpty()) {
         name = fetchedName;
+        if (groupNameView != null) groupNameView.setText(name);
+      }
+      refreshGroupPhoto(string(data, "icon"));
       String fetchedDescription = string(data, "description");
       description.setText(fetchedDescription.isEmpty() ? "No group description" : fetchedDescription);
       JsonArray list = data.has("members") && data.get("members").isJsonArray()
@@ -309,16 +414,22 @@ public final class ChatInfoActivity extends AppCompatActivity {
       if (groupOwnerId.isEmpty()) groupOwnerId = string(data, "createdBy");
       ownGroupOwner = groupMemberActive && userId.equals(groupOwnerId);
       JsonObject permissions = object(data, "permissions");
-      adminOnlyMode = permissions != null
-          && "admins".equalsIgnoreCase(string(permissions, "sendMessages"));
-      updateAdminOnlyAction();
+      messagesAdminOnly = permissionAdminsOnly(permissions, "sendMessages", null);
+      callsAdminOnly = permissionAdminsOnly(permissions, "startCalls",
+          permissions == null ? "" : string(permissions, "sendMessages"));
+      nameAdminOnly = permissionAdminsOnly(
+          permissions, "editName", permissionFallback(permissions, "editInfo", "sendMessages"));
+      profileAdminOnly = permissionAdminsOnly(
+          permissions, "editProfilePhoto", permissionFallback(permissions, "editInfo", "sendMessages"));
+      updatePermissionActions();
+      updateGroupEditActions();
       membershipNotice.setVisibility(groupMemberActive ? View.GONE : View.VISIBLE);
-      callActions.setAlpha(groupMemberActive && (!adminOnlyMode || ownGroupAdmin) ? 1f : 0.42f);
+      callActions.setAlpha(groupMemberActive && (!callsAdminOnly || ownGroupAdmin) ? 1f : 0.42f);
       if (groupBlockAction != null)
         groupBlockAction.setVisibility(groupMemberActive ? View.VISIBLE : View.GONE);
       subtitle.setText(memberCountText(list.size()));
-      membersTitle.setVisibility(groupMemberActive ? View.VISIBLE : View.GONE);
-      members.setVisibility(groupMemberActive ? View.VISIBLE : View.GONE);
+      if (membersSection != null)
+        membersSection.setVisibility(groupMemberActive ? View.VISIBLE : View.GONE);
       if (groupMemberActive)
         renderMembers(list);
       else
@@ -326,21 +437,71 @@ public final class ChatInfoActivity extends AppCompatActivity {
     }));
   }
 
-  private void updateAdminOnlyAction() {
-    if (adminOnlyAction == null) return;
-    adminOnlyAction.setVisibility(ownGroupAdmin && groupMemberActive ? View.VISIBLE : View.GONE);
-    adminOnlyAction.setText("Only admins can message and call: "
-        + (adminOnlyMode ? "On" : "Off"));
+  private static String permissionFallback(
+      JsonObject permissions, String first, String second) {
+    if (permissions == null) return "";
+    String value = string(permissions, first);
+    return value.isEmpty() ? string(permissions, second) : value;
   }
 
-  private void toggleAdminOnlyMode() {
+  private static boolean permissionAdminsOnly(
+      JsonObject permissions, String key, String fallbackMode) {
+    String mode = permissions == null ? "" : string(permissions, key);
+    if (mode.isEmpty()) mode = fallbackMode == null ? "" : fallbackMode;
+    return "admins".equalsIgnoreCase(mode);
+  }
+
+  private void updatePermissionActions() {
+    boolean visible = ownGroupAdmin && groupMemberActive;
+    if (permissionsSection != null)
+      permissionsSection.setVisibility(visible ? View.VISIBLE : View.GONE);
+    updatePermissionAction(profilePermissionAction, profileAdminOnly, visible);
+    updatePermissionAction(namePermissionAction, nameAdminOnly, visible);
+    updatePermissionAction(messagePermissionAction, messagesAdminOnly, visible);
+    updatePermissionAction(callPermissionAction, callsAdminOnly, visible);
+  }
+
+  private void updatePermissionAction(
+      PermissionRow action, boolean adminsOnly, boolean visible) {
+    if (action == null) return;
+    action.setVisibility(visible ? View.VISIBLE : View.GONE);
+    action.setMode(adminsOnly);
+  }
+
+  private void updateGroupEditActions() {
+    if (editGroupPhotoAction != null) {
+      boolean allowed = groupMemberActive && (!profileAdminOnly || ownGroupAdmin);
+      editGroupPhotoAction.setVisibility(groupMemberActive ? View.VISIBLE : View.GONE);
+      editGroupPhotoAction.setAlpha(allowed ? 1f : 0.42f);
+    }
+    if (editGroupNameAction != null) {
+      boolean allowed = groupMemberActive && (!nameAdminOnly || ownGroupAdmin);
+      editGroupNameAction.setVisibility(groupMemberActive ? View.VISIBLE : View.GONE);
+      editGroupNameAction.setAlpha(allowed ? 1f : 0.42f);
+    }
+  }
+
+  private void toggleGroupPermission(String permission) {
     if (!ownGroupAdmin || !groupMemberActive) return;
-    boolean enabled = !adminOnlyMode;
-    api.updateGroupAdminOnly(userId, chatId, enabled, callback(result -> {
-      adminOnlyMode = enabled;
-      updateAdminOnlyAction();
-      toast(enabled ? "Only admins can now message and call."
-          : "All members can now message and call.");
+    boolean enabled;
+    switch (permission) {
+      case "editProfilePhoto": enabled = !profileAdminOnly; break;
+      case "editName": enabled = !nameAdminOnly; break;
+      case "startCalls": enabled = !callsAdminOnly; break;
+      default: enabled = !messagesAdminOnly; break;
+    }
+    api.updateGroupPermission(userId, chatId, permission, enabled, callback(result -> {
+      switch (permission) {
+        case "editProfilePhoto": profileAdminOnly = enabled; break;
+        case "editName": nameAdminOnly = enabled; break;
+        case "startCalls": callsAdminOnly = enabled; break;
+        default: messagesAdminOnly = enabled; break;
+      }
+      updatePermissionActions();
+      updateGroupEditActions();
+      callActions.setAlpha(groupMemberActive && (!callsAdminOnly || ownGroupAdmin) ? 1f : 0.42f);
+      toast(enabled ? "Only admins can now use this group action."
+          : "All members can now use this group action.");
     }));
   }
 
@@ -352,7 +513,11 @@ public final class ChatInfoActivity extends AppCompatActivity {
       String serverName = string(profile, "serverProfileName");
       boolean hasContactName = !name.isEmpty() && !name.equals(phone)
           && !name.equals(DeviceContactResolver.fallback(phone));
-      subtitle.setText(hasContactName || serverName.isEmpty() ? phone : phone + "\n" + serverName);
+      if (hasContactName) {
+        subtitle.setText(phone);
+      } else {
+        subtitle.setText(serverName.isEmpty() || serverName.equalsIgnoreCase(name) ? "" : serverName);
+      }
     }));
   }
 
@@ -378,57 +543,73 @@ public final class ChatInfoActivity extends AppCompatActivity {
         successorIds.add(id);
         successorLabels.add(display);
       }
-      LinearLayout item = row();
-      item.setGravity(Gravity.CENTER_VERTICAL);
-      item.setPadding(dp(12), dp(10), dp(12), dp(10));
+      LinearLayout item = column();
+      item.setPadding(dp(12), dp(9), dp(12), dp(9));
       item.setBackgroundColor(Color.WHITE);
+      LinearLayout identity = row();
+      identity.setGravity(Gravity.CENTER_VERTICAL);
       NativeImageSlot avatar = new NativeImageSlot();
       avatar.setImageResource(R.drawable.pinggo_logo);
-      item.addView(avatar, new LinearLayout.LayoutParams(dp(54), dp(54)));
+      identity.addView(avatar, new LinearLayout.LayoutParams(dp(48), dp(48)));
       LinearLayout labels = column();
-      labels.setPadding(dp(14), 0, 0, 0);
-      labels.addView(text(id.equals(userId) ? "You" : display, 16, true));
-      String about = string(member, "about");
-      NativeTextSlot preview = text(about.isEmpty() ? id : about, 13, false);
+      labels.setPadding(dp(12), 0, dp(8), 0);
+      NativeTextSlot memberName = text(id.equals(userId) ? "You" : display, 16, true);
+      memberName.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+      labels.addView(memberName);
+      NativeTextSlot preview = text(id, 13, false);
       preview.setTextColor(0xFF687382);
+      preview.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
       labels.addView(preview);
-      item.addView(labels, new LinearLayout.LayoutParams(0, -2, 1f));
+      identity.addView(labels, new LinearLayout.LayoutParams(0, -2, 1f));
       if (!role.isEmpty() && !"member".equals(role)) {
-        NativeTextSlot roleLabel = text(id.equals(groupOwnerId) ? "Group owner" : "Group " + role, 12, false);
-        roleLabel.setTextColor(0xFF687382);
-        item.addView(roleLabel);
+        NativeTextSlot roleLabel = text(id.equals(groupOwnerId) ? "Owner" : "Admin", 11, true);
+        roleLabel.setTextColor(0xFF019BC5);
+        roleLabel.setGravity(Gravity.CENTER);
+        roleLabel.setMaxLines(1);
+        roleLabel.setPadding(dp(6), dp(3), dp(6), dp(3));
+        roleLabel.setBackground(cardBackground(0xFFE9F7FB));
+        identity.addView(roleLabel, new LinearLayout.LayoutParams(dp(62), dp(30)));
       }
+      item.addView(identity, full());
+      LinearLayout memberActions = row();
+      memberActions.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+      memberActions.setPadding(dp(60), 0, 0, 0);
+      boolean hasMemberAction = false;
       if (ownGroupOwner && groupMemberActive && !id.equals(userId)
           && !"admin".equalsIgnoreCase(role)) {
         NativeTextSlot makeAdmin = text("Make admin", 13, false);
         makeAdmin.setTextColor(0xFF019BC5);
         makeAdmin.setGravity(Gravity.CENTER);
-        makeAdmin.setPadding(dp(8), dp(10), dp(8), dp(10));
+        makeAdmin.setMaxLines(1);
         makeAdmin.setOnClickListener(v -> confirmMakeAdmin(id, display));
-        item.addView(makeAdmin);
+        memberActions.addView(makeAdmin, new LinearLayout.LayoutParams(dp(104), dp(38)));
+        hasMemberAction = true;
       } else if (ownGroupOwner && groupMemberActive && !id.equals(userId)
           && "admin".equalsIgnoreCase(role) && !id.equals(groupOwnerId)) {
         NativeTextSlot makeMember = text("Make member", 13, false);
         makeMember.setTextColor(0xFF019BC5);
         makeMember.setGravity(Gravity.CENTER);
-        makeMember.setPadding(dp(8), dp(10), dp(8), dp(10));
+        makeMember.setMaxLines(1);
         makeMember.setOnClickListener(v -> confirmMakeMember(id, display));
-        item.addView(makeMember);
+        memberActions.addView(makeMember, new LinearLayout.LayoutParams(dp(112), dp(38)));
+        hasMemberAction = true;
       }
       if (ownGroupAdmin && groupMemberActive && !id.equals(userId)
           && !"admin".equalsIgnoreCase(role)) {
         NativeTextSlot remove = text("Remove", 13, false);
         remove.setTextColor(0xFFD9304F);
         remove.setGravity(Gravity.CENTER);
-        remove.setPadding(dp(12), dp(10), dp(4), dp(10));
+        remove.setMaxLines(1);
         remove.setOnClickListener(v -> confirmRemoveMember(id, display));
-        item.addView(remove);
+        memberActions.addView(remove, new LinearLayout.LayoutParams(dp(72), dp(38)));
+        hasMemberAction = true;
       }
+      if (hasMemberAction) item.addView(memberActions, margins(0, 2, 0, 0));
       members.addView(item, full());
       View divider = new View(this);
       divider.setBackgroundColor(0xFFE5EAF0);
       LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(-1, dp(1));
-      dividerParams.leftMargin = dp(80);
+      dividerParams.leftMargin = dp(72);
       members.addView(divider, dividerParams);
     }
     if (ownGroupAdmin && groupMemberActive) {
@@ -438,7 +619,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
       addMembers.setBackgroundColor(Color.WHITE);
       NativeImageSlot icon = new NativeImageSlot();
       icon.setImageResource(android.R.drawable.ic_input_add);
-      addMembers.addView(icon, new LinearLayout.LayoutParams(dp(54), dp(54)));
+      addMembers.addView(icon, new LinearLayout.LayoutParams(dp(48), dp(48)));
       NativeTextSlot label = text("Add members", 16, true);
       label.setTextColor(0xFF019BC5);
       label.setPadding(dp(14), 0, 0, 0);
@@ -857,102 +1038,213 @@ public final class ChatInfoActivity extends AppCompatActivity {
     return view;
   }
 
-  private final class PagingMediaScroll extends ComponentScrollHost {
+  private final class PagingMediaScroll extends HorizontalScrollView {
     PagingMediaScroll() {
-      super(true, () -> loadMedia());
+      super(ChatInfoActivity.this);
+      setHorizontalScrollBarEnabled(false);
+    }
+
+    @Override
+    protected void onScrollChanged(int x, int y, int oldX, int oldY) {
+      super.onScrollChanged(x, y, oldX, oldY);
+      View child = getChildAt(0);
+      if (child != null && x + getWidth() >= child.getWidth() - dp(80))
+        loadMedia();
     }
   }
 
-  /** Screen-owned host whose scrolling is supplied by the AAR ComponentList. */
-  private class ComponentScrollHost extends FrameLayout {
-    private final boolean horizontal;
-    private final Runnable nearEnd;
-    private final ZLayerGroup scrollLayers = new ZLayerGroup(this);
-    private final ZLayer scrollLayer = scrollLayers.addLayer("chat_info_scroll");
-    private ComponentList<String> scrollList;
-    private View scrollContent;
-    private float lastOffset;
-    private float downAxis;
-    private boolean dragging;
-    ComponentScrollHost(boolean horizontal, Runnable nearEnd) {
-      super(ChatInfoActivity.this);
-      this.horizontal = horizontal;
-      this.nearEnd = nearEnd;
-      setClipChildren(true);
+  private void showProfilePhoto(Bitmap fallback) {
+    closeProfilePhotoPreview();
+    profilePhotoPreview = new ProfilePhotoPreviewView(this);
+    ((ViewGroup) findViewById(android.R.id.content)).addView(profilePhotoPreview,
+        new ViewGroup.LayoutParams(-1, -1));
+    profilePhotoPreview.show(fallback, profilePath, group ? "" : phone,
+        this::closeProfilePhotoPreview);
+    ViewCompat.requestApplyInsets(profilePhotoPreview);
+  }
+
+  private void closeProfilePhotoPreview() {
+    ProfilePhotoPreviewView current = profilePhotoPreview;
+    profilePhotoPreview = null;
+    if (current == null) return;
+    current.dismiss();
+    if (current.getParent() instanceof ViewGroup)
+      ((ViewGroup) current.getParent()).removeView(current);
+    current.release();
+  }
+
+  private void editGroupPhoto() {
+    if (!group || !groupMemberActive) {
+      toast("You are not an active member.");
+      return;
     }
-    void setScrollContent(View child) {
-      removeAllViews();
-      scrollContent = child;
-      FrameLayout.LayoutParams params = horizontal
-          ? new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
-              ViewGroup.LayoutParams.MATCH_PARENT)
-          : new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-              ViewGroup.LayoutParams.WRAP_CONTENT);
-      addView(child, params);
-      child.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob) -> {
-        if (r-l != or-ol || b-t != ob-ot) rebuildScroll();
+    if (profileAdminOnly && !ownGroupAdmin) {
+      toast("Only group admins can edit the group photo.");
+      return;
+    }
+    groupPhotoPicker.launch("image/*");
+  }
+
+  private void editGroupName() {
+    if (!group || !groupMemberActive) {
+      toast("You are not an active member.");
+      return;
+    }
+    if (nameAdminOnly && !ownGroupAdmin) {
+      toast("Only group admins can edit the group name.");
+      return;
+    }
+    showPrompt(NativePromptDialogView.input(this, "Edit group name", name,
+        android.text.InputType.TYPE_CLASS_TEXT
+            | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES,
+        value -> {
+          String nextName = value == null ? "" : value.trim();
+          if (nextName.isEmpty()) {
+            toast("Enter a group name.");
+            return false;
+          }
+          if (nextName.length() > 100) {
+            toast("Group name must be 100 characters or fewer.");
+            return false;
+          }
+          api.updateGroup(userId, chatId, nextName, null, callback(result -> {
+            name = nextName;
+            if (groupNameView != null) groupNameView.setText(name);
+            toast("Group name updated.");
+          }));
+          return true;
+        }, this::removePrompt));
+  }
+
+  private void refreshGroupPhoto(String url) {
+    if (url == null || url.trim().isEmpty()) return;
+    String normalizedUrl = url.trim();
+    if (normalizedUrl.equals(groupProfilePhotoUrl) && profileBitmap != null) return;
+    groupProfilePhotoUrl = normalizedUrl;
+    photoExecutor.execute(() -> {
+      String localPath = ChatProfilePhotoStore.downloadAndStore(
+          getApplicationContext(), chatId, normalizedUrl);
+      Bitmap bitmap = localPath == null ? null : BitmapFactory.decodeFile(localPath);
+      runOnUiThread(() -> {
+        if (isFinishing() || isDestroyed() || bitmap == null) return;
+        profilePath = localPath;
+        profileBitmap = bitmap;
+        ProfileBitmapCache.get().invalidatePath(localPath);
+        if (groupAvatar != null) groupAvatar.setImageBitmap(bitmap);
       });
-    }
-    @Override protected void onSizeChanged(int w, int h, int ow, int oh) {
-      super.onSizeChanged(w,h,ow,oh); rebuildScroll();
-    }
-    private void rebuildScroll() {
-      if (getWidth() <= 0 || getHeight() <= 0 || scrollContent == null) return;
-      float offset = scrollList == null ? lastOffset : scrollList.getScrollOffset();
-      float itemSize = horizontal ? Math.max(getWidth() + 1, scrollContent.getWidth())
-          : Math.max(getHeight() + 1, scrollContent.getHeight());
-      scrollLayer.clear();
-      scrollList = scrollLayer.add(new ComponentList.Builder<String>(getContext(), "scroll_list",
-          new RectF(0,0,getWidth(),getHeight()))
-          .setOrientation(horizontal ? ComponentList.Orientation.HORIZONTAL
-              : ComponentList.Orientation.VERTICAL)
-          .setItemSize(itemSize).setAdapter(new ComponentList.Adapter<String>() {
-            @Override public int getItemCount(){ return 1; }
-            @Override public String getItem(int position){ return "content"; }
-            @Override public void onCreateItem(ComponentList.Item item,int type){ item.addLayer("spacer"); }
-            @Override public void onBindItem(ComponentList.Item item,String value,int position){}
-          }).setScrollEnabled(true).setFlingEnabled(true).setOverscrollEnabled(false)
-          .setClipToBounds(true));
-      if (offset > 0f) scrollList.scrollBy(horizontal ? offset : 0f, horizontal ? 0f : offset);
-      syncScroll();
-    }
-    private void syncScroll() {
-      if (scrollList == null || scrollContent == null) return;
-      lastOffset = scrollList.getScrollOffset();
-      scrollContent.setTranslationX(horizontal ? -lastOffset : 0f);
-      scrollContent.setTranslationY(horizontal ? 0f : -lastOffset);
-      if (nearEnd != null) {
-        float extent = horizontal ? scrollContent.getWidth() : scrollContent.getHeight();
-        float viewport = horizontal ? getWidth() : getHeight();
-        if (lastOffset + viewport >= extent - dp(80)) nearEnd.run();
+    });
+  }
+
+  private void onGroupPhotoSelected(Uri uri) {
+    if (uri == null || !group || !groupMemberActive) return;
+    photoExecutor.execute(() -> {
+      try {
+        Bitmap bitmap = decodeGroupPhoto(uri);
+        runOnUiThread(() -> {
+          if (isFinishing() || isDestroyed()) {
+            if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
+            return;
+          }
+          showGroupPhotoCrop(bitmap);
+        });
+      } catch (Exception error) {
+        runOnUiThread(() -> toast("Unable to load group photo."));
       }
+    });
+  }
+
+  private Bitmap decodeGroupPhoto(Uri uri) throws java.io.IOException {
+    if (android.os.Build.VERSION.SDK_INT >= 28) {
+      return android.graphics.ImageDecoder.decodeBitmap(
+          android.graphics.ImageDecoder.createSource(getContentResolver(), uri),
+          (decoder, info, source) -> {
+            float scale = Math.min(1f,
+                512f / Math.max(info.getSize().getWidth(), info.getSize().getHeight()));
+            decoder.setTargetSize(
+                Math.max(1, Math.round(info.getSize().getWidth() * scale)),
+                Math.max(1, Math.round(info.getSize().getHeight() * scale)));
+            decoder.setAllocator(android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE);
+          });
     }
-    @Override public boolean dispatchTouchEvent(android.view.MotionEvent event) {
-      if (scrollList == null) return super.dispatchTouchEvent(event);
-      float axis = horizontal ? event.getX() : event.getY();
-      if (event.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) {
-        downAxis=axis; dragging=false; scrollLayers.onTouchEvent(event);
-        return super.dispatchTouchEvent(event);
-      }
-      if (event.getActionMasked() == android.view.MotionEvent.ACTION_MOVE) {
-        if (!dragging && Math.abs(axis-downAxis)>dp(6)) {
-          dragging=true;
-          android.view.MotionEvent cancel=android.view.MotionEvent.obtain(event);
-          cancel.setAction(android.view.MotionEvent.ACTION_CANCEL);
-          super.dispatchTouchEvent(cancel);
-          cancel.recycle();
-        }
-        scrollLayers.onTouchEvent(event); syncScroll();
-        if (dragging) return true;
-      } else if (event.getActionMasked()==android.view.MotionEvent.ACTION_UP
-          || event.getActionMasked()==android.view.MotionEvent.ACTION_CANCEL) {
-        scrollLayers.onTouchEvent(event); syncScroll();
-        if (dragging) { dragging=false; return true; }
-      }
-      return super.dispatchTouchEvent(event);
+    BitmapFactory.Options options = new BitmapFactory.Options();
+    options.inJustDecodeBounds = true;
+    try (java.io.InputStream input = getContentResolver().openInputStream(uri)) {
+      BitmapFactory.decodeStream(input, null, options);
     }
-    @Override protected void dispatchDraw(Canvas canvas) { syncScroll(); super.dispatchDraw(canvas); }
-    void release() { scrollLayers.release(); }
+    options.inSampleSize = 1;
+    while (Math.max(options.outWidth, options.outHeight) / options.inSampleSize > 512)
+      options.inSampleSize *= 2;
+    options.inJustDecodeBounds = false;
+    try (java.io.InputStream input = getContentResolver().openInputStream(uri)) {
+      Bitmap bitmap = BitmapFactory.decodeStream(input, null, options);
+      if (bitmap == null) throw new java.io.IOException("Invalid image");
+      return bitmap;
+    }
+  }
+
+  private void showGroupPhotoCrop(Bitmap bitmap) {
+    removeGroupPhotoCrop();
+    androidx.core.view.WindowInsetsControllerCompat bars =
+        WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
+    bars.setSystemBarsBehavior(
+        androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+    bars.hide(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.ime());
+    groupPhotoCrop = new NativeCropView(this, bitmap, 495, 1155,
+        new NativeCropView.Listener() {
+          @Override public void onRetry() { groupPhotoPicker.launch("image/*"); }
+          @Override public void onConfirm(Bitmap cropped) { uploadGroupPhoto(cropped); }
+          @Override public void onInvalidCrop() { toast("Unable to crop image."); }
+          @Override public void onDismiss() { removeGroupPhotoCrop(); }
+        });
+    ((ViewGroup) findViewById(android.R.id.content)).addView(groupPhotoCrop,
+        new ViewGroup.LayoutParams(-1, -1));
+  }
+
+  private void removeGroupPhotoCrop() {
+    NativeCropView current = groupPhotoCrop;
+    groupPhotoCrop = null;
+    if (current == null) return;
+    WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView())
+        .show(WindowInsetsCompat.Type.systemBars());
+    if (current.getParent() instanceof ViewGroup)
+      ((ViewGroup) current.getParent()).removeView(current);
+    current.release();
+  }
+
+  private void uploadGroupPhoto(Bitmap photo) {
+    if (editGroupPhotoAction != null) {
+      editGroupPhotoAction.setText("Uploading group photo…");
+      editGroupPhotoAction.setAlpha(0.42f);
+    }
+    api.uploadGroupProfilePhoto(userId, chatId, photo, new AppFunctionManager.Callback() {
+      @Override public void onSuccess(Object result) {
+        JsonObject response = asObject(result);
+        String uploadedUrl = string(response, "profilePhotoUrl");
+        photoExecutor.execute(() -> {
+          String localPath = ChatProfilePhotoStore.storeBitmap(
+              getApplicationContext(), chatId, photo, uploadedUrl);
+          runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            profilePath = localPath == null ? profilePath : localPath;
+            groupProfilePhotoUrl = uploadedUrl;
+            profileBitmap = photo;
+            if (localPath != null) ProfileBitmapCache.get().invalidatePath(localPath);
+            if (groupAvatar != null) groupAvatar.setImageBitmap(photo);
+            if (editGroupPhotoAction != null) editGroupPhotoAction.setText("Edit group photo");
+            updateGroupEditActions();
+            toast("Group photo updated.");
+          });
+        });
+      }
+
+      @Override public void onError(String error) {
+        runOnUiThread(() -> {
+          if (editGroupPhotoAction != null) editGroupPhotoAction.setText("Edit group photo");
+          updateGroupEditActions();
+          toast(error == null ? "Group photo upload failed." : error);
+        });
+      }
+    });
   }
 
   private static JsonObject asObject(Object value) {
@@ -1026,8 +1318,47 @@ public final class ChatInfoActivity extends AppCompatActivity {
     return p;
   }
 
+  private GradientDrawable cardBackground(int color) {
+    GradientDrawable background = new GradientDrawable();
+    background.setColor(color);
+    background.setCornerRadius(dp(14));
+    background.setStroke(dp(1), 0xFFE5EAF0);
+    return background;
+  }
+
   private int dp(int value) {
     return Math.round(value * getResources().getDisplayMetrics().density);
+  }
+
+  private final class PermissionRow extends LinearLayout {
+    private final NativeTextSlot mode;
+
+    PermissionRow(String label) {
+      super(ChatInfoActivity.this);
+      setOrientation(HORIZONTAL);
+      setGravity(Gravity.CENTER_VERTICAL);
+      setPadding(0, dp(5), 0, dp(5));
+      setMinimumHeight(dp(48));
+      NativeTextSlot title = text(label, 15, false);
+      title.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+      addView(title, new LinearLayout.LayoutParams(0, -2, 1f));
+      mode = text("All members", 12, true);
+      mode.setTextColor(0xFF019BC5);
+      mode.setGravity(Gravity.CENTER);
+      mode.setMaxLines(1);
+      mode.setPadding(dp(8), dp(4), dp(8), dp(4));
+      addView(mode, new LinearLayout.LayoutParams(dp(112), dp(36)));
+      NativeTextSlot arrow = text("›", 22, false);
+      arrow.setTextColor(0xFF8792A2);
+      arrow.setGravity(Gravity.CENTER);
+      addView(arrow, new LinearLayout.LayoutParams(dp(18), -2));
+    }
+
+    void setMode(boolean adminsOnly) {
+      mode.setText(adminsOnly ? "Admins only" : "All members");
+      mode.setTextColor(adminsOnly ? 0xFF8A5A00 : 0xFF007A61);
+      mode.setBackground(cardBackground(adminsOnly ? 0xFFFFF4D6 : 0xFFE5F7F2));
+    }
   }
 
   private final class NativeTextSlot extends View {
@@ -1036,6 +1367,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
     private String value;
     private final int sizeSp;
     private final boolean bold;
+    private int maxLines = 3;
     private int color = 0xFF07131E;
     private int gravity = Gravity.START | Gravity.CENTER_VERTICAL;
     NativeTextSlot(String value, int sizeSp, boolean bold) {
@@ -1045,11 +1377,18 @@ public final class ChatInfoActivity extends AppCompatActivity {
     void setText(String text) { value = text == null ? "" : text; requestLayout(); rebuild(); }
     void setTextColor(int color) { this.color = color; rebuild(); }
     void setGravity(int gravity) { this.gravity = gravity; rebuild(); }
+    void setMaxLines(int lines) {
+      maxLines = Math.max(1, lines);
+      requestLayout();
+      rebuild();
+    }
     private void rebuild() {
       if (getWidth() <= 0 || getHeight() <= 0) return;
       layer.clear();
-      Text.Alignment alignment = (gravity & Gravity.CENTER_HORIZONTAL) != 0
-          ? Text.Alignment.CENTER : (gravity & Gravity.END) != 0
+      int horizontal = Gravity.getAbsoluteGravity(gravity, getLayoutDirection())
+          & Gravity.HORIZONTAL_GRAVITY_MASK;
+      Text.Alignment alignment = horizontal == Gravity.CENTER_HORIZONTAL
+          ? Text.Alignment.CENTER : horizontal == Gravity.RIGHT
               ? Text.Alignment.END : Text.Alignment.START;
       layer.add(new Text.Builder(getContext(), "value", value,
           new RectF(getPaddingLeft(), getPaddingTop(),
@@ -1058,15 +1397,32 @@ public final class ChatInfoActivity extends AppCompatActivity {
           .setFontVariations(bold ? FontVariation.BOLD : FontVariation.REGULAR)
           .setTextColor(color).setTextSizePx(sizeSp * getResources().getDisplayMetrics().scaledDensity)
           .setAlignment(alignment).setVerticalAlignment(Text.VerticalAlignment.CENTER)
-          .setMaxLines(3));
+          .setMaxLines(maxLines));
       invalidate();
     }
     @Override protected void onMeasure(int widthSpec, int heightSpec) {
-      android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+      TextPaint paint = new TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG);
       paint.setTextSize(sizeSp * getResources().getDisplayMetrics().scaledDensity);
-      int desiredWidth = (int) Math.ceil(paint.measureText(value)) + getPaddingLeft() + getPaddingRight();
-      int desiredHeight = (int) Math.ceil(paint.getFontMetrics().descent - paint.getFontMetrics().ascent)
-          + getPaddingTop() + getPaddingBottom();
+      paint.setFakeBoldText(bold);
+      int horizontalPadding = getPaddingLeft() + getPaddingRight();
+      int widthMode = MeasureSpec.getMode(widthSpec);
+      int widthSize = MeasureSpec.getSize(widthSpec);
+      int contentWidth;
+      if (widthMode == MeasureSpec.UNSPECIFIED) {
+        float widest = 0f;
+        for (String line : value.split("\\n", -1)) widest = Math.max(widest, paint.measureText(line));
+        contentWidth = Math.max(1, (int) Math.ceil(widest));
+      } else {
+        contentWidth = Math.max(1, widthSize - horizontalPadding);
+      }
+      StaticLayout layout = StaticLayout.Builder.obtain(value, 0, value.length(), paint, contentWidth)
+          .setAlignment(Layout.Alignment.ALIGN_NORMAL).setIncludePad(true)
+          .setMaxLines(maxLines).build();
+      float widestLine = 0f;
+      for (int i = 0; i < layout.getLineCount(); i++)
+        widestLine = Math.max(widestLine, layout.getLineWidth(i));
+      int desiredWidth = (int) Math.ceil(widestLine) + horizontalPadding;
+      int desiredHeight = layout.getHeight() + getPaddingTop() + getPaddingBottom();
       setMeasuredDimension(resolveSize(desiredWidth, widthSpec), resolveSize(desiredHeight, heightSpec));
     }
     @Override protected void onSizeChanged(int w, int h, int ow, int oh) { rebuild(); }
@@ -1118,12 +1474,13 @@ public final class ChatInfoActivity extends AppCompatActivity {
 
   @Override
   protected void onDestroy() {
-    if (pageScroll != null) pageScroll.release();
-    if (mediaScroll != null) mediaScroll.release();
+    removeGroupPhotoCrop();
+    closeProfilePhotoPreview();
     for (NativeImageSlot image : mediaImages.values()) image.release();
     removePrompt();
     if (detailsMenu != null) detailsMenu.release();
     detailsMenu = null;
+    photoExecutor.shutdownNow();
     super.onDestroy();
   }
 }

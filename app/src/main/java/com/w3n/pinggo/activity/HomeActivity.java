@@ -127,6 +127,8 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
             public void handleOnBackPressed() {
                 if (homeMenuDialog != null && homeMenuDialog.dismissIfShowing())
                     return;
+                if (homeView != null && homeView.dismissProfilePhotoPreview())
+                    return;
                 if (homeView != null && homeView.clearSelections())
                     return;
 

@@ -115,7 +115,8 @@ public final class ChatView extends View {
       callVideoIncomingIcon = resourceBitmap(R.drawable.chat_video_incoming),
       callVideoOutgoingIcon = resourceBitmap(R.drawable.chat_video_outgoing),
       callVideoMissedIcon = resourceBitmap(R.drawable.chat_video_missed);
-  private final String chatName, currentUser;
+  private String chatName;
+  private final String currentUser;
   private final boolean groupChat;
   private final ChatSelectionController selection = new ChatSelectionController();
   private Bitmap profile;
@@ -142,6 +143,7 @@ public final class ChatView extends View {
   private boolean contactAccountActive = true;
   private boolean groupMemberActive = true;
   private boolean groupSendingAllowed = true;
+  private boolean groupCallsAllowed = true;
   private boolean keepKeyboardAfterSend;
   private boolean forceBottomOnNextMessageSubmission;
   private boolean directComposerSendGesture;
@@ -350,6 +352,23 @@ public final class ChatView extends View {
 
   public void setPresence(String value) {
     chatHeader.setPresence(value);
+    invalidate();
+  }
+
+  public void setChatName(String value) {
+    chatName = value == null || value.trim().isEmpty() ? "Group" : value.trim();
+    chatHeader.setName(chatName);
+    invalidate();
+  }
+
+  public void setProfilePhoto(String path) {
+    int profileSize = Math.round(px(132f));
+    ProfileBitmapCache.get().invalidatePath(path);
+    profile = ProfileBitmapCache.get().request(
+        path, chatName, profileSize, ACCENT,
+        () -> applyLoadedProfile(path, chatName, profileSize));
+    adapter.setChatProfile(profile);
+    chatHeader.setProfile(profile);
     invalidate();
   }
 
@@ -1302,7 +1321,8 @@ public final class ChatView extends View {
           new RectF(0f, composerTop - px(12f), w, screenBottom))
           .setScaleType(Image.ScaleType.FIT_XY));
       text(overlay, "inactive_group_message", groupMemberActive
-              ? "Only admins can message and call" : "You are not an active member",
+              ? "Only admins can message, call, and edit the group profile"
+                  : "You are not an active member",
           new RectF(px(44f), composerTop, w - px(44f), composerBottom),
           sp(14), SECONDARY, FontVariation.REGULAR, Text.Alignment.CENTER);
       overlay.add(new Button.Builder(
@@ -1716,7 +1736,7 @@ public final class ChatView extends View {
   public void setGroupMemberActive(boolean active) {
     if (groupMemberActive == active) return;
     groupMemberActive = active;
-    chatHeader.setCallActionsVisible(active && groupSendingAllowed);
+    chatHeader.setCallActionsVisible(active && groupCallsAllowed);
     if (!active) {
       clearMessageSelection();
       composer.draft = "";
@@ -1730,13 +1750,19 @@ public final class ChatView extends View {
   public void setGroupSendingAllowed(boolean allowed) {
     if (groupSendingAllowed == allowed) return;
     groupSendingAllowed = allowed;
-    chatHeader.setCallActionsVisible(groupMemberActive && allowed);
     if (!allowed) {
       composer.draft = "";
       composer.clearReply();
       composer.clearAttachment();
       composer.attachmentPanelVisible = false;
     }
+    if (getWidth() > 0 && getHeight() > 0) build();
+  }
+
+  public void setGroupCallsAllowed(boolean allowed) {
+    if (groupCallsAllowed == allowed) return;
+    groupCallsAllowed = allowed;
+    chatHeader.setCallActionsVisible(groupMemberActive && allowed);
     if (getWidth() > 0 && getHeight() > 0) build();
   }
 
