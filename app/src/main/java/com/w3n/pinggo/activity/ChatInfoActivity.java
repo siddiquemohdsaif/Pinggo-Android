@@ -21,11 +21,9 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Toast;
 
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.activity.OnBackPressedCallback;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import com.google.gson.JsonArray;
@@ -65,7 +63,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /** WhatsApp-style details page shared by direct chats and groups. */
-public final class ChatInfoActivity extends AppCompatActivity {
+public final class ChatInfoActivity extends PingGoActivity {
   private NativePromptDialogView promptDialog;
   private HomeMenuDialogView detailsMenu;
   private ProfilePhotoPreviewView profilePhotoPreview;
@@ -142,9 +140,6 @@ public final class ChatInfoActivity extends AppCompatActivity {
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-    getWindow().setStatusBarColor(0xFFF9FBFE);
-    getWindow().setNavigationBarColor(0xFFF9FBFE);
     chatId = value(EXTRA_CHAT_ID, "");
     group = getIntent().getBooleanExtra(EXTRA_IS_GROUP, false);
     name = value(EXTRA_NAME, group ? "Group" : "Chat");
@@ -1184,11 +1179,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
 
   private void showGroupPhotoCrop(Bitmap bitmap) {
     removeGroupPhotoCrop();
-    androidx.core.view.WindowInsetsControllerCompat bars =
-        WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
-    bars.setSystemBarsBehavior(
-        androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-    bars.hide(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.ime());
+    setSystemBarsHidden(true);
     groupPhotoCrop = new NativeCropView(this, bitmap, 495, 1155,
         new NativeCropView.Listener() {
           @Override public void onRetry() { groupPhotoPicker.launch("image/*"); }
@@ -1204,8 +1195,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
     NativeCropView current = groupPhotoCrop;
     groupPhotoCrop = null;
     if (current == null) return;
-    WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView())
-        .show(WindowInsetsCompat.Type.systemBars());
+    restoreSystemBars();
     if (current.getParent() instanceof ViewGroup)
       ((ViewGroup) current.getParent()).removeView(current);
     current.release();

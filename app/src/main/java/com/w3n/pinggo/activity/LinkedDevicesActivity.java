@@ -1,7 +1,6 @@
 package com.w3n.pinggo.activity;
 
 import android.content.Intent;
-import android.os.Build;
 import android.os.Bundle;
 import android.widget.FrameLayout;
 import android.widget.Toast;
@@ -9,12 +8,9 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
-import androidx.core.view.WindowInsetsControllerCompat;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -40,8 +36,7 @@ import retrofit2.Callback;
 import retrofit2.Response;
 
 /** Lists the installations registered to the account and allows remote logout. */
-public final class LinkedDevicesActivity extends AppCompatActivity {
-    private static final int SYSTEM_BAR_COLOR = 0xFFF7F9FB;
+public final class LinkedDevicesActivity extends PingGoActivity {
     private final ActivityResultLauncher<Intent> qrScanner = registerForActivityResult(
             new ActivityResultContracts.StartActivityForResult(), result -> {
                 Intent data = result.getData();
@@ -102,7 +97,6 @@ public final class LinkedDevicesActivity extends AppCompatActivity {
             finish();
             return;
         }
-        configureSystemBars();
         currentDeviceId = DeviceIdentityManager.getDeviceId(this);
         String token = LoginStateManager.getInstance().getUID(this) + "_"
                 + LoginStateManager.getInstance().getENC(this);
@@ -131,18 +125,6 @@ public final class LinkedDevicesActivity extends AppCompatActivity {
         });
         ViewCompat.requestApplyInsets(frame);
         registerAndLoad();
-    }
-
-    private void configureSystemBars() {
-        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-        getWindow().setStatusBarColor(SYSTEM_BAR_COLOR);
-        getWindow().setNavigationBarColor(SYSTEM_BAR_COLOR);
-        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(
-                getWindow(), getWindow().getDecorView());
-        controller.setAppearanceLightStatusBars(true);
-        controller.setAppearanceLightNavigationBars(true);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-            getWindow().setNavigationBarContrastEnforced(false);
     }
 
     @Override protected void onResume() {

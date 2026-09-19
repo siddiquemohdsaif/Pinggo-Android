@@ -79,80 +79,63 @@
             android:exported="false"
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
             android:resizeableActivity="true"
-            android:supportsPictureInPicture="true"
-            android:windowSoftInputMode="adjustNothing" />
+            android:supportsPictureInPicture="true" />
         <activity
             android:name=".activity.VideoCallActivity"
             android:exported="false"
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
             android:resizeableActivity="true"
-            android:supportsPictureInPicture="true"
-            android:windowSoftInputMode="adjustNothing" />
+            android:supportsPictureInPicture="true" />
         <activity
             android:name=".activity.VoiceCallActivity"
             android:exported="false"
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
             android:resizeableActivity="true"
-            android:supportsPictureInPicture="true"
-            android:windowSoftInputMode="adjustNothing" />
+            android:supportsPictureInPicture="true" />
         <activity
             android:name=".activity.NewChatActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustNothing" />
+            android:exported="false" />
         <activity
             android:name=".activity.CallDetailActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustNothing" />
+            android:exported="false" />
         <activity
             android:name=".activity.ChatActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustNothing" />
+            android:exported="false" />
         <activity
             android:name=".activity.ChatDetailsActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustNothing" />
+            android:exported="false" />
         <activity
             android:name=".activity.ChatInfoActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustNothing" />
+            android:exported="false" />
         <activity
             android:name=".activity.ChatMediaActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustNothing" />
+            android:exported="false" />
         <activity
             android:name=".activity.LinkedDevicesActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustNothing" />
+            android:exported="false" />
         <activity
             android:name=".activity.QrScannerActivity"
             android:exported="false"
-            android:screenOrientation="portrait"
-            android:windowSoftInputMode="adjustNothing" />
+            android:screenOrientation="portrait" />
         <activity
             android:name=".activity.CompanionLinkActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustNothing" />
+            android:exported="false" />
         <activity
             android:name=".activity.HomeActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustNothing" />
+            android:exported="false" />
         <activity
             android:name=".activity.SettingsActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustNothing" />
+            android:exported="false" />
         <activity
             android:name=".activity.LoginActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustNothing" />
+            android:exported="false" />
         <activity
             android:name=".activity.SignUpActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustNothing" />
+            android:exported="false" />
         <activity
             android:name=".activity.SplashScreenActivity"
             android:exported="true"
-            android:theme="@style/Theme.PingGo.Splash"
-            android:windowSoftInputMode="adjustNothing">
+            android:theme="@style/Theme.PingGo.Splash">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 

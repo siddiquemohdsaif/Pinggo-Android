@@ -12,10 +12,8 @@ import android.view.WindowManager;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import com.google.gson.JsonObject;
@@ -40,7 +38,7 @@ import retrofit2.Callback;
 import retrofit2.Response;
 
 /** Displays a short-lived QR and resumes pairing while its secret is still valid. */
-public final class CompanionLinkActivity extends AppCompatActivity {
+public final class CompanionLinkActivity extends PingGoActivity {
     private static final String PREFS = "PendingDeviceLink";
     private static final String REQUEST_ID = "requestId";
     private static final String SECRET = "secret";
@@ -59,7 +57,6 @@ public final class CompanionLinkActivity extends AppCompatActivity {
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
-        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         api = (AppContextProvider.isDevelopment ? API.devRetrofit : API.retrofit)
                 .create(AppRestAPI.class);
         companionView = new NativeCompanionLinkView(this,

@@ -25,11 +25,9 @@ import android.util.Log;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.call.ActiveCallRegistry;
@@ -44,7 +42,7 @@ import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import java.util.Map;
 
-public class VideoCallActivity extends AppCompatActivity implements VideoActiveCallView.Listener,
+public class VideoCallActivity extends PingGoActivity implements VideoActiveCallView.Listener,
     VideoCallController.Listener, ActiveCallRegistry.PictureInPictureHangupListener {
   private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig = new com.ogfa.nativeviews.component.FigmaConfig(
       1080f);
@@ -130,7 +128,6 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
             value(VoiceCallActivity.EXTRA_CALL_ID));
       else PingGoNotificationManager.markCallNotificationOpened(this, getIntent());
     }
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     ActiveCallRegistry.getInstance().register(this, value(VoiceCallActivity.EXTRA_CALL_CHAT_ID),
         ActiveCallRegistry.TYPE_VIDEO);
     audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
@@ -151,6 +148,11 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
           @Override public void handleOnBackPressed() { minimizeCall(); }
         });
     requestPermissionsAndStart();
+  }
+
+  @Override
+  protected SystemBarStyle defaultSystemBarStyle() {
+    return SystemBarStyle.DARK;
   }
 
   private void buildCallScreen() {

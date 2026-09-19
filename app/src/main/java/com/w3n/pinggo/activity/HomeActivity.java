@@ -8,7 +8,6 @@ import android.util.Log;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.ViewGroup;
-import android.view.Window;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 import com.google.gson.JsonArray;
@@ -18,13 +17,10 @@ import com.google.gson.JsonObject;
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
-import androidx.core.view.WindowInsetsControllerCompat;
 
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
@@ -57,11 +53,10 @@ import java.util.concurrent.Executors;
 /**
  * Hosts the AAR-native home surface and owns lifecycle, data, and navigation.
  */
-public class HomeActivity extends AppCompatActivity implements HomeView.Listener {
+public class HomeActivity extends PingGoActivity implements HomeView.Listener {
     private static final String TESTING_TAG = "PARVEZ_TESTING";
     private static final String CALL_PAGINATION_TAG = "CallPagination";
     private static final int SELECTION_STATUS_BAR_COLOR = 0xFFE9EDF0;
-    private static final int HOME_SYSTEM_BAR_COLOR = 0xFFF7F9FB;
     private HomeView homeView;
     private HomeMenuDialogView homeMenuDialog;
     private ChatRepository repository;
@@ -92,7 +87,6 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        configureSystemBars();
         homeView = new HomeView(this, this);
         setContentView(homeView);
         ExitAppController.install(this, null);
@@ -171,24 +165,6 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
                 && ContextCompat.checkSelfPermission(this,
                         Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS);
-        }
-    }
-
-    private void configureSystemBars() {
-        Window window = getWindow();
-        // Keep the activity full-sized when the IME opens. Screens that need to
-        // react to the keyboard do so through WindowInsetsCompat.
-        WindowCompat.setDecorFitsSystemWindows(window, false);
-
-        window.setStatusBarColor(HOME_SYSTEM_BAR_COLOR);
-        window.setNavigationBarColor(HOME_SYSTEM_BAR_COLOR);
-
-        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(window, window.getDecorView());
-        controller.setAppearanceLightStatusBars(true);
-        controller.setAppearanceLightNavigationBars(true);
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            window.setNavigationBarContrastEnforced(false);
         }
     }
 
@@ -681,13 +657,13 @@ public class HomeActivity extends AppCompatActivity implements HomeView.Listener
     public void onChatSelectionChanged(boolean selected) {
         getWindow().setStatusBarColor(selected
                 ? SELECTION_STATUS_BAR_COLOR
-                : HOME_SYSTEM_BAR_COLOR);
+                : APP_SYSTEM_BAR_COLOR);
     }
 
     @Override
     public void onCallSelectionChanged(boolean selected) {
         getWindow().setStatusBarColor(selected
-                ? SELECTION_STATUS_BAR_COLOR : HOME_SYSTEM_BAR_COLOR);
+                ? SELECTION_STATUS_BAR_COLOR : APP_SYSTEM_BAR_COLOR);
     }
 
     @Override

@@ -45,7 +45,6 @@ import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.lifecycle.LiveData;
@@ -98,14 +97,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 
-public class ChatActivity extends AppCompatActivity implements ChatViewListener {
+public class ChatActivity extends PingGoActivity implements ChatViewListener {
   private static final String TESTING_TAG = "PARVEZ_TESTING";
   private static final String LOCATION_PERF_TAG = "PingGoLocationPerf";
   private static final long LOCATION_CACHE_MAX_AGE_MS = 30_000L;
   private static final long LOCATION_FALLBACK_MAX_AGE_MS = 120_000L;
   private static final float LOCATION_ACCEPTABLE_ACCURACY_M = 100f;
   private static final int SELECTION_STATUS_BAR_COLOR = 0xFFE9EDF0;
-  private static final int DEFAULT_STATUS_BAR_COLOR = 0xFFF7F9FB;
   private static final int INITIAL_RENDER_WINDOW_SIZE = 15;
   private static final int PROGRESSIVE_RENDER_INCREMENT = ChatRepository.MESSAGE_PAGE_SIZE;
   private static final int MESSAGE_WINDOW_INCREMENT = ChatRepository.MESSAGE_PAGE_SIZE;
@@ -345,7 +343,6 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   protected void onCreate(Bundle state) {
     super.onCreate(state);
     long createStartedNanos = SystemClock.elapsedRealtimeNanos();
-    configureDefaultSystemBars();
     String name;
     chatId = getIntent().getStringExtra(EXTRA_CHAT_ID);
     groupChat = chatId != null && chatId.startsWith("grp_");
@@ -571,18 +568,6 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
       });
     observe();
     profiler.activityCreated(createStartedNanos);
-  }
-
-  private void configureDefaultSystemBars() {
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-    getWindow().setStatusBarColor(DEFAULT_STATUS_BAR_COLOR);
-    getWindow().setNavigationBarColor(DEFAULT_STATUS_BAR_COLOR);
-    WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(
-        getWindow(), getWindow().getDecorView());
-    controller.setAppearanceLightStatusBars(true);
-    controller.setAppearanceLightNavigationBars(true);
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-      getWindow().setNavigationBarContrastEnforced(false);
   }
 
   private void ensurePingGoStorageAccess() {
@@ -2781,7 +2766,7 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
   @Override
   public void onMessageSelectionChanged(boolean selected) {
     getWindow().setStatusBarColor(
-        selected ? SELECTION_STATUS_BAR_COLOR : DEFAULT_STATUS_BAR_COLOR);
+        selected ? SELECTION_STATUS_BAR_COLOR : APP_SYSTEM_BAR_COLOR);
   }
 
   private static boolean hasServerMessageId(MessageEntity message) {
@@ -3404,8 +3389,8 @@ public class ChatActivity extends AppCompatActivity implements ChatViewListener 
     boolean mediaVisible = activeMedia != null;
     boolean mediaNavigationVisible = mediaVisible && activeMedia.isNavigationBarVisible();
     getWindow().setStatusBarColor(
-        mediaNavigationVisible ? activeMedia.getNavigationBarColor() : DEFAULT_STATUS_BAR_COLOR);
-    getWindow().setNavigationBarColor(mediaVisible ? Color.BLACK : DEFAULT_STATUS_BAR_COLOR);
+        mediaNavigationVisible ? activeMedia.getNavigationBarColor() : APP_SYSTEM_BAR_COLOR);
+    getWindow().setNavigationBarColor(mediaVisible ? Color.BLACK : APP_SYSTEM_BAR_COLOR);
     WindowInsetsControllerCompat controller = new WindowInsetsControllerCompat(
         getWindow(), getWindow().getDecorView());
     if (mediaVisible && !mediaNavigationVisible) {

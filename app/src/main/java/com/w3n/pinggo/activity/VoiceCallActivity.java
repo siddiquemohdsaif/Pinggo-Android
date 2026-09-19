@@ -17,11 +17,9 @@ import android.widget.Toast;
 import com.google.gson.JsonObject;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.annotation.NonNull;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.call.WebRTCCallClient;
@@ -32,7 +30,7 @@ import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.notification.PingGoNotificationManager;
 import com.w3n.pinggo.views.call.VoiceActiveCallView;
 
-public class VoiceCallActivity extends AppCompatActivity
+public class VoiceCallActivity extends PingGoActivity
     implements VoiceActiveCallView.Listener, WebRTCCallClient.Listener,
     ChatRepository.CallEventListener, ActiveCallRegistry.PictureInPictureHangupListener {
   private static final String CALL_TRACE = "PingGoCallTrace";
@@ -140,7 +138,6 @@ public class VoiceCallActivity extends AppCompatActivity
         PingGoNotificationManager.clearCallNotification(this, callId());
       else PingGoNotificationManager.markCallNotificationOpened(this, getIntent());
     }
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
     ActiveCallRegistry.getInstance().register(this,
         getIntent().getStringExtra(EXTRA_CALL_CHAT_ID), ActiveCallRegistry.TYPE_VOICE);
@@ -175,6 +172,11 @@ public class VoiceCallActivity extends AppCompatActivity
       startOutgoingTone();
       requestMicrophoneAndStart();
     }
+  }
+
+  @Override
+  protected SystemBarStyle defaultSystemBarStyle() {
+    return SystemBarStyle.DARK;
   }
 
   private boolean isIncoming() {

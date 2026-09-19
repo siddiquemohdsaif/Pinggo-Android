@@ -6,7 +6,6 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
 import android.provider.ContactsContract;
 import android.view.ViewGroup;
@@ -16,14 +15,11 @@ import com.w3n.pinggo.Util.PhoneNumberFormatter;
 import com.w3n.pinggo.Util.login.CountryDetector;
 import android.widget.Toast;
 import androidx.annotation.NonNull;
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
-import androidx.core.view.WindowInsetsControllerCompat;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -46,8 +42,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class NewChatActivity extends AppCompatActivity implements NewChatView.Listener {
-  private static final int SYSTEM_BAR_COLOR = 0xFFF7F9FB;
+public class NewChatActivity extends PingGoActivity implements NewChatView.Listener {
   public static final String EXTRA_SHOW_CHAT_LIST = "com.w3n.pinggo.EXTRA_SHOW_CHAT_LIST";
   private boolean showChatList;
   public static final String EXTRA_CREATE_GROUP = "com.w3n.pinggo.EXTRA_CREATE_GROUP";
@@ -128,7 +123,6 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
       @Override public void handleOnBackPressed() { onBack(); }
     });
-    configureSystemBars();
     newChatView = new NewChatView(this, this);
     forwardSourceChatId = getIntent().getStringExtra(EXTRA_FORWARD_SOURCE_CHAT_ID);
     forwardMessageIds = getIntent().getStringArrayListExtra(EXTRA_FORWARD_MESSAGE_IDS);
@@ -181,18 +175,6 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
         });
     ViewCompat.requestApplyInsets(newChatView);
     loadContactsWithPermission();
-  }
-
-  private void configureSystemBars() {
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-    getWindow().setStatusBarColor(SYSTEM_BAR_COLOR);
-    getWindow().setNavigationBarColor(SYSTEM_BAR_COLOR);
-    WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(
-        getWindow(), getWindow().getDecorView());
-    controller.setAppearanceLightStatusBars(true);
-    controller.setAppearanceLightNavigationBars(true);
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-      getWindow().setNavigationBarContrastEnforced(false);
   }
 
   private void loadContactsWithPermission() {
@@ -874,9 +856,7 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
 
   private void showGroupCrop(android.graphics.Bitmap bitmap) {
     removeGroupCrop();
-    androidx.core.view.WindowInsetsControllerCompat bars = WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
-    bars.setSystemBarsBehavior(androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-    bars.hide(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.ime());
+    setSystemBarsHidden(true);
     groupCropView = new com.w3n.pinggo.views.common.NativeCropView(this, bitmap, 495, 1155,
         new com.w3n.pinggo.views.common.NativeCropView.Listener() {
           @Override public void onRetry() { groupPhotoPicker.launch("image/*"); }
@@ -896,7 +876,7 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     com.w3n.pinggo.views.common.NativeCropView current = groupCropView;
     groupCropView = null;
     if (current == null) return;
-    WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView()).show(WindowInsetsCompat.Type.systemBars());
+    restoreSystemBars();
     if (current.getParent() instanceof ViewGroup) ((ViewGroup) current.getParent()).removeView(current);
     current.release();
   }

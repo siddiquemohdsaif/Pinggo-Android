@@ -4,19 +4,15 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.content.Intent;
-import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.ViewGroup;
 import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
-import androidx.core.view.WindowInsetsControllerCompat;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.RestApi.APIAuth;
 import com.w3n.pinggo.Database.CloudFunction.RestApi.AppRestAPI;
@@ -40,8 +36,7 @@ import java.net.URL;
 import java.util.List;
 import java.util.ArrayList;
 
-public class SettingsActivity extends AppCompatActivity implements SettingsView.Listener {
-  private static final int SYSTEM_BAR_COLOR = 0xFFF7F9FB;
+public class SettingsActivity extends PingGoActivity implements SettingsView.Listener {
   private SettingsView settingsView;
   private ActivityResultLauncher<String> picker;
   private Bitmap selectedPhoto;
@@ -54,7 +49,6 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
-    configureSystemBars();
     settingsView = new SettingsView(this, this);
     setContentView(settingsView);
     ViewCompat.setOnApplyWindowInsetsListener(
@@ -75,18 +69,6 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
       }
     });
     refresh();
-  }
-
-  private void configureSystemBars() {
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-    getWindow().setStatusBarColor(SYSTEM_BAR_COLOR);
-    getWindow().setNavigationBarColor(SYSTEM_BAR_COLOR);
-    WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(
-        getWindow(), getWindow().getDecorView());
-    controller.setAppearanceLightStatusBars(true);
-    controller.setAppearanceLightNavigationBars(true);
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-      getWindow().setNavigationBarContrastEnforced(false);
   }
 
   private void refresh() {
@@ -278,11 +260,7 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
 
   private void showCrop(Bitmap bitmap) {
     removeCropView();
-    WindowInsetsControllerCompat bars = WindowCompat.getInsetsController(
-        getWindow(), getWindow().getDecorView());
-    bars.setSystemBarsBehavior(
-        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-    bars.hide(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.ime());
+    setSystemBarsHidden(true);
     cropView = new NativeCropView(this, bitmap, MIN_CROP_BOX_SIZE_PX, MAX_CROP_BOX_SIZE_PX,
         new NativeCropView.Listener() {
           @Override
@@ -316,9 +294,7 @@ public class SettingsActivity extends AppCompatActivity implements SettingsView.
     cropView = null;
     if (current == null)
       return;
-    WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView())
-        .show(WindowInsetsCompat.Type.systemBars());
-    configureSystemBars();
+    restoreSystemBars();
     if (current.getParent() instanceof ViewGroup) {
       ((ViewGroup) current.getParent()).removeView(current);
     }

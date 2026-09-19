@@ -18,11 +18,9 @@ import android.widget.FrameLayout;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import com.google.zxing.BarcodeFormat;
@@ -46,7 +44,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Pinggo-owned camera scanner. ZXing decoding is local and needs no Google Play service. */
 @SuppressWarnings("deprecation")
-public final class QrScannerActivity extends AppCompatActivity {
+public final class QrScannerActivity extends PingGoActivity {
   public static final String EXTRA_RESULT = "com.w3n.pinggo.QR_SCAN_RESULT";
   private static final int MAX_RESULT_LENGTH = 8192;
   private static final long DECODE_INTERVAL_MS = 140L;
@@ -85,7 +83,6 @@ public final class QrScannerActivity extends AppCompatActivity {
   @Override protected void onCreate(Bundle state) {
     super.onCreate(state);
     getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     configureReader();
 
     FrameLayout root = new FrameLayout(this);
@@ -108,6 +105,11 @@ public final class QrScannerActivity extends AppCompatActivity {
     ViewCompat.requestApplyInsets(scannerView);
 
     if (!hasCameraPermission()) cameraPermission.launch(Manifest.permission.CAMERA);
+  }
+
+  @Override
+  protected SystemBarStyle defaultSystemBarStyle() {
+    return SystemBarStyle.DARK;
   }
 
   private void configureReader() {

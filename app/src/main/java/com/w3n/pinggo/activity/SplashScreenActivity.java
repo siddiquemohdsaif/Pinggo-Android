@@ -7,10 +7,8 @@ import android.os.SystemClock;
 import android.util.Log;
 import android.widget.Toast;
 
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import com.w3n.pinggo.AppContextProvider;
@@ -30,7 +28,7 @@ import com.ogfa.nativeviews.font.NativeFonts;
 
 import org.json.JSONObject;
 
-public class SplashScreenActivity extends AppCompatActivity {
+public class SplashScreenActivity extends PingGoActivity {
     private static final String FONT_PREWARM_TAG = "FontPrewarm";
     private static final long MINIMUM_SPLASH_DURATION_MS = 1000L;
     private static final long APP_CONFIG_TIMEOUT_MS = 5000L;
@@ -45,7 +43,6 @@ public class SplashScreenActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         setContentView(R.layout.activity_splash_screen);
         splashAnimationView = findViewById(R.id.splashAnimationView);
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
@@ -62,6 +59,11 @@ public class SplashScreenActivity extends AppCompatActivity {
         MainRunnerThread.runDelayed(this::onAppConfigTimeout, APP_CONFIG_TIMEOUT_MS);
         MainRunnerThread.runDelayed(
                 () -> onFontPrewarmFinished("timeout"), FONT_PREWARM_TIMEOUT_MS);
+    }
+
+    @Override
+    protected SystemBarStyle defaultSystemBarStyle() {
+        return SystemBarStyle.THEME_MANAGED;
     }
 
     @Override

@@ -4,11 +4,9 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.os.Bundle;
 
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.activity.OnBackPressedCallback;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import com.w3n.pinggo.R;
@@ -20,7 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /** Shared details surface for direct conversations and groups. */
-public final class ChatDetailsActivity extends AppCompatActivity {
+public final class ChatDetailsActivity extends PingGoActivity {
   private NativeChatDetailsView detailsView;
   private ProfilePhotoPreviewView profilePhotoPreview;
   private Bitmap profileBitmap;
@@ -38,7 +36,6 @@ public final class ChatDetailsActivity extends AppCompatActivity {
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     boolean group = getIntent().getBooleanExtra(EXTRA_IS_GROUP, false);
     String name = value(EXTRA_NAME, group ? "Group" : "Chat");
 

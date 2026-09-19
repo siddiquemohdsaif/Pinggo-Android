@@ -30,11 +30,9 @@ import android.widget.GridLayout;
 import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.google.gson.JsonObject;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
@@ -81,7 +79,7 @@ import kotlin.coroutines.EmptyCoroutineContext;
 import kotlin.coroutines.intrinsics.IntrinsicsKt;
 
 /** Java-only LiveKit call screen for direct and group voice/video calls. */
-public final class LiveKitCallActivity extends AppCompatActivity
+public final class LiveKitCallActivity extends PingGoActivity
     implements ChatRepository.CallEventListener, VoiceActiveCallView.Listener,
     VideoActiveCallView.Listener, ActiveCallRegistry.PictureInPictureHangupListener {
   private static final String TAG = "PingGoLiveKit";
@@ -193,7 +191,6 @@ public final class LiveKitCallActivity extends AppCompatActivity
 
   @Override protected void onCreate(Bundle state) {
     super.onCreate(state);
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     conference = chatId().startsWith("grp_")
         || getIntent().getBooleanExtra(EXTRA_CONFERENCE_CALL, false);
     ArrayList<String> initialParticipants = getIntent().getStringArrayListExtra(
@@ -1514,5 +1511,10 @@ public final class LiveKitCallActivity extends AppCompatActivity
     @Override public boolean onTouchEvent(MotionEvent event){
       return labelLayers.onTouchEvent(event)||avatarLayers.onTouchEvent(event)||super.onTouchEvent(event);
     }
+  }
+
+  @Override
+  protected SystemBarStyle defaultSystemBarStyle() {
+    return SystemBarStyle.DARK;
   }
 }

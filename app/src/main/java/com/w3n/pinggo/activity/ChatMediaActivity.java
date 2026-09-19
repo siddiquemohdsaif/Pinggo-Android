@@ -22,10 +22,8 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.Toast;
 
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.widget.NestedScrollView;
 
@@ -60,7 +58,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** Full conversation attachment browser, split into Media, Docs and Links. */
-public final class ChatMediaActivity extends AppCompatActivity {
+public final class ChatMediaActivity extends PingGoActivity {
   public static final String EXTRA_CHAT_ID = "pinggo.media.CHAT_ID";
   public static final String EXTRA_CHAT_NAME = "pinggo.media.CHAT_NAME";
   private static final int PAGE_SIZE = 10;
@@ -96,9 +94,6 @@ public final class ChatMediaActivity extends AppCompatActivity {
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-    getWindow().setStatusBarColor(0xFFF9FBFE);
-    getWindow().setNavigationBarColor(0xFFF9FBFE);
     chatId = getIntent().getStringExtra(EXTRA_CHAT_ID);
     userId = LoginStateManager.getInstance().getUID(this);
     repository = ChatRepository.getInstance(this);

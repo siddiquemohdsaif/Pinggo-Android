@@ -4,21 +4,15 @@ import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
 import android.view.ViewGroup;
-import android.view.Window;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
-import androidx.core.view.WindowInsetsControllerCompat;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ProfilePhotoLocalStore;
@@ -32,7 +26,7 @@ import java.io.IOException;
 import java.io.InputStream;
 
 /** Owns and displays the single AAR-native profile setup view. */
-public class SignUpActivity extends AppCompatActivity {
+public class SignUpActivity extends PingGoActivity {
   public static final String EXTRA_PHONE_NUMBER = "com.w3n.pinggo.extra.PHONE_NUMBER";
   public static final String EXTRA_EMAIL = "com.w3n.pinggo.extra.EMAIL";
   private static final int MIN_CROP_BOX_SIZE_PX = 495;
@@ -51,8 +45,6 @@ public class SignUpActivity extends AppCompatActivity {
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
-    WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-    configureSystemBars();
     phoneNumber = getIntent().getStringExtra(EXTRA_PHONE_NUMBER);
     email = getIntent().getStringExtra(EXTRA_EMAIL);
     email = email == null ? "" : email.trim();
@@ -100,18 +92,9 @@ public class SignUpActivity extends AppCompatActivity {
     });
   }
 
-  private void configureSystemBars() {
-    Window window = getWindow();
-    int color = ContextCompat.getColor(this, R.color.login_system_bar_background);
-    window.setStatusBarColor(color);
-    window.setNavigationBarColor(color);
-    WindowInsetsControllerCompat controller =
-        WindowCompat.getInsetsController(window, window.getDecorView());
-    controller.setAppearanceLightStatusBars(true);
-    controller.setAppearanceLightNavigationBars(true);
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-      window.setNavigationBarContrastEnforced(false);
-    }
+  @Override
+  protected SystemBarStyle defaultSystemBarStyle() {
+    return SystemBarStyle.AUTH;
   }
 
   private void onPhotoSelected(Uri uri) {
@@ -134,10 +117,7 @@ public class SignUpActivity extends AppCompatActivity {
 
   private void showCropView(Bitmap bitmap) {
     removeCropView();
-    WindowInsetsControllerCompat bars = WindowCompat.getInsetsController(
-        getWindow(), getWindow().getDecorView());
-    bars.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-    bars.hide(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.ime());
+    setSystemBarsHidden(true);
     cropView = new NativeCropView(this, bitmap,
         MIN_CROP_BOX_SIZE_PX, MAX_CROP_BOX_SIZE_PX,
         new NativeCropView.Listener() {
@@ -161,9 +141,7 @@ public class SignUpActivity extends AppCompatActivity {
     NativeCropView current = cropView;
     cropView = null;
     if (current == null) return;
-    WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView())
-        .show(WindowInsetsCompat.Type.systemBars());
-    configureSystemBars();
+    restoreSystemBars();
     if (current.getParent() instanceof ViewGroup) {
       ((ViewGroup) current.getParent()).removeView(current);
     }

@@ -1,20 +1,14 @@
 package com.w3n.pinggo.activity;
 
-import android.os.Build;
 import android.os.Bundle;
 import android.view.MotionEvent;
 import android.view.View;
-import android.view.Window;
 import android.view.ViewGroup;
 import android.widget.Toast;
 
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
-import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.fragment.app.Fragment;
 
 import com.w3n.pinggo.R;
@@ -23,13 +17,12 @@ import com.w3n.pinggo.views.common.ExitAppController;
 import com.w3n.pinggo.data.local.SessionLogoutManager;
 
 /** Hosts the fragments that make up the login flow. */
-public class LoginActivity extends AppCompatActivity {
+public class LoginActivity extends PingGoActivity {
     public static final String EXTRA_LOGOUT_MESSAGE = "logoutMessage";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        configureSystemBars();
         setContentView(R.layout.activity_login);
         installStatusBarScrim();
         ExitAppController.install(this, getSupportFragmentManager());
@@ -43,24 +36,9 @@ public class LoginActivity extends AppCompatActivity {
         }
     }
 
-    private void configureSystemBars() {
-        Window window = getWindow();
-        // Keep the activity at its full size when the IME opens. Login content
-        // handles IME insets explicitly and moves only the focused card.
-        WindowCompat.setDecorFitsSystemWindows(window, false);
-
-        int systemBarColor = ContextCompat.getColor(
-                this, R.color.login_system_bar_background);
-        window.setStatusBarColor(systemBarColor);
-        window.setNavigationBarColor(systemBarColor);
-
-        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(window, window.getDecorView());
-        controller.setAppearanceLightStatusBars(true);
-        controller.setAppearanceLightNavigationBars(true);
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            window.setNavigationBarContrastEnforced(false);
-        }
+    @Override
+    protected SystemBarStyle defaultSystemBarStyle() {
+        return SystemBarStyle.AUTH;
     }
 
     /**
