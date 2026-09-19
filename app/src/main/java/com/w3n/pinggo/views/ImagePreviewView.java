@@ -2,8 +2,8 @@ package com.w3n.pinggo.views;
 
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Matrix;
 import android.graphics.RectF;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -12,13 +12,15 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewConfiguration;
 import android.widget.FrameLayout;
-import android.widget.ImageView;
 import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.ogfa.nativeviews.progress.Progress;
+import com.ogfa.nativeviews.image.Image;
+import com.ogfa.nativeviews.zlayer.ZLayer;
+import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.data.cache.MediaPreviewCache;
 import com.w3n.pinggo.views.chat.ConversationMenuDialogView;
@@ -121,6 +123,7 @@ public final class ImagePreviewView extends NativeMediaScreenView {
     menu.release();
     header.release();
     loading.release();
+    image.release();
     super.release();
   }
 
@@ -144,49 +147,60 @@ public final class ImagePreviewView extends NativeMediaScreenView {
   }
 
   /** Fit-center image surface with bounded pinch zoom and one-finger panning. */
-  private static final class ZoomableImageView extends ImageView {
+  private static final class ZoomableImageView extends View {
     private static final float MAX_ZOOM = 4f;
-    private final Matrix transform = new Matrix();
-    private final RectF mappedImage = new RectF();
+    private final ZLayerGroup layers = new ZLayerGroup(this);
+    private final ZLayer imageLayer = layers.addLayer("preview_image");
     private final ScaleGestureDetector scaleDetector;
     private final float touchSlop;
+    private Bitmap bitmap;
+    private Image nativeImage;
     private float zoom = 1f;
+    private float panX, panY;
     private float lastX, lastY, downX, downY;
     private boolean moved, multiTouch;
 
     ZoomableImageView(Context context) {
       super(context);
-      setScaleType(ScaleType.MATRIX);
+      setClickable(true);
       touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
       scaleDetector = new ScaleGestureDetector(context,
           new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override public boolean onScaleBegin(ScaleGestureDetector detector) {
               multiTouch = true;
-              return getDrawable() != null;
+              return bitmap != null;
             }
 
             @Override public boolean onScale(ScaleGestureDetector detector) {
               float requested = detector.getScaleFactor();
               if (!Float.isFinite(requested) || requested <= 0f) return false;
               float next = clamp(zoom * requested, 1f, MAX_ZOOM);
-              float applied = next / zoom;
               zoom = next;
-              transform.postScale(applied, applied,
-                  detector.getFocusX(), detector.getFocusY());
-              constrainTransform();
+              updateImageRegion();
               return true;
             }
           });
     }
 
     void setPreviewBitmap(Bitmap bitmap) {
-      super.setImageBitmap(bitmap);
-      resetTransform();
+      this.bitmap = bitmap;
+      zoom = 1f;
+      panX = panY = 0f;
+      imageLayer.clear();
+      if (bitmap != null && getWidth() > 0 && getHeight() > 0) {
+        nativeImage = imageLayer.add(new Image.Builder(getContext(), "preview", bitmap,
+            fittedBounds()).setScaleType(Image.ScaleType.FIT_XY));
+      }
+      invalidate();
     }
 
     @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
       super.onSizeChanged(width, height, oldWidth, oldHeight);
-      resetTransform();
+      if (bitmap != null) {
+        imageLayer.clear();
+        nativeImage = imageLayer.add(new Image.Builder(getContext(), "preview", bitmap,
+            fittedBounds()).setScaleType(Image.ScaleType.FIT_XY));
+      }
     }
 
     @Override public boolean onTouchEvent(MotionEvent event) {
@@ -207,8 +221,9 @@ public final class ImagePreviewView extends NativeMediaScreenView {
           if (Math.abs(x - downX) > touchSlop || Math.abs(y - downY) > touchSlop)
             moved = true;
           if (!scaleDetector.isInProgress() && zoom > 1f && event.getPointerCount() == 1) {
-            transform.postTranslate(x - lastX, y - lastY);
-            constrainTransform();
+            panX += x - lastX;
+            panY += y - lastY;
+            updateImageRegion();
           }
           lastX = x;
           lastY = y;
@@ -228,41 +243,36 @@ public final class ImagePreviewView extends NativeMediaScreenView {
       return true;
     }
 
-    private void resetTransform() {
-      if (getDrawable() == null || getWidth() <= 0 || getHeight() <= 0) return;
-      float drawableWidth = getDrawable().getIntrinsicWidth();
-      float drawableHeight = getDrawable().getIntrinsicHeight();
-      if (drawableWidth <= 0f || drawableHeight <= 0f) return;
-      float fittedScale = Math.min(getWidth() / drawableWidth, getHeight() / drawableHeight);
-      float dx = (getWidth() - drawableWidth * fittedScale) / 2f;
-      float dy = (getHeight() - drawableHeight * fittedScale) / 2f;
-      transform.reset();
-      transform.postScale(fittedScale, fittedScale);
-      transform.postTranslate(dx, dy);
-      zoom = 1f;
-      setImageMatrix(transform);
+    @Override protected void onDraw(Canvas canvas) {
+      super.onDraw(canvas);
+      layers.draw(canvas);
     }
 
-    private void constrainTransform() {
-      if (getDrawable() == null) return;
-      mappedImage.set(0f, 0f, getDrawable().getIntrinsicWidth(),
-          getDrawable().getIntrinsicHeight());
-      transform.mapRect(mappedImage);
-      float dx = mappedImage.width() <= getWidth()
-          ? getWidth() / 2f - mappedImage.centerX()
-          : mappedImage.left > 0f ? -mappedImage.left
-          : mappedImage.right < getWidth() ? getWidth() - mappedImage.right : 0f;
-      float dy = mappedImage.height() <= getHeight()
-          ? getHeight() / 2f - mappedImage.centerY()
-          : mappedImage.top > 0f ? -mappedImage.top
-          : mappedImage.bottom < getHeight() ? getHeight() - mappedImage.bottom : 0f;
-      transform.postTranslate(dx, dy);
-      setImageMatrix(transform);
+    private RectF fittedBounds() {
+      if (bitmap == null || getWidth() <= 0 || getHeight() <= 0) return new RectF();
+      float fit = Math.min(getWidth() / (float) bitmap.getWidth(),
+          getHeight() / (float) bitmap.getHeight());
+      float width = bitmap.getWidth() * fit * zoom;
+      float height = bitmap.getHeight() * fit * zoom;
+      float maxPanX = Math.max(0f, (width - getWidth()) / 2f);
+      float maxPanY = Math.max(0f, (height - getHeight()) / 2f);
+      panX = clamp(panX, -maxPanX, maxPanX);
+      panY = clamp(panY, -maxPanY, maxPanY);
+      float left = (getWidth() - width) / 2f + panX;
+      float top = (getHeight() - height) / 2f + panY;
+      return new RectF(left, top, left + width, top + height);
+    }
+
+    private void updateImageRegion() {
+      if (nativeImage != null) nativeImage.setRegion(fittedBounds());
+      invalidate();
     }
 
     private static float clamp(float value, float minimum, float maximum) {
       return Math.max(minimum, Math.min(maximum, value));
     }
+
+    void release() { layers.release(); }
   }
 
   private static final class NativeProgressOverlay extends View {

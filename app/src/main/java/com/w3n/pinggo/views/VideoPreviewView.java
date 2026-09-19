@@ -1,18 +1,19 @@
 package com.w3n.pinggo.views;
 
 import android.content.Context;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.RectF;
 import android.media.MediaPlayer;
 import android.media.PlaybackParams;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
-import android.widget.SeekBar;
-import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.VideoView;
 import androidx.annotation.NonNull;
@@ -22,6 +23,10 @@ import androidx.core.view.WindowInsetsCompat;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.data.cache.MediaPreviewCache;
 import com.w3n.pinggo.views.chat.ConversationMenuDialogView;
+import com.ogfa.nativeviews.progress.Progress;
+import com.ogfa.nativeviews.text.Text;
+import com.ogfa.nativeviews.zlayer.ZLayer;
+import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import java.util.Arrays;
 
 /** Complete full-screen video-message overlay. */
@@ -32,8 +37,11 @@ public final class VideoPreviewView extends NativeMediaScreenView {
       {"0.25×", "0.5×", "0.75×", "1×", "1.25×", "1.5×", "1.75×", "2×"};
   private final Listener listener;
   private final VideoView video;
-  private final SeekBar seek;
-  private final TextView playbackTime;
+  private final ZLayerGroup timelineLayers;
+  private final ZLayer timelineLayer;
+  private final View timelineHost;
+  private Progress seek;
+  private Text playbackTime;
   private final NativeMediaTopBarView header;
   private final NativeVideoControlsView controls;
   private final NativeReplyComposerView composer;
@@ -43,18 +51,19 @@ public final class VideoPreviewView extends NativeMediaScreenView {
   private MediaPlayer player;
   private float speed = 1f;
   private boolean released;
-  private boolean userSeeking;
+  private boolean updatingTimeline;
   private final Runnable update = new Runnable() {
     @Override public void run() {
       if (released) return;
       int duration = video.getDuration();
       if (duration > 0) {
-        seek.setMax(duration);
-        if (!userSeeking) {
-          int position = video.getCurrentPosition();
-          seek.setProgress(position);
-          updatePlaybackTime(position, duration);
+        int position = video.getCurrentPosition();
+        if (seek != null) {
+          updatingTimeline = true;
+          seek.setProgressPercent(position * 100f / duration);
+          updatingTimeline = false;
         }
+        updatePlaybackTime(position, duration);
       }
       handler.postDelayed(this, 250);
     }
@@ -70,28 +79,45 @@ public final class VideoPreviewView extends NativeMediaScreenView {
     video = new VideoView(context);
     addView(video, new FrameLayout.LayoutParams(
         LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT, Gravity.CENTER));
-    seek = new SeekBar(context);
-    seek.setBackgroundColor(Color.TRANSPARENT);
-    FrameLayout.LayoutParams seekParams = new FrameLayout.LayoutParams(
+    timelineLayers = new ZLayerGroup(this);
+    timelineLayer = timelineLayers.addLayer("video_timeline");
+    timelineHost = new View(context) {
+      @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
+        timelineLayer.clear();
+        if (width <= 0 || height <= 0) return;
+        seek = timelineLayer.add(new Progress.Builder(getContext(), "video_seek",
+            new RectF(0f, 0f, width, dp(20)))
+            .setStyle(Progress.Style.LINEAR).setMode(Progress.Mode.DETERMINATE)
+            .setTrackColor(0x66FFFFFF).setProgressColor(Color.WHITE)
+            .setThicknessPx(dp(4)).setCornerRadiusPx(dp(2))
+            .setProgressPercent(0f)
+            .setOnProgressChangedListener((id, percent) -> {
+              if (updatingTimeline) return;
+              int duration = video.getDuration();
+              if (duration <= 0) return;
+              int position = Math.round(duration * Math.max(0f, Math.min(100f, percent)) / 100f);
+              video.seekTo(position);
+              updatePlaybackTime(position, duration);
+            }));
+        playbackTime = timelineLayer.add(new Text.Builder(getContext(), "video_time",
+            "0:00 / 0:00", new RectF(0f, dp(18), width, height))
+            .setTextColor(Color.WHITE).setTextSizePx(dp(12))
+            .setAlignment(Text.Alignment.CENTER)
+            .setVerticalAlignment(Text.VerticalAlignment.CENTER).setMaxLines(1));
+      }
+      @Override protected void onDraw(Canvas canvas) { timelineLayers.draw(canvas); }
+      @Override public boolean onTouchEvent(MotionEvent event) {
+        return timelineLayers.onTouchEvent(event) || super.onTouchEvent(event);
+      }
+    };
+    timelineHost.setClickable(true);
+    timelineHost.setContentDescription("Video playback timeline");
+    FrameLayout.LayoutParams timelineParams = new FrameLayout.LayoutParams(
         LayoutParams.MATCH_PARENT, dp(48), Gravity.BOTTOM);
-    seekParams.leftMargin = dp(70);
-    seekParams.rightMargin = dp(110);
-    seekParams.bottomMargin = dp(100);
-    addView(seek, seekParams);
-    playbackTime = new TextView(context);
-    playbackTime.setText("0:00 / 0:00");
-    playbackTime.setTextColor(Color.WHITE);
-    playbackTime.setTextSize(12f);
-    playbackTime.setGravity(Gravity.CENTER);
-    playbackTime.setSingleLine(true);
-    playbackTime.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
-    playbackTime.setContentDescription("Video playback time");
-    FrameLayout.LayoutParams playbackTimeParams = new FrameLayout.LayoutParams(
-        LayoutParams.MATCH_PARENT, dp(24), Gravity.BOTTOM);
-    playbackTimeParams.leftMargin = dp(70);
-    playbackTimeParams.rightMargin = dp(110);
-    playbackTimeParams.bottomMargin = dp(84);
-    addView(playbackTime, playbackTimeParams);
+    timelineParams.leftMargin = dp(70);
+    timelineParams.rightMargin = dp(110);
+    timelineParams.bottomMargin = dp(84);
+    addView(timelineHost, timelineParams);
     controls = new NativeVideoControlsView(context, new NativeVideoControlsView.Listener() {
       @Override public void onPlayPause() { toggle(); }
       @Override public void onSpeed(View anchor) { showSpeed(anchor); }
@@ -107,8 +133,7 @@ public final class VideoPreviewView extends NativeMediaScreenView {
     addView(controls, controlsParams);
     // The controls view spans the full width and overlaps the seek bar vertically.
     // Keep the seek bar above it so its transparent center cannot consume scrub gestures.
-    seek.bringToFront();
-    playbackTime.bringToFront();
+    timelineHost.bringToFront();
     header = new NativeMediaTopBarView(context, senderId, sentTime, true,
         new NativeMediaTopBarView.Listener() {
           @Override public void onBack() { listener.onClose(); }
@@ -143,38 +168,17 @@ public final class VideoPreviewView extends NativeMediaScreenView {
           (FrameLayout.LayoutParams) controls.getLayoutParams();
       updatedControls.bottomMargin = dp(84) + bottomInset;
       controls.setLayoutParams(updatedControls);
-      FrameLayout.LayoutParams updatedSeek = (FrameLayout.LayoutParams) seek.getLayoutParams();
-      updatedSeek.bottomMargin = dp(100) + bottomInset;
-      seek.setLayoutParams(updatedSeek);
-      FrameLayout.LayoutParams updatedPlaybackTime =
-          (FrameLayout.LayoutParams) playbackTime.getLayoutParams();
-      updatedPlaybackTime.bottomMargin = dp(84) + bottomInset;
-      playbackTime.setLayoutParams(updatedPlaybackTime);
+      FrameLayout.LayoutParams updatedTimeline =
+          (FrameLayout.LayoutParams) timelineHost.getLayoutParams();
+      updatedTimeline.bottomMargin = dp(84) + bottomInset;
+      timelineHost.setLayoutParams(updatedTimeline);
       return insets;
     });
     video.setOnClickListener(view -> setControlsVisible(header.getVisibility() != VISIBLE));
-    seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-      @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
-        if (fromUser) {
-          video.seekTo(progress);
-          updatePlaybackTime(progress, bar.getMax());
-        }
-      }
-      @Override public void onStartTrackingTouch(SeekBar bar) {
-        userSeeking = true;
-      }
-      @Override public void onStopTrackingTouch(SeekBar bar) {
-        video.seekTo(bar.getProgress());
-        userSeeking = false;
-        handler.removeCallbacks(update);
-        handler.post(update);
-      }
-    });
     video.setOnPreparedListener(prepared -> {
       player = prepared;
       int duration = prepared.getDuration();
       if (duration > 0) {
-        seek.setMax(duration);
         updatePlaybackTime(video.getCurrentPosition(), duration);
       }
       video.start();
@@ -184,8 +188,13 @@ public final class VideoPreviewView extends NativeMediaScreenView {
     });
     video.setOnCompletionListener(completed -> {
       controls.setPlaying(false);
-      seek.setProgress(seek.getMax());
-      updatePlaybackTime(seek.getMax(), seek.getMax());
+      int duration = video.getDuration();
+      if (seek != null) {
+        updatingTimeline = true;
+        seek.setProgressPercent(100f);
+        updatingTimeline = false;
+      }
+      updatePlaybackTime(duration, duration);
       handler.removeCallbacks(update);
     });
     video.setOnErrorListener((failed, what, extra) -> {
@@ -219,8 +228,7 @@ public final class VideoPreviewView extends NativeMediaScreenView {
     int visibility = visible ? VISIBLE : GONE;
     header.setVisibility(visibility);
     controls.setVisibility(visibility);
-    seek.setVisibility(visibility);
-    playbackTime.setVisibility(visibility);
+    timelineHost.setVisibility(visibility);
     composer.setVisibility(visibility);
     setNavigationBarState(visible, HEADER_COLOR);
   }
@@ -261,8 +269,8 @@ public final class VideoPreviewView extends NativeMediaScreenView {
     int safeDuration = Math.max(0, durationMs);
     int safePosition = Math.max(0, Math.min(positionMs, safeDuration));
     String value = formatTime(safePosition) + " / " + formatTime(safeDuration);
-    playbackTime.setText(value);
-    playbackTime.setContentDescription("Video playback time " + value);
+    if (playbackTime != null) playbackTime.setText(value);
+    timelineHost.setContentDescription("Video playback time " + value);
   }
 
   private static String formatTime(int milliseconds) {
@@ -297,6 +305,7 @@ public final class VideoPreviewView extends NativeMediaScreenView {
     handler.removeCallbacks(update);
     video.stopPlayback();
     player = null;
+    timelineLayers.release();
     header.release();
     controls.release();
     super.release();

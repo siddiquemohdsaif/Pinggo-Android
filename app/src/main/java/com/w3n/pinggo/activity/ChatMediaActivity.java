@@ -1,7 +1,11 @@
 package com.w3n.pinggo.activity;
 
 import android.content.Intent;
-import android.graphics.Typeface;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.RectF;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
@@ -11,10 +15,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.GridLayout;
 import android.widget.FrameLayout;
-import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
-import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
@@ -22,7 +23,6 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
-import androidx.core.widget.NestedScrollView;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -37,6 +37,14 @@ import com.w3n.pinggo.views.chat.ChatHeaderComponent;
 import com.w3n.pinggo.views.chat.MediaAttachmentOpener;
 import com.w3n.pinggo.views.chat.MediaRecordTypes;
 import com.w3n.pinggo.views.home.HomeMenuDialogView;
+import com.ogfa.nativeviews.image.Image;
+import com.ogfa.nativeviews.list.ComponentList;
+import com.ogfa.nativeviews.progress.Progress;
+import com.ogfa.nativeviews.text.FontVariation;
+import com.ogfa.nativeviews.text.Text;
+import com.ogfa.nativeviews.font.NativeFonts;
+import com.ogfa.nativeviews.zlayer.ZLayer;
+import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -56,7 +64,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
 
   private final List<JsonObject> records = new ArrayList<>();
   private final Set<String> recordIds = new HashSet<>();
-  private final Map<String, ImageView> images = new HashMap<>();
+  private final Map<String, NativeImageSlot> images = new HashMap<>();
   private final Map<String, MessageEntity> messages = new HashMap<>();
   private String chatId;
   private String userId;
@@ -68,15 +76,15 @@ public final class ChatMediaActivity extends AppCompatActivity {
   private GridLayout mediaGrid;
   private int renderedGeneration = -1;
   private LinearLayout content;
-  private TextView mediaTab;
-  private TextView docsTab;
-  private TextView linksTab;
+  private NativeTextSlot mediaTab;
+  private NativeTextSlot docsTab;
+  private NativeTextSlot linksTab;
   private ChatRepository repository;
-  private ProgressBar pageProgress;
+  private NativeProgressSlot pageProgress;
   private HomeMenuDialogView mediaMenu;
   private MediaAttachmentOpener attachmentOpener;
   private int pageGeneration;
-  private NestedScrollView mediaScroll;
+  private ComponentScrollHost mediaScroll;
   private FrameLayout mediaViewport;
   private int traceScrollY;
   private int tracePage;
@@ -103,7 +111,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
     repository.observeLocalAttachments(chatId).observe(this, values -> {
       if (values == null) return;
       for (MessageEntity stored : values) {
-        ImageView image = images.get(stored.attachmentId);
+        NativeImageSlot image = images.get(stored.attachmentId);
         MessageEntity message = messages.get(stored.attachmentId);
         if (image != null && message != null && stored.attachmentLocalUri != null)
           thumbnail(image, Uri.parse(stored.attachmentLocalUri), message);
@@ -131,31 +139,17 @@ public final class ChatMediaActivity extends AppCompatActivity {
     root.addView(tabs, new LinearLayout.LayoutParams(-1, dp(52)));
     updateTabs();
 
-    // NestedScrollView clamps each animation frame against the current content range,
-    // rather than retaining the old bottom boundary when a page is appended mid-fling.
-    NestedScrollView scroll = new NestedScrollView(this) {
-      @Override public void fling(int velocityY) {
-        traceMedia("fling", "velocityY=" + velocityY);
-        super.fling(velocityY);
-      }
-    };
+    ComponentScrollHost scroll = new ComponentScrollHost();
     mediaScroll = scroll;
     scroll.setBackgroundColor(0xFFF7F9FB);
     content = column();
     content.setPadding(dp(12), dp(12), dp(12), dp(28));
-    scroll.addView(content);
-    scroll.setOnTouchListener((v, event) -> {
-      if (event.getActionMasked() == MotionEvent.ACTION_DOWN
-          || event.getActionMasked() == MotionEvent.ACTION_UP
-          || event.getActionMasked() == MotionEvent.ACTION_CANCEL)
-        traceMedia("touch", "action=" + event.getActionMasked());
-      return false;
-    });
+    scroll.setScrollContent(content);
     content.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
       if (b - t != ob - ot) traceMedia("layout", "oldHeight=" + (ob - ot));
     });
-    scroll.getViewTreeObserver().addOnScrollChangedListener(() -> {
-      int y = scroll.getScrollY();
+    scroll.setOnOffsetChanged(() -> {
+      int y = scroll.currentScrollY();
       if (y != traceScrollY) {
         traceMedia("scroll", "deltaY=" + (y - traceScrollY));
         traceScrollY = y;
@@ -179,8 +173,8 @@ public final class ChatMediaActivity extends AppCompatActivity {
     if (mediaMenu != null) mediaMenu.show();
   }
 
-  private TextView tab(String caption, String value) {
-    TextView tab = label(caption, 15, true);
+  private NativeTextSlot tab(String caption, String value) {
+    NativeTextSlot tab = label(caption, 15, true);
     tab.setGravity(Gravity.CENTER);
     tab.setOnClickListener(v -> {
       selectCategory(value);
@@ -206,7 +200,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
     loading = false;
     removePageProgress();
     updateTabs();
-    mediaScroll.scrollTo(0, 0);
+    mediaScroll.scrollToStart();
     loadNext();
     render();
   }
@@ -315,8 +309,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
     boolean appendTiles = mediaGrid != null && renderedGeneration == pageGeneration
         && !"links".equals(selected);
     if (appendTiles) {
-      // Keep existing rows attached: replacing the ScrollView child resets/clamps its
-      // scroll position and can move the row under the user's finger during paging.
+      // Keep existing rows attached so paging preserves the current ComponentList offset.
       for (int i = content.getChildCount() - 1; i >= 0; i--)
         if (content.getChildAt(i) != mediaGrid) content.removeViewAt(i);
     } else {
@@ -340,7 +333,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
   private void maybeLoadNext() {
     if (loading || !hasMore || pagingFailed || isFinishing() || isDestroyed()
         || mediaScroll.getHeight() <= 0) return;
-    int viewportBottom = mediaScroll.getScrollY() + mediaScroll.getHeight();
+    int viewportBottom = mediaScroll.currentScrollY() + mediaScroll.getHeight();
     boolean nearEnd = viewportBottom >= content.getHeight() - dp(160);
     boolean incompleteVisibleRow = false;
     if (mediaGrid != null && mediaGrid.getChildCount() > 0) {
@@ -365,9 +358,9 @@ public final class ChatMediaActivity extends AppCompatActivity {
     if (mediaGrid != null) {
       for (int i = 0; i < mediaGrid.getChildCount(); i++) {
         View tile = mediaGrid.getChildAt(i);
-        if (mediaGrid.getTop() + tile.getBottom() > mediaScroll.getScrollY()) {
+        if (mediaGrid.getTop() + tile.getBottom() > mediaScroll.currentScrollY()) {
           anchor = i;
-          offset = mediaGrid.getTop() + tile.getTop() - mediaScroll.getScrollY();
+          offset = mediaGrid.getTop() + tile.getTop() - mediaScroll.currentScrollY();
           break;
         }
       }
@@ -375,7 +368,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
     Log.d("PingGoMediaPaging", "event=" + event + " category=" + selected
         + " generation=" + pageGeneration + " page=" + tracePage + " records=" + records.size()
         + " tiles=" + (mediaGrid == null ? 0 : mediaGrid.getChildCount())
-        + " scrollY=" + mediaScroll.getScrollY() + " viewport=" + mediaScroll.getHeight()
+        + " scrollY=" + mediaScroll.currentScrollY() + " viewport=" + mediaScroll.getHeight()
         + " contentHeight=" + content.getHeight() + " anchor=" + anchor + " offset=" + offset
         + " cursor=" + cursor + " loading=" + loading + " hasMore=" + hasMore
         + " footer=" + (pageProgress != null) + " " + detail);
@@ -384,7 +377,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
   private void showPageProgress() {
     if (pageProgress != null)
       return;
-    pageProgress = new ProgressBar(this);
+    pageProgress = new NativeProgressSlot();
     // An overlay avoids growing/shrinking the scroll range just to show loading.
     FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(44), dp(44));
     params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
@@ -397,6 +390,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
       return;
     if (pageProgress.getParent() == mediaViewport)
       mediaViewport.removeView(pageProgress);
+    pageProgress.release();
     pageProgress = null;
   }
 
@@ -420,8 +414,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
       tile.setOnClickListener(v -> attachmentOpener.open(message));
       tile.setGravity(Gravity.CENTER);
       tile.setPadding(dp(4), dp(4), dp(4), dp(8));
-      ImageView image = new ImageView(this);
-      image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+      NativeImageSlot image = new NativeImageSlot();
       image.setImageResource("file".equalsIgnoreCase(type) ? android.R.drawable.ic_menu_save
           : android.R.drawable.ic_menu_gallery);
       tile.addView(image, new LinearLayout.LayoutParams(-1, dp("media".equals(selected) ? 112 : 82)));
@@ -452,7 +445,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
       Matcher matcher = LINK.matcher(string(record, "text"));
       while (matcher.find()) {
         count++;
-        TextView link = label(matcher.group(), 15, false);
+        NativeTextSlot link = label(matcher.group(), 15, false);
         link.setTextColor(0xFF087EA4);
         String url = matcher.group();
         link.setPadding(dp(8), dp(16), dp(8), dp(16));
@@ -469,7 +462,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
       content.addView(empty(loading || hasMore ? "Loading links…" : "No links found"));
   }
 
-  private ChatRepository.DownloadCallback callback(ImageView image, MessageEntity message) {
+  private ChatRepository.DownloadCallback callback(NativeImageSlot image, MessageEntity message) {
     return new ChatRepository.DownloadCallback() {
       @Override
       public void onAvailable(Uri uri) {
@@ -495,7 +488,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
       if (transfer == null || transfer.attachmentId == null || transfer.localUri == null
           || !"completed".equalsIgnoreCase(transfer.status))
         continue;
-      ImageView image = images.get(transfer.attachmentId);
+      NativeImageSlot image = images.get(transfer.attachmentId);
       MessageEntity message = messages.get(transfer.attachmentId);
       if (image != null && message != null) {
         thumbnail(image, Uri.parse(transfer.localUri), message);
@@ -503,7 +496,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
     }
   }
 
-  private void thumbnail(ImageView image, Uri uri, MessageEntity message) {
+  private void thumbnail(NativeImageSlot image, Uri uri, MessageEntity message) {
     if (isFinishing() || isDestroyed()) return;
     String key = uri.toString();
     if (key.equals(image.getTag())) return;
@@ -540,7 +533,7 @@ public final class ChatMediaActivity extends AppCompatActivity {
         });
   }
 
-  private boolean reuseLoadedThumbnail(ImageView image, MessageEntity message) {
+  private boolean reuseLoadedThumbnail(NativeImageSlot image, MessageEntity message) {
     if (!"image".equalsIgnoreCase(message.messageType)
         && !"video".equalsIgnoreCase(message.messageType)) return false;
     boolean video = "video".equalsIgnoreCase(message.messageType);
@@ -581,8 +574,8 @@ public final class ChatMediaActivity extends AppCompatActivity {
     return value;
   }
 
-  private TextView empty(String text) {
-    TextView view = label(text, 15, false);
+  private NativeTextSlot empty(String text) {
+    NativeTextSlot view = label(text, 15, false);
     view.setGravity(Gravity.CENTER);
     view.setPadding(0, dp(48), 0, 0);
     return view;
@@ -612,14 +605,8 @@ public final class ChatMediaActivity extends AppCompatActivity {
     return v;
   }
 
-  private TextView label(String text, int size, boolean bold) {
-    TextView v = new TextView(this);
-    v.setText(text);
-    v.setTextSize(size);
-    v.setTextColor(0xFF07131E);
-    if (bold)
-      v.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-    return v;
+  private NativeTextSlot label(String text, int size, boolean bold) {
+    return new NativeTextSlot(text, size, bold);
   }
 
   private LinearLayout.LayoutParams weighted() {
@@ -630,8 +617,190 @@ public final class ChatMediaActivity extends AppCompatActivity {
     return Math.round(value * getResources().getDisplayMetrics().density);
   }
 
+  /** Screen-owned host whose vertical scrolling is supplied by the AAR ComponentList. */
+  private final class ComponentScrollHost extends FrameLayout {
+    private final ZLayerGroup scrollLayers = new ZLayerGroup(this);
+    private final ZLayer scrollLayer = scrollLayers.addLayer("chat_media_scroll");
+    private ComponentList<String> scrollList;
+    private View scrollContent;
+    private Runnable offsetChanged;
+    private float lastOffset;
+    private float downY;
+    private boolean dragging;
+    ComponentScrollHost() { super(ChatMediaActivity.this); setClipChildren(true); }
+    void setScrollContent(View child) {
+      removeAllViews(); scrollContent=child;
+      addView(child,new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+          ViewGroup.LayoutParams.WRAP_CONTENT));
+      child.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob) -> {
+        if (b-t != ob-ot || r-l != or-ol) rebuildScroll();
+      });
+    }
+    void setOnOffsetChanged(Runnable listener) { offsetChanged=listener; }
+    int currentScrollY() { return Math.round(lastOffset); }
+    void scrollToStart() {
+      lastOffset=0f; rebuildScroll(); syncScroll();
+    }
+    @Override protected void onSizeChanged(int w,int h,int ow,int oh){
+      super.onSizeChanged(w,h,ow,oh); rebuildScroll();
+    }
+    private void rebuildScroll() {
+      if(getWidth()<=0||getHeight()<=0||scrollContent==null)return;
+      float offset=scrollList==null?lastOffset:scrollList.getScrollOffset();
+      scrollLayer.clear();
+      scrollList=scrollLayer.add(new ComponentList.Builder<String>(getContext(),"media_scroll_list",
+          new RectF(0,0,getWidth(),getHeight())).setOrientation(ComponentList.Orientation.VERTICAL)
+          .setItemSize(Math.max(getHeight()+1,scrollContent.getHeight()))
+          .setAdapter(new ComponentList.Adapter<String>(){
+            @Override public int getItemCount(){return 1;}
+            @Override public String getItem(int position){return "content";}
+            @Override public void onCreateItem(ComponentList.Item item,int type){item.addLayer("spacer");}
+            @Override public void onBindItem(ComponentList.Item item,String value,int position){}
+          }).setScrollEnabled(true).setFlingEnabled(true).setOverscrollEnabled(false)
+          .setClipToBounds(true));
+      if(offset>0f)scrollList.scrollBy(0f,offset);
+      syncScroll();
+    }
+    private void syncScroll(){
+      if(scrollList==null||scrollContent==null)return;
+      float previous=lastOffset;
+      lastOffset=scrollList.getScrollOffset();
+      scrollContent.setTranslationY(-lastOffset);
+      if(offsetChanged!=null&&Math.abs(previous-lastOffset)>=.5f)offsetChanged.run();
+    }
+    @Override public boolean dispatchTouchEvent(MotionEvent event){
+      if(scrollList==null)return super.dispatchTouchEvent(event);
+      if(event.getActionMasked()==MotionEvent.ACTION_DOWN){
+        downY=event.getY();dragging=false;scrollLayers.onTouchEvent(event);
+        traceMedia("touch","action="+event.getActionMasked());
+        return super.dispatchTouchEvent(event);
+      }
+      if(event.getActionMasked()==MotionEvent.ACTION_MOVE){
+        if(!dragging&&Math.abs(event.getY()-downY)>dp(6)){
+          dragging=true;
+          MotionEvent cancel=MotionEvent.obtain(event);
+          cancel.setAction(MotionEvent.ACTION_CANCEL);
+          super.dispatchTouchEvent(cancel);
+          cancel.recycle();
+        }
+        scrollLayers.onTouchEvent(event);syncScroll();if(dragging)return true;
+      }else if(event.getActionMasked()==MotionEvent.ACTION_UP
+          ||event.getActionMasked()==MotionEvent.ACTION_CANCEL){
+        scrollLayers.onTouchEvent(event);syncScroll();
+        traceMedia("touch","action="+event.getActionMasked());
+        if(dragging){dragging=false;return true;}
+      }
+      return super.dispatchTouchEvent(event);
+    }
+    @Override protected void dispatchDraw(Canvas canvas){syncScroll();super.dispatchDraw(canvas);}
+    void release(){scrollLayers.release();}
+  }
+
+  /** Activity-owned AAR text surface; no compatibility widget class is created. */
+  private final class NativeTextSlot extends View {
+    private final ZLayerGroup layers = new ZLayerGroup(this);
+    private final ZLayer layer = layers.addLayer("chat_media_text");
+    private String value;
+    private final int sizeSp;
+    private final boolean bold;
+    private int color = 0xFF07131E;
+    private int gravity = Gravity.START | Gravity.CENTER_VERTICAL;
+    NativeTextSlot(String value, int sizeSp, boolean bold) {
+      super(ChatMediaActivity.this);
+      this.value = value == null ? "" : value; this.sizeSp = sizeSp; this.bold = bold;
+      setClickable(false);
+    }
+    void setText(String text) { value = text == null ? "" : text; rebuild(); }
+    void setTextColor(int color) { this.color = color; rebuild(); }
+    void setGravity(int gravity) { this.gravity = gravity; rebuild(); }
+    private void rebuild() {
+      if (getWidth() <= 0 || getHeight() <= 0) return;
+      layer.clear();
+      Text.Alignment alignment = (gravity & Gravity.CENTER_HORIZONTAL) != 0
+          ? Text.Alignment.CENTER : (gravity & Gravity.END) != 0
+              ? Text.Alignment.END : Text.Alignment.START;
+      layer.add(new Text.Builder(getContext(), "value", value,
+          new RectF(getPaddingLeft(), getPaddingTop(),
+              getWidth() - getPaddingRight(), getHeight() - getPaddingBottom()))
+          .setFont(NativeFonts.INTER)
+          .setFontVariations(bold ? FontVariation.BOLD : FontVariation.REGULAR)
+          .setTextColor(color).setTextSizePx(sizeSp * getResources().getDisplayMetrics().scaledDensity)
+          .setAlignment(alignment).setVerticalAlignment(Text.VerticalAlignment.CENTER)
+          .setMaxLines(3));
+      invalidate();
+    }
+    @Override protected void onMeasure(int widthSpec, int heightSpec) {
+      android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+      paint.setTextSize(sizeSp * getResources().getDisplayMetrics().scaledDensity);
+      int desiredWidth = (int) Math.ceil(paint.measureText(value)) + getPaddingLeft() + getPaddingRight();
+      int desiredHeight = (int) Math.ceil(paint.getFontMetrics().descent - paint.getFontMetrics().ascent)
+          + getPaddingTop() + getPaddingBottom();
+      setMeasuredDimension(resolveSize(desiredWidth, widthSpec), resolveSize(desiredHeight, heightSpec));
+    }
+    @Override protected void onSizeChanged(int w, int h, int ow, int oh) { rebuild(); }
+    @Override protected void onDraw(Canvas canvas) { layers.draw(canvas); }
+    @Override public boolean onTouchEvent(MotionEvent event) {
+      return layers.onTouchEvent(event) || super.onTouchEvent(event);
+    }
+    void release() { layers.release(); }
+  }
+
+  /** Activity-owned AAR image surface used by attachment tiles. */
+  private final class NativeImageSlot extends View {
+    private final ZLayerGroup layers = new ZLayerGroup(this);
+    private final ZLayer layer = layers.addLayer("chat_media_image");
+    private Bitmap bitmap;
+    private boolean ownsBitmap;
+    NativeImageSlot() { super(ChatMediaActivity.this); }
+    void setScaleType(Object ignored) { }
+    void setImageResource(int resource) {
+      Bitmap decoded = BitmapFactory.decodeResource(getResources(), resource);
+      replace(decoded, true);
+    }
+    void setImageBitmap(Bitmap bitmap) { replace(bitmap, false); }
+    private void replace(Bitmap next, boolean owned) {
+      if (ownsBitmap && bitmap != null && bitmap != next && !bitmap.isRecycled()) bitmap.recycle();
+      bitmap = next; ownsBitmap = owned; rebuild();
+    }
+    private void rebuild() {
+      if (getWidth() <= 0 || getHeight() <= 0 || bitmap == null || bitmap.isRecycled()) return;
+      layer.clear();
+      layer.add(new Image.Builder(getContext(), "image", bitmap,
+          new RectF(0, 0, getWidth(), getHeight())).setScaleType(Image.ScaleType.CENTER_CROP));
+      invalidate();
+    }
+    @Override protected void onSizeChanged(int w, int h, int ow, int oh) { rebuild(); }
+    @Override protected void onDraw(Canvas canvas) { layers.draw(canvas); }
+    void release() {
+      layers.release();
+      if (ownsBitmap && bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
+    }
+  }
+
+  /** Activity-owned indeterminate AAR progress surface. */
+  private final class NativeProgressSlot extends View {
+    private final ZLayerGroup layers = new ZLayerGroup(this);
+    private final ZLayer layer = layers.addLayer("chat_media_progress");
+    NativeProgressSlot() { super(ChatMediaActivity.this); }
+    @Override protected void onSizeChanged(int w, int h, int ow, int oh) {
+      layer.clear();
+      if (w <= 0 || h <= 0) return;
+      layer.add(new Progress.Builder(getContext(), "progress", new RectF(0, 0, w, h))
+          .setStyle(Progress.Style.CIRCULAR).setMode(Progress.Mode.INDETERMINATE)
+          .setTrackColor(0x22019CC4).setProgressColor(0xFF019CC4));
+    }
+    @Override protected void onDraw(Canvas canvas) { layers.draw(canvas); invalidate(); }
+    void release() { layers.release(); }
+  }
+
   @Override
   protected void onDestroy() {
+    if (mediaScroll != null) mediaScroll.release();
+    for (NativeImageSlot image : images.values()) image.release();
+    if (mediaTab != null) mediaTab.release();
+    if (docsTab != null) docsTab.release();
+    if (linksTab != null) linksTab.release();
+    if (pageProgress != null) pageProgress.release();
     if (mediaMenu != null) mediaMenu.release();
     mediaMenu = null;
     super.onDestroy();

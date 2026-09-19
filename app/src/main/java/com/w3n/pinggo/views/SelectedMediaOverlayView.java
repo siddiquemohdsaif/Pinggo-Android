@@ -3,8 +3,11 @@ package com.w3n.pinggo.views;
 import android.content.Context;
 import android.database.Cursor;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
+import android.graphics.RectF;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.SurfaceTexture;
 import android.media.MediaCodec;
@@ -28,18 +31,18 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
-import android.widget.Button;
-import android.widget.EditText;
+import android.view.inputmethod.InputConnection;
 import android.widget.FrameLayout;
-import android.widget.HorizontalScrollView;
-import android.widget.ImageView;
-import android.widget.LinearLayout;
 import android.widget.Toast;
 import android.text.InputType;
-import android.text.Editable;
-import android.text.TextWatcher;
 import com.w3n.pinggo.R;
 import com.w3n.pinggo.views.common.NativePromptDialogView;
+import com.ogfa.nativeviews.button.Button;
+import com.ogfa.nativeviews.image.Image;
+import com.ogfa.nativeviews.list.ComponentList;
+import com.ogfa.nativeviews.textfield.TextField;
+import com.ogfa.nativeviews.zlayer.ZLayer;
+import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsAnimationCompat;
@@ -78,7 +81,6 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
   private final Listener listener;
   private final String senderId;
   private final FrameLayout root;
-  private ImageView imagePreview;
   private SelectedImageEditorView imageEditor;
   private TextureView videoPreview;
   private NativeFilePreviewView filePreview;
@@ -86,12 +88,11 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
   private VideoTrimStripView videoTrimStrip;
   private NativeSelectedVideoToolsView videoInfo;
   private final Map<String, VideoEditState> videoEdits = new HashMap<>();
-  private HorizontalScrollView selectionStrip;
-  private LinearLayout selectionItems;
+  private NativeSelectionStrip selectionStrip;
   private NativeSelectedMediaChromeView chrome;
-  private FrameLayout captionBar;
-  private EditText captionInput;
-  private EditorTextInput textInput;
+  private NativeCaptionBar captionBar;
+  private TextField captionInput;
+  private NativeEditorTextInput textInput;
   private View editorScrim;
   private EditorColorPaletteView colorPalette;
   private NativePromptDialogView editPrompt;
@@ -127,13 +128,13 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
       return true;
     }
     if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
-      if (captionInput != null && captionInput.hasFocus()
-          && !touchInside(event, captionInput)) {
+      if (captionInput != null && captionInput.isFocused()
+          && !touchInside(event, captionBar)) {
         hideCaptionKeyboard();
         dismissingKeyboardGesture = true;
         return true;
       }
-      if (textInput != null && textInput.hasFocus()
+      if (textInput != null && textInput.isFieldFocused()
           && !touchInside(event, textInput)) {
         finishEditorMode();
         dismissingKeyboardGesture = true;
@@ -189,10 +190,6 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
   }
 
   private void buildUi() {
-    imagePreview = new ImageView(getContext());
-    imagePreview.setScaleType(ImageView.ScaleType.FIT_CENTER);
-    imagePreview.setVisibility(View.GONE);
-    root.addView(imagePreview, match());
     imageEditor = new SelectedImageEditorView(getContext());
     imageEditor.setHistoryChangedListener(() -> {
       if (chrome != null) chrome.setUndoAvailable(imageEditor.canUndoStroke());
@@ -238,54 +235,21 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
     videoToolsParams.topMargin = px(185f);
     root.addView(videoTools, videoToolsParams);
 
-    selectionStrip = new HorizontalScrollView(getContext());
-    selectionStrip.setHorizontalScrollBarEnabled(false);
+    selectionStrip = new NativeSelectionStrip(getContext());
     selectionStrip.setBackgroundColor(Color.TRANSPARENT);
-    selectionStrip.setPadding(px(22f), px(19.25f), px(22f), px(19.25f));
-    selectionItems = new LinearLayout(getContext());
-    selectionItems.setOrientation(LinearLayout.HORIZONTAL);
-    selectionItems.setGravity(Gravity.CENTER_VERTICAL);
-    selectionStrip.addView(selectionItems, new HorizontalScrollView.LayoutParams(
-        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
     FrameLayout.LayoutParams stripParams = new FrameLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT, px(150f), Gravity.BOTTOM);
     stripParams.bottomMargin = px(300f);
     root.addView(selectionStrip, stripParams);
 
-    captionBar = new FrameLayout(getContext());
+    captionBar = new NativeCaptionBar(getContext());
+    captionInput = captionBar.input();
     captionBar.setBackground(rounded(0xFF121820, px(58f)));
-    Button gallery = new Button(getContext());
-    gallery.setText("▣+");
-    gallery.setTextColor(Color.WHITE);
-    gallery.setTextSize(25f);
-    gallery.setBackgroundColor(Color.TRANSPARENT);
-    gallery.setOnClickListener(view -> {
+    captionBar.setGalleryClick(() -> {
       dismissEditorKeyboards();
       Selection selection = selection();
       listener.onCameraRequested(selection.uris, selection.types);
     });
-    captionBar.addView(gallery, new FrameLayout.LayoutParams(px(110f), px(110f), Gravity.START));
-    captionInput = new EditText(getContext());
-    captionInput.setSingleLine(true);
-    captionInput.setHint("Add a caption...");
-    captionInput.setHintTextColor(0xFFB8C0C7);
-    captionInput.setTextColor(Color.WHITE);
-    captionInput.setTextSize(18f);
-    captionInput.setBackgroundColor(Color.TRANSPARENT);
-    captionInput.setOnFocusChangeListener(
-        (view, focused) -> ViewCompat.requestApplyInsets(SelectedMediaOverlayView.this));
-    captionInput.setOnTouchListener((view, event) -> {
-      if (event.getActionMasked() != MotionEvent.ACTION_DOWN || !captionInput.hasFocus()) {
-        return false;
-      }
-      hideCaptionKeyboard();
-      return true;
-    });
-    FrameLayout.LayoutParams captionParams = new FrameLayout.LayoutParams(
-        ViewGroup.LayoutParams.MATCH_PARENT, px(110f));
-    captionParams.leftMargin = px(110f);
-    captionParams.rightMargin = px(24f);
-    captionBar.addView(captionInput, captionParams);
     FrameLayout.LayoutParams captionBarParams = new FrameLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT, px(110f), Gravity.BOTTOM);
     captionBarParams.leftMargin = px(22f);
@@ -300,40 +264,13 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
     editorScrim.setVisibility(View.GONE);
     root.addView(editorScrim, match());
 
-    textInput = new EditorTextInput(getContext());
+    textInput = new NativeEditorTextInput(getContext());
     textInput.setKeyboardDismissListener(() -> post(this::finishEditorMode));
-    textInput.setSingleLine(false);
-    textInput.setMaxLines(Integer.MAX_VALUE);
-    textInput.setHorizontallyScrolling(false);
-    textInput.setInputType(InputType.TYPE_CLASS_TEXT
-        | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
-    textInput.setGravity(Gravity.CENTER);
-    textInput.setHint("Add text");
-    textInput.setHintTextColor(0xFFB7BDC4);
     textInput.setTextColor(editorTextColor);
     textInput.setTextSize(24f);
-    textInput.setPadding(px(24f), px(14f), px(24f), px(14f));
-    textInput.setMinWidth(px(170f));
     textInput.setMaxWidth(Math.round(getResources().getDisplayMetrics().widthPixels * .8f));
-    textInput.setMinHeight(px(68f));
-    textInput.setBackgroundColor(Color.TRANSPARENT);
     textInput.setLineBackgroundColor(0xFF3A4047);
-    textInput.setImeOptions(EditorInfo.IME_FLAG_NO_ENTER_ACTION);
     textInput.setVisibility(View.GONE);
-    textInput.addTextChangedListener(new TextWatcher() {
-      @Override public void beforeTextChanged(CharSequence value, int start, int count, int after) {}
-      @Override public void onTextChanged(CharSequence value, int start, int before, int count) {
-        textInput.requestLayout();
-        textInput.post(SelectedMediaOverlayView.this::updateEditorInputSize);
-      }
-      @Override public void afterTextChanged(Editable value) {}
-    });
-    textInput.setOnEditorActionListener((view, actionId, event) -> {
-      boolean keyboardDone = actionId == EditorInfo.IME_ACTION_DONE;
-      if (!keyboardDone) return false;
-      finishEditorMode();
-      return true;
-    });
     FrameLayout.LayoutParams textParams = new FrameLayout.LayoutParams(
         ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
     root.addView(textInput, textParams);
@@ -426,31 +363,21 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
   }
 
   private void rebuildStrip() {
-    selectionItems.removeAllViews();
     selectionStrip.setVisibility(items.size() > 1 ? View.VISIBLE : View.GONE);
     chrome.setState(previewTitle(), items.size() > 1);
-    for (PreviewItem item : items) {
-      ImageView thumbnail = new ImageView(getContext());
-      thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
-      thumbnail.setOnClickListener(view -> refreshPreview(item));
-      selectionItems.addView(thumbnail, thumbnailParams());
-      if (item.isFile()) {
-        thumbnail.setImageResource(R.drawable.chat_document);
-        continue;
-      }
+    selectionStrip.setItems(items);
+    for (int position = 0; position < items.size(); position++) {
+      PreviewItem item = items.get(position);
+      if (item.isFile()) continue;
+      final int itemPosition = position;
       thumbnailExecutor.execute(() -> {
         Bitmap bitmap = loadThumbnail(item.uri);
         post(() -> {
-          if (isAttachedToWindow() && bitmap != null) thumbnail.setImageBitmap(bitmap);
+          if (isAttachedToWindow() && bitmap != null)
+            selectionStrip.setThumbnail(item, itemPosition, bitmap);
         });
       });
     }
-  }
-
-  private LinearLayout.LayoutParams thumbnailParams() {
-    LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(px(192.5f), px(192.5f));
-    params.setMarginEnd(px(19.25f));
-    return params;
   }
 
   private Bitmap loadThumbnail(Uri uri) {
@@ -466,7 +393,7 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
     InputMethodManager keyboard =
         (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
     if (keyboard != null) {
-      keyboard.hideSoftInputFromWindow(captionInput.getWindowToken(), 0);
+      keyboard.hideSoftInputFromWindow(captionBar.getWindowToken(), 0);
     }
     captionInput.clearFocus();
     root.requestFocus();
@@ -477,8 +404,8 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
     InputMethodManager keyboard =
         (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
     if (captionInput != null) {
-      if (keyboard != null && captionInput.getWindowToken() != null) {
-        keyboard.hideSoftInputFromWindow(captionInput.getWindowToken(), 0);
+      if (keyboard != null && captionBar.getWindowToken() != null) {
+        keyboard.hideSoftInputFromWindow(captionBar.getWindowToken(), 0);
       }
       captionInput.clearFocus();
     }
@@ -592,8 +519,6 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
     activeItem = item;
     pendingVideoUri = null;
     releaseVideo();
-    imagePreview.setImageDrawable(null);
-    imagePreview.setVisibility(View.GONE);
     imageEditor.clearActive();
     imageEditor.setVisibility(View.GONE);
     videoPreview.setVisibility(View.GONE);
@@ -644,7 +569,7 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
     imageEditor.setTextColor(editorTextColor);
     updateEditorTextColors(editorTextColor);
     textInput.setVisibility(View.VISIBLE);
-    textInput.requestFocus();
+    textInput.focusField();
     textInput.setSelection(textInput.length());
     InputMethodManager keyboard =
         (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
@@ -684,7 +609,7 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
     updateEditorTextColors(color);
     textInput.setText(value == null ? "" : value);
     textInput.setVisibility(View.VISIBLE);
-    textInput.requestFocus();
+    textInput.focusField();
     textInput.setSelection(textInput.length());
     InputMethodManager keyboard =
         (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
@@ -703,33 +628,23 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
 
   /** Preserves both entered newlines and the input's visual wrapping after Done. */
   private String multilineEditorText() {
-    CharSequence value = textInput.getText();
-    android.text.Layout layout = textInput.getLayout();
-    if (value == null || value.length() == 0 || layout == null) {
-      return value == null ? "" : value.toString();
-    }
-    int lineCount = layout.getLineCount();
-    StringBuilder result = new StringBuilder(value.length() + lineCount);
-    for (int line = 0; line < lineCount; line++) {
-      int start = layout.getLineStart(line);
-      int end = layout.getLineEnd(line);
-      while (end > start && (value.charAt(end - 1) == '\n'
-          || value.charAt(end - 1) == '\r')) end--;
-      while (start < end && Character.isWhitespace(value.charAt(start))) start++;
-      while (end > start && Character.isWhitespace(value.charAt(end - 1))) end--;
-      result.append(value, start, end);
-      if (line < lineCount - 1) result.append('\n');
+    String value = textInput.getText();
+    String[] lines = value.split("\\r?\\n", -1);
+    StringBuilder result = new StringBuilder(value.length());
+    for (int line = 0; line < lines.length; line++) {
+      if (line > 0) result.append('\n');
+      result.append(lines[line].trim());
     }
     return result.toString();
   }
 
   private void updateEditorInputSize() {
     if (textInput == null) return;
-    String value = textInput.getText() == null ? "" : textInput.getText().toString();
-    android.text.TextPaint basePaint = new android.text.TextPaint(textInput.getPaint());
+    String value = textInput.getText();
+    android.text.TextPaint basePaint = new android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG);
     basePaint.setTextSize(24f * getResources().getDisplayMetrics().scaledDensity);
     int availableWidth = Math.max(1,
-        textInput.getMaxWidth() - textInput.getPaddingLeft() - textInput.getPaddingRight());
+        textInput.getMaxWidth() - px(48f));
     android.text.StaticLayout baseLayout = android.text.StaticLayout.Builder.obtain(
             value, 0, value.length(), basePaint, availableWidth)
         .setIncludePad(false)
@@ -737,8 +652,7 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
     int lines = Math.max(1, baseLayout.getLineCount());
     float scale = lines <= 5 ? 1f : Math.max(.55f, 1f - (lines - 5) * .07f);
     float targetSize = 24f * scale;
-    if (Math.abs(textInput.getTextSize()
-        / getResources().getDisplayMetrics().scaledDensity - targetSize) > .1f) {
+    if (Math.abs(textInput.getTextSizeSp() - targetSize) > .1f) {
       textInput.setTextSize(targetSize);
       textInput.requestLayout();
     }
@@ -979,7 +893,7 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
 
   private void sendSelection() {
     if (textInput.getVisibility() == View.VISIBLE) commitEditorText();
-    String caption = captionInput.getText().toString().trim();
+    String caption = captionInput.getText().trim();
     thumbnailExecutor.execute(() -> {
       Selection selection = editedSelection();
       post(() -> listener.onSend(selection.uris, selection.types, caption));
@@ -1234,6 +1148,9 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
     if (videoInfo != null) videoInfo.release();
     if (chrome != null) chrome.release();
     if (imageEditor != null) imageEditor.release();
+    if (selectionStrip != null) selectionStrip.release();
+    if (captionBar != null) captionBar.release();
+    if (textInput != null) textInput.release();
     removeEditPrompt();
     super.release();
   }
@@ -1343,68 +1260,253 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
     }
   }
 
-  private final class EditorTextInput extends EditText {
-    private Runnable keyboardDismissListener;
-    private final android.graphics.Paint lineBackgroundPaint =
-        new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
-    private final android.graphics.RectF lineBackgroundBounds = new android.graphics.RectF();
+  /** Direct AAR caption controls owned by this screen. */
+  private final class NativeCaptionBar extends View {
+    private final ZLayerGroup layers = new ZLayerGroup(this);
+    private final ZLayer content = layers.addLayer("selected_media_caption");
+    private final Bitmap transparent = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
+    private TextField input;
+    private Runnable galleryClick;
 
-    EditorTextInput(Context context) {
+    NativeCaptionBar(Context context) {
       super(context);
-      lineBackgroundPaint.setColor(0xFF3A4047);
+      transparent.eraseColor(Color.TRANSPARENT);
+      setClickable(true);
+      build(Math.max(1, getResources().getDisplayMetrics().widthPixels - px(44f)), px(110f), "");
     }
 
-    void setLineBackgroundColor(int color) {
-      lineBackgroundPaint.setColor(color);
+    TextField input() { return input; }
+    void setGalleryClick(Runnable click) { galleryClick = click; }
+
+    private void build(int width, int height, String currentText) {
+      content.clear();
+      content.add(new Button.Builder(getContext(), "caption_gallery", transparent, "▣+",
+          new RectF(0, 0, px(110f), height))
+          .setTextColor(Color.WHITE).setTextSizePx(px(25f))
+          .setRippleEnabled(true).setRippleColor(0x33019CC4)
+          .setOnClickListener(id -> { if (galleryClick != null) galleryClick.run(); }));
+      input = content.add(new TextField.Builder(getContext(), "media_caption",
+          new RectF(px(110f), 0, width - px(24f), height))
+          .setText(currentText).setHint("Add a caption...")
+          .setTextColor(Color.WHITE).setHintColor(0xFFB8C0C7)
+          .setCursorColor(Color.WHITE).setTextSizePx(px(18f))
+          .setBackgroundColor(Color.TRANSPARENT, Color.TRANSPARENT)
+          .setStrokeColor(Color.TRANSPARENT, Color.TRANSPARENT)
+          .setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES)
+          .setImeOptions(EditorInfo.IME_ACTION_DONE)
+          .setOnFocusChangedListener((id, focused) ->
+              ViewCompat.requestApplyInsets(SelectedMediaOverlayView.this))
+          .setOnEditorActionListener((id, action) -> {
+            if (action != EditorInfo.IME_ACTION_DONE) return false;
+            hideCaptionKeyboard();
+            return true;
+          }));
       invalidate();
     }
 
+    @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
+      if (width <= 0 || height <= 0 || (width == oldWidth && height == oldHeight)) return;
+      String current = input == null ? "" : input.getText();
+      build(width, height, current);
+      captionInput = input;
+    }
+    @Override protected void onDraw(Canvas canvas) { layers.draw(canvas); }
+    @Override public boolean onTouchEvent(MotionEvent event) {
+      return layers.onTouchEvent(event) || super.onTouchEvent(event);
+    }
+    @Override public boolean onCheckIsTextEditor() { return layers.onCheckIsTextEditor(); }
+    @Override public InputConnection onCreateInputConnection(EditorInfo attrs) {
+      InputConnection connection = layers.onCreateInputConnection(attrs);
+      return connection != null ? connection : super.onCreateInputConnection(attrs);
+    }
+    @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
+      return layers.onKeyDown(keyCode, event) || super.onKeyDown(keyCode, event);
+    }
+    void release() {
+      layers.release();
+      if (!transparent.isRecycled()) transparent.recycle();
+    }
+  }
+
+  /** Direct AAR horizontal list used for the selected-media strip. */
+  private final class NativeSelectionStrip extends View {
+    private final ZLayerGroup layers = new ZLayerGroup(this);
+    private final ZLayer content = layers.addLayer("selected_media_strip");
+    private final List<PreviewItem> values = new ArrayList<>();
+    private final Map<String, Bitmap> thumbnails = new HashMap<>();
+    private final Bitmap empty = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
+    private final Bitmap document = BitmapFactory.decodeResource(getResources(), R.drawable.chat_document);
+    private ComponentList<PreviewItem> list;
+    private final ComponentList.Adapter<PreviewItem> adapter =
+        new ComponentList.Adapter<PreviewItem>() {
+          @Override public int getItemCount() { return values.size(); }
+          @Override public PreviewItem getItem(int position) { return values.get(position); }
+          @Override public long getItemId(int position) {
+            return values.get(position).uri.toString().hashCode();
+          }
+          @Override public void onCreateItem(ComponentList.Item item, int type) {
+            item.addLayer("thumbnail").add(new Image.Builder(getContext(),
+                item.getScope().id("image"), empty,
+                new RectF(0, 0, item.getScope().width(), item.getScope().height()))
+                .setScaleType(Image.ScaleType.CENTER_CROP));
+          }
+          @Override public void onBindItem(ComponentList.Item item, PreviewItem value, int position) {
+            Bitmap bitmap = value.isFile() ? document : thumbnails.get(value.uri.toString());
+            item.find("image", Image.class).setBitmap(bitmap == null ? empty : bitmap);
+          }
+        };
+
+    NativeSelectionStrip(Context context) {
+      super(context);
+      empty.eraseColor(0xFF29343D);
+      setClickable(true);
+    }
+    void setItems(List<PreviewItem> source) {
+      values.clear(); values.addAll(source);
+      if (list != null) list.notifyDataSetChanged();
+    }
+    void setThumbnail(PreviewItem item, int position, Bitmap bitmap) {
+      Bitmap old = thumbnails.put(item.uri.toString(), bitmap);
+      if (old != null && old != bitmap && !old.isRecycled()) old.recycle();
+      if (list != null && position >= 0 && position < values.size()) list.notifyItemChanged(position);
+    }
+    @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
+      content.clear();
+      if (width <= 0 || height <= 0) return;
+      list = content.add(new ComponentList.Builder<PreviewItem>(getContext(), "selection_list",
+          new RectF(0, 0, width, height))
+          .setOrientation(ComponentList.Orientation.HORIZONTAL)
+          .setItemSize(px(192.5f)).setItemSpacingPx(px(19.25f))
+          .setPaddingPx(px(22f), px(19.25f), px(22f), px(19.25f))
+          .setAdapter(adapter).setScrollEnabled(true).setClipToBounds(true)
+          .setOverscrollEnabled(false)
+          .setOnItemClickListener((component, item, position) -> refreshPreview(item)));
+    }
+    @Override protected void onDraw(Canvas canvas) { layers.draw(canvas); }
+    @Override public boolean onTouchEvent(MotionEvent event) {
+      return layers.onTouchEvent(event) || super.onTouchEvent(event);
+    }
+    void release() {
+      layers.release();
+      for (Bitmap bitmap : thumbnails.values())
+        if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
+      thumbnails.clear();
+      if (!empty.isRecycled()) empty.recycle();
+      if (document != null && !document.isRecycled()) document.recycle();
+    }
+  }
+
+  /** Multiline editor backed directly by the AAR textfield component. */
+  private final class NativeEditorTextInput extends View {
+    private final ZLayerGroup layers = new ZLayerGroup(this);
+    private final ZLayer content = layers.addLayer("media_editor_text");
+    private Runnable keyboardDismissListener;
+    private TextField field;
+    private String value = "";
+    private int textColor = 0xFF22C56E;
+    private int backgroundColor = 0xFF3A4047;
+    private float textSizeSp = 24f;
+    private int maximumWidth;
+
+    NativeEditorTextInput(Context context) {
+      super(context);
+      maximumWidth = Math.round(getResources().getDisplayMetrics().widthPixels * .8f);
+      setFocusable(true);
+      setFocusableInTouchMode(true);
+      setClickable(true);
+    }
+
+    void setLineBackgroundColor(int color) {
+      backgroundColor = color;
+      rebuild();
+    }
     void setKeyboardDismissListener(Runnable listener) {
       keyboardDismissListener = listener;
     }
 
-    @Override protected void onDraw(android.graphics.Canvas canvas) {
-      android.text.Layout layout = getLayout();
-      float horizontalPadding = px(18f);
-      float verticalPadding = px(5f);
-      float radius = px(10f);
-      float contentLeft = getCompoundPaddingLeft();
-      float contentTop = getCompoundPaddingTop();
-      if (layout != null) {
-        float availableHeight = getHeight() - getCompoundPaddingTop() - getCompoundPaddingBottom();
-        if (layout.getHeight() < availableHeight) {
-          contentTop += (availableHeight - layout.getHeight()) / 2f;
-        }
-      }
-      if (layout != null && length() > 0) {
-        for (int line = 0; line < layout.getLineCount(); line++) {
-          float left = contentLeft + layout.getLineLeft(line) - horizontalPadding;
-          float right = contentLeft + layout.getLineRight(line) + horizontalPadding;
-          float center = (left + right) / 2f;
-          if (right - left < px(42f)) {
-            left = center - px(21f);
-            right = center + px(21f);
-          }
-          lineBackgroundBounds.set(left,
-              contentTop + layout.getLineTop(line) - verticalPadding,
-              right,
-              contentTop + layout.getLineBottom(line) + verticalPadding);
-          canvas.drawRoundRect(lineBackgroundBounds, radius, radius, lineBackgroundPaint);
-        }
-      } else {
-        String hint = getHint() == null ? "" : getHint().toString();
-        float width = getPaint().measureText(hint) + horizontalPadding * 2f;
-        float centerX = getWidth() / 2f;
-        float centerY = getHeight() / 2f;
-        android.graphics.Paint.FontMetrics metrics = getPaint().getFontMetrics();
-        float height = metrics.descent - metrics.ascent + verticalPadding * 2f;
-        lineBackgroundBounds.set(centerX - width / 2f, centerY - height / 2f,
-            centerX + width / 2f, centerY + height / 2f);
-        canvas.drawRoundRect(lineBackgroundBounds, radius, radius, lineBackgroundPaint);
-      }
-      super.onDraw(canvas);
+    void setText(String text) {
+      value = text == null ? "" : text;
+      if (field != null) field.setText(value);
+      requestLayout();
+      post(SelectedMediaOverlayView.this::updateEditorInputSize);
+    }
+    String getText() { return field == null ? value : field.getText(); }
+    int length() { return getText().length(); }
+    void setSelection(int position) {
+      if (field != null) field.setSelection(Math.max(0, Math.min(position, length())));
+    }
+    void setTextColor(int color) { textColor = color; rebuild(); }
+    void setTextSize(float sizeSp) { textSizeSp = sizeSp; rebuild(); requestLayout(); }
+    float getTextSizeSp() { return textSizeSp; }
+    void setMaxWidth(int width) { maximumWidth = Math.max(px(170f), width); requestLayout(); }
+    int getMaxWidth() { return maximumWidth; }
+    boolean isFieldFocused() { return field != null && field.isFocused(); }
+    void focusField() {
+      requestFocus();
+      if (field != null) field.requestFocus();
+      layers.restartInput();
+    }
+    @Override public void clearFocus() {
+      if (field != null) field.clearFocus();
+      super.clearFocus();
     }
 
+    private void rebuild() {
+      if (getWidth() <= 0 || getHeight() <= 0) return;
+      String current = getText();
+      content.clear();
+      field = content.add(new TextField.Builder(getContext(), "editor_text_field",
+          new RectF(0, 0, getWidth(), getHeight()))
+          .setText(current).setHint("Add text")
+          .setTextColor(textColor).setHintColor(0xFFB7BDC4).setCursorColor(textColor)
+          .setTextSizePx(textSizeSp * getResources().getDisplayMetrics().scaledDensity)
+          .setPaddingPx(px(24f), px(14f)).setCornerRadiusPx(px(10f))
+          .setBackgroundColor(backgroundColor, backgroundColor)
+          .setStrokeColor(Color.TRANSPARENT, Color.TRANSPARENT)
+          .setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+              | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES)
+          .setImeOptions(EditorInfo.IME_FLAG_NO_ENTER_ACTION)
+          .setHorizontalCenter(true).setVerticalCenter(true)
+          .setOnTextChangedListener((id, text) -> {
+            value = text == null ? "" : text.toString();
+            requestLayout();
+            post(SelectedMediaOverlayView.this::updateEditorInputSize);
+          })
+          .setOnEditorActionListener((id, action) -> {
+            if (action != EditorInfo.IME_ACTION_DONE) return false;
+            finishEditorMode();
+            return true;
+          }));
+      invalidate();
+    }
+
+    @Override protected void onMeasure(int widthSpec, int heightSpec) {
+      android.text.TextPaint paint = new android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+      paint.setTextSize(textSizeSp * getResources().getDisplayMetrics().scaledDensity);
+      String measured = value.isEmpty() ? "Add text" : value;
+      int contentWidth = Math.max(px(122f), Math.min(maximumWidth - px(48f),
+          (int) Math.ceil(paint.measureText(measured.replace('\n', ' ')))));
+      android.text.StaticLayout layout = android.text.StaticLayout.Builder.obtain(
+          measured, 0, measured.length(), paint, Math.max(1, contentWidth))
+          .setIncludePad(false).build();
+      setMeasuredDimension(resolveSize(contentWidth + px(48f), widthSpec),
+          resolveSize(Math.max(px(68f), layout.getHeight() + px(28f)), heightSpec));
+    }
+    @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
+      rebuild();
+    }
+    @Override protected void onDraw(Canvas canvas) { layers.draw(canvas); }
+    @Override public boolean onTouchEvent(MotionEvent event) {
+      return layers.onTouchEvent(event) || super.onTouchEvent(event);
+    }
+    @Override public boolean onCheckIsTextEditor() { return layers.onCheckIsTextEditor(); }
+    @Override public InputConnection onCreateInputConnection(EditorInfo attrs) {
+      InputConnection connection = layers.onCreateInputConnection(attrs);
+      return connection != null ? connection : super.onCreateInputConnection(attrs);
+    }
+    @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
+      return layers.onKeyDown(keyCode, event) || super.onKeyDown(keyCode, event);
+    }
     @Override public boolean onKeyPreIme(int keyCode, KeyEvent event) {
       if (keyCode == KeyEvent.KEYCODE_BACK && event.getAction() == KeyEvent.ACTION_UP
           && keyboardDismissListener != null) {
@@ -1413,6 +1515,7 @@ public class SelectedMediaOverlayView extends NativeMediaScreenView {
       }
       return super.onKeyPreIme(keyCode, event);
     }
+    void release() { layers.release(); }
   }
 
   public interface Listener {

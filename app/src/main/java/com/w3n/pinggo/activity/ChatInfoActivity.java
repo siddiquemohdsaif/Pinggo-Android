@@ -3,19 +3,16 @@ package com.w3n.pinggo.activity;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Typeface;
+import android.graphics.RectF;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.HorizontalScrollView;
-import android.widget.ImageView;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
-import android.widget.ScrollView;
-import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
@@ -40,6 +37,14 @@ import com.w3n.pinggo.views.chat.MediaAttachmentOpener;
 import com.w3n.pinggo.views.chat.MediaRecordTypes;
 import com.w3n.pinggo.views.common.NativePromptDialogView;
 import com.w3n.pinggo.views.home.HomeMenuDialogView;
+import com.ogfa.nativeviews.image.Image;
+import com.ogfa.nativeviews.list.ComponentList;
+import com.ogfa.nativeviews.progress.Progress;
+import com.ogfa.nativeviews.text.FontVariation;
+import com.ogfa.nativeviews.text.Text;
+import com.ogfa.nativeviews.font.NativeFonts;
+import com.ogfa.nativeviews.zlayer.ZLayer;
+import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 
 import java.util.HashMap;
 import java.util.List;
@@ -63,7 +68,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
   public static final String ACTION_SEARCH = "search";
 
   private final AppFunctionManager api = AppFunctionManager.getInstance();
-  private final Map<String, ImageView> mediaImages = new HashMap<>();
+  private final Map<String, NativeImageSlot> mediaImages = new HashMap<>();
   private final Map<String, MessageEntity> mediaMessages = new HashMap<>();
   private ChatRepository repository;
   private String chatId;
@@ -74,15 +79,17 @@ public final class ChatInfoActivity extends AppCompatActivity {
   private boolean group;
   private LinearLayout mediaRow;
   private LinearLayout members;
-  private TextView membersTitle;
-  private TextView subtitle;
-  private TextView description;
-  private TextView mediaHeading;
-  private TextView emptyMedia;
-  private TextView membershipNotice;
+  private NativeTextSlot membersTitle;
+  private NativeTextSlot subtitle;
+  private NativeTextSlot description;
+  private NativeTextSlot mediaHeading;
+  private NativeTextSlot emptyMedia;
+  private NativeTextSlot membershipNotice;
   private LinearLayout callActions;
-  private TextView groupBlockAction;
-  private TextView adminOnlyAction;
+  private ComponentScrollHost pageScroll;
+  private PagingMediaScroll mediaScroll;
+  private NativeTextSlot groupBlockAction;
+  private NativeTextSlot adminOnlyAction;
   private boolean groupMemberActive = true;
   private boolean ownGroupAdmin;
   private boolean ownGroupOwner;
@@ -126,7 +133,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
     repository.observeLocalAttachments(chatId).observe(this, values -> {
       if (values == null) return;
       for (MessageEntity stored : values) {
-        ImageView image = mediaImages.get(stored.attachmentId);
+        NativeImageSlot image = mediaImages.get(stored.attachmentId);
         MessageEntity message = mediaMessages.get(stored.attachmentId);
         if (image != null && message != null && stored.attachmentLocalUri != null)
           renderThumbnail(image, Uri.parse(stored.attachmentLocalUri), message);
@@ -145,20 +152,19 @@ public final class ChatInfoActivity extends AppCompatActivity {
         group ? "Group details" : "Chat details", this::finish, this::showDetailsMenu),
         new LinearLayout.LayoutParams(-1, -2));
 
-    ScrollView scroll = new ScrollView(this);
+    ComponentScrollHost scroll = pageScroll = new ComponentScrollHost(false, null);
     scroll.setBackgroundColor(0xFFF7F9FB);
     LinearLayout body = column();
     body.setGravity(Gravity.CENTER_HORIZONTAL);
     body.setPadding(0, dp(18), 0, dp(34));
-    ImageView avatar = new ImageView(this);
-    avatar.setScaleType(ImageView.ScaleType.CENTER_CROP);
+    NativeImageSlot avatar = new NativeImageSlot();
     Bitmap bitmap = profilePath.isEmpty() ? null : BitmapFactory.decodeFile(profilePath);
     if (bitmap == null)
       avatar.setImageResource(R.drawable.pinggo_logo);
     else
       avatar.setImageBitmap(bitmap);
     body.addView(avatar, new LinearLayout.LayoutParams(dp(132), dp(132)));
-    TextView nameView = text(name, 25, true);
+    NativeTextSlot nameView = text(name, 25, true);
     nameView.setGravity(Gravity.CENTER);
     add(body, nameView, 16);
     subtitle = text(group ? memberCountText(getIntent().getIntExtra(EXTRA_MEMBER_COUNT, 0)) : phone, 15, false);
@@ -183,11 +189,11 @@ public final class ChatInfoActivity extends AppCompatActivity {
     mediaHeading = text("Media, links, and docs", 17, true);
     mediaHeading.setPadding(0, dp(8), 0, dp(4));
     mediaSection.addView(mediaHeading, full());
-    PagingMediaScroll mediaScroll = new PagingMediaScroll();
+    PagingMediaScroll mediaScroll = this.mediaScroll = new PagingMediaScroll();
     mediaScroll.setOnClickListener(v -> openMediaLibrary());
     mediaRow = row();
     mediaRow.setPadding(0, dp(12), 0, dp(12));
-    mediaScroll.addView(mediaRow);
+    mediaScroll.setScrollContent(mediaRow);
     mediaSection.addView(mediaScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(132)));
     body.addView(mediaSection, full());
 
@@ -210,7 +216,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
     } else
       body.addView(dangerAction("Block " + name, this::confirmBlockContact), full());
     body.addView(dangerAction(group ? "Report group" : "Report " + name, this::confirmReport), full());
-    scroll.addView(body);
+    scroll.setScrollContent(body);
     page.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
     ViewCompat.setOnApplyWindowInsetsListener(page, (v, insets) -> {
       Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
@@ -248,10 +254,10 @@ public final class ChatInfoActivity extends AppCompatActivity {
     LinearLayout box = column();
     box.setGravity(Gravity.CENTER);
     box.setPadding(dp(4), dp(10), dp(4), dp(10));
-    ImageView symbol = new ImageView(this);
+    NativeImageSlot symbol = new NativeImageSlot();
     symbol.setImageResource(icon);
     box.addView(symbol, new LinearLayout.LayoutParams(dp(34), dp(34)));
-    TextView label = text(caption, 13, false);
+    NativeTextSlot label = text(caption, 13, false);
     label.setGravity(Gravity.CENTER);
     box.addView(label);
     box.setOnClickListener(v -> click.run());
@@ -376,26 +382,25 @@ public final class ChatInfoActivity extends AppCompatActivity {
       item.setGravity(Gravity.CENTER_VERTICAL);
       item.setPadding(dp(12), dp(10), dp(12), dp(10));
       item.setBackgroundColor(Color.WHITE);
-      ImageView avatar = new ImageView(this);
+      NativeImageSlot avatar = new NativeImageSlot();
       avatar.setImageResource(R.drawable.pinggo_logo);
-      avatar.setScaleType(ImageView.ScaleType.CENTER_CROP);
       item.addView(avatar, new LinearLayout.LayoutParams(dp(54), dp(54)));
       LinearLayout labels = column();
       labels.setPadding(dp(14), 0, 0, 0);
       labels.addView(text(id.equals(userId) ? "You" : display, 16, true));
       String about = string(member, "about");
-      TextView preview = text(about.isEmpty() ? id : about, 13, false);
+      NativeTextSlot preview = text(about.isEmpty() ? id : about, 13, false);
       preview.setTextColor(0xFF687382);
       labels.addView(preview);
       item.addView(labels, new LinearLayout.LayoutParams(0, -2, 1f));
       if (!role.isEmpty() && !"member".equals(role)) {
-        TextView roleLabel = text(id.equals(groupOwnerId) ? "Group owner" : "Group " + role, 12, false);
+        NativeTextSlot roleLabel = text(id.equals(groupOwnerId) ? "Group owner" : "Group " + role, 12, false);
         roleLabel.setTextColor(0xFF687382);
         item.addView(roleLabel);
       }
       if (ownGroupOwner && groupMemberActive && !id.equals(userId)
           && !"admin".equalsIgnoreCase(role)) {
-        TextView makeAdmin = text("Make admin", 13, false);
+        NativeTextSlot makeAdmin = text("Make admin", 13, false);
         makeAdmin.setTextColor(0xFF019BC5);
         makeAdmin.setGravity(Gravity.CENTER);
         makeAdmin.setPadding(dp(8), dp(10), dp(8), dp(10));
@@ -403,7 +408,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
         item.addView(makeAdmin);
       } else if (ownGroupOwner && groupMemberActive && !id.equals(userId)
           && "admin".equalsIgnoreCase(role) && !id.equals(groupOwnerId)) {
-        TextView makeMember = text("Make member", 13, false);
+        NativeTextSlot makeMember = text("Make member", 13, false);
         makeMember.setTextColor(0xFF019BC5);
         makeMember.setGravity(Gravity.CENTER);
         makeMember.setPadding(dp(8), dp(10), dp(8), dp(10));
@@ -412,7 +417,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
       }
       if (ownGroupAdmin && groupMemberActive && !id.equals(userId)
           && !"admin".equalsIgnoreCase(role)) {
-        TextView remove = text("Remove", 13, false);
+        NativeTextSlot remove = text("Remove", 13, false);
         remove.setTextColor(0xFFD9304F);
         remove.setGravity(Gravity.CENTER);
         remove.setPadding(dp(12), dp(10), dp(4), dp(10));
@@ -431,10 +436,10 @@ public final class ChatInfoActivity extends AppCompatActivity {
       addMembers.setGravity(Gravity.CENTER_VERTICAL);
       addMembers.setPadding(dp(12), dp(14), dp(12), dp(14));
       addMembers.setBackgroundColor(Color.WHITE);
-      ImageView icon = new ImageView(this);
+      NativeImageSlot icon = new NativeImageSlot();
       icon.setImageResource(android.R.drawable.ic_input_add);
       addMembers.addView(icon, new LinearLayout.LayoutParams(dp(54), dp(54)));
-      TextView label = text("Add members", 16, true);
+      NativeTextSlot label = text("Add members", 16, true);
       label.setTextColor(0xFF019BC5);
       label.setPadding(dp(14), 0, 0, 0);
       addMembers.addView(label, new LinearLayout.LayoutParams(0, -2, 1f));
@@ -555,8 +560,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
     tile.setGravity(Gravity.CENTER);
     tile.setBackgroundColor(0xFFE4E9EE);
     tile.setOnClickListener(v -> attachmentOpener.open(mediaMessage(item)));
-    ImageView thumbnail = new ImageView(this);
-    thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
+    NativeImageSlot thumbnail = new NativeImageSlot();
     thumbnail.setImageResource(android.R.drawable.ic_menu_gallery);
     tile.addView(thumbnail, new LinearLayout.LayoutParams(-1, 0, 1f));
     String caption = string(item, "text");
@@ -607,7 +611,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
       return;
     LinearLayout tile = column();
     tile.setGravity(Gravity.CENTER);
-    tile.addView(new ProgressBar(this), new LinearLayout.LayoutParams(dp(42), dp(42)));
+    tile.addView(new NativeProgressSlot(), new LinearLayout.LayoutParams(dp(42), dp(42)));
     LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(112), dp(108));
     params.rightMargin = dp(8);
     mediaRow.addView(tile, params);
@@ -624,7 +628,7 @@ public final class ChatInfoActivity extends AppCompatActivity {
   private void showMediaArrowTile() {
     if (mediaArrowTile != null)
       return;
-    TextView arrow = text("→", 32, false);
+    NativeTextSlot arrow = text("→", 32, false);
     arrow.setGravity(Gravity.CENTER);
     arrow.setContentDescription("View all media");
     arrow.setBackgroundColor(0xFFE4E9EE);
@@ -677,14 +681,14 @@ public final class ChatInfoActivity extends AppCompatActivity {
       if (transfer == null || transfer.attachmentId == null || transfer.localUri == null
           || !"completed".equalsIgnoreCase(transfer.status))
         continue;
-      ImageView image = mediaImages.get(transfer.attachmentId);
+      NativeImageSlot image = mediaImages.get(transfer.attachmentId);
       MessageEntity message = mediaMessages.get(transfer.attachmentId);
       if (image != null && message != null)
         renderThumbnail(image, Uri.parse(transfer.localUri), message);
     }
   }
 
-  private void renderThumbnail(ImageView target, Uri uri, MessageEntity message) {
+  private void renderThumbnail(NativeImageSlot target, Uri uri, MessageEntity message) {
     if (isFinishing() || isDestroyed()) return;
     String key = uri.toString();
     if (key.equals(target.getTag())) return;
@@ -845,27 +849,110 @@ public final class ChatInfoActivity extends AppCompatActivity {
     current.release();
   }
 
-  private TextView dangerAction(String label, Runnable action) {
-    TextView view = text(label, 16, false);
+  private NativeTextSlot dangerAction(String label, Runnable action) {
+    NativeTextSlot view = text(label, 16, false);
     view.setTextColor(0xFFD9304F);
     view.setPadding(dp(16), dp(18), dp(16), dp(18));
     view.setOnClickListener(v -> action.run());
     return view;
   }
 
-  private final class PagingMediaScroll extends HorizontalScrollView {
+  private final class PagingMediaScroll extends ComponentScrollHost {
     PagingMediaScroll() {
-      super(ChatInfoActivity.this);
-      setHorizontalScrollBarEnabled(false);
+      super(true, () -> loadMedia());
     }
+  }
 
-    @Override
-    protected void onScrollChanged(int x, int y, int oldX, int oldY) {
-      super.onScrollChanged(x, y, oldX, oldY);
-      View child = getChildAt(0);
-      if (child != null && x + getWidth() >= child.getWidth() - dp(80))
-        loadMedia();
+  /** Screen-owned host whose scrolling is supplied by the AAR ComponentList. */
+  private class ComponentScrollHost extends FrameLayout {
+    private final boolean horizontal;
+    private final Runnable nearEnd;
+    private final ZLayerGroup scrollLayers = new ZLayerGroup(this);
+    private final ZLayer scrollLayer = scrollLayers.addLayer("chat_info_scroll");
+    private ComponentList<String> scrollList;
+    private View scrollContent;
+    private float lastOffset;
+    private float downAxis;
+    private boolean dragging;
+    ComponentScrollHost(boolean horizontal, Runnable nearEnd) {
+      super(ChatInfoActivity.this);
+      this.horizontal = horizontal;
+      this.nearEnd = nearEnd;
+      setClipChildren(true);
     }
+    void setScrollContent(View child) {
+      removeAllViews();
+      scrollContent = child;
+      FrameLayout.LayoutParams params = horizontal
+          ? new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+              ViewGroup.LayoutParams.MATCH_PARENT)
+          : new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+              ViewGroup.LayoutParams.WRAP_CONTENT);
+      addView(child, params);
+      child.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob) -> {
+        if (r-l != or-ol || b-t != ob-ot) rebuildScroll();
+      });
+    }
+    @Override protected void onSizeChanged(int w, int h, int ow, int oh) {
+      super.onSizeChanged(w,h,ow,oh); rebuildScroll();
+    }
+    private void rebuildScroll() {
+      if (getWidth() <= 0 || getHeight() <= 0 || scrollContent == null) return;
+      float offset = scrollList == null ? lastOffset : scrollList.getScrollOffset();
+      float itemSize = horizontal ? Math.max(getWidth() + 1, scrollContent.getWidth())
+          : Math.max(getHeight() + 1, scrollContent.getHeight());
+      scrollLayer.clear();
+      scrollList = scrollLayer.add(new ComponentList.Builder<String>(getContext(), "scroll_list",
+          new RectF(0,0,getWidth(),getHeight()))
+          .setOrientation(horizontal ? ComponentList.Orientation.HORIZONTAL
+              : ComponentList.Orientation.VERTICAL)
+          .setItemSize(itemSize).setAdapter(new ComponentList.Adapter<String>() {
+            @Override public int getItemCount(){ return 1; }
+            @Override public String getItem(int position){ return "content"; }
+            @Override public void onCreateItem(ComponentList.Item item,int type){ item.addLayer("spacer"); }
+            @Override public void onBindItem(ComponentList.Item item,String value,int position){}
+          }).setScrollEnabled(true).setFlingEnabled(true).setOverscrollEnabled(false)
+          .setClipToBounds(true));
+      if (offset > 0f) scrollList.scrollBy(horizontal ? offset : 0f, horizontal ? 0f : offset);
+      syncScroll();
+    }
+    private void syncScroll() {
+      if (scrollList == null || scrollContent == null) return;
+      lastOffset = scrollList.getScrollOffset();
+      scrollContent.setTranslationX(horizontal ? -lastOffset : 0f);
+      scrollContent.setTranslationY(horizontal ? 0f : -lastOffset);
+      if (nearEnd != null) {
+        float extent = horizontal ? scrollContent.getWidth() : scrollContent.getHeight();
+        float viewport = horizontal ? getWidth() : getHeight();
+        if (lastOffset + viewport >= extent - dp(80)) nearEnd.run();
+      }
+    }
+    @Override public boolean dispatchTouchEvent(android.view.MotionEvent event) {
+      if (scrollList == null) return super.dispatchTouchEvent(event);
+      float axis = horizontal ? event.getX() : event.getY();
+      if (event.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) {
+        downAxis=axis; dragging=false; scrollLayers.onTouchEvent(event);
+        return super.dispatchTouchEvent(event);
+      }
+      if (event.getActionMasked() == android.view.MotionEvent.ACTION_MOVE) {
+        if (!dragging && Math.abs(axis-downAxis)>dp(6)) {
+          dragging=true;
+          android.view.MotionEvent cancel=android.view.MotionEvent.obtain(event);
+          cancel.setAction(android.view.MotionEvent.ACTION_CANCEL);
+          super.dispatchTouchEvent(cancel);
+          cancel.recycle();
+        }
+        scrollLayers.onTouchEvent(event); syncScroll();
+        if (dragging) return true;
+      } else if (event.getActionMasked()==android.view.MotionEvent.ACTION_UP
+          || event.getActionMasked()==android.view.MotionEvent.ACTION_CANCEL) {
+        scrollLayers.onTouchEvent(event); syncScroll();
+        if (dragging) { dragging=false; return true; }
+      }
+      return super.dispatchTouchEvent(event);
+    }
+    @Override protected void dispatchDraw(Canvas canvas) { syncScroll(); super.dispatchDraw(canvas); }
+    void release() { scrollLayers.release(); }
   }
 
   private static JsonObject asObject(Object value) {
@@ -917,14 +1004,8 @@ public final class ChatInfoActivity extends AppCompatActivity {
     return view;
   }
 
-  private TextView text(String value, int sp, boolean bold) {
-    TextView view = new TextView(this);
-    view.setText(value);
-    view.setTextSize(sp);
-    view.setTextColor(0xFF07131E);
-    if (bold)
-      view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-    return view;
+  private NativeTextSlot text(String value, int sp, boolean bold) {
+    return new NativeTextSlot(value, sp, bold);
   }
 
   private void add(LinearLayout parent, View child, int top) {
@@ -949,8 +1030,97 @@ public final class ChatInfoActivity extends AppCompatActivity {
     return Math.round(value * getResources().getDisplayMetrics().density);
   }
 
+  private final class NativeTextSlot extends View {
+    private final ZLayerGroup layers = new ZLayerGroup(this);
+    private final ZLayer layer = layers.addLayer("chat_info_text");
+    private String value;
+    private final int sizeSp;
+    private final boolean bold;
+    private int color = 0xFF07131E;
+    private int gravity = Gravity.START | Gravity.CENTER_VERTICAL;
+    NativeTextSlot(String value, int sizeSp, boolean bold) {
+      super(ChatInfoActivity.this);
+      this.value = value == null ? "" : value; this.sizeSp = sizeSp; this.bold = bold;
+    }
+    void setText(String text) { value = text == null ? "" : text; requestLayout(); rebuild(); }
+    void setTextColor(int color) { this.color = color; rebuild(); }
+    void setGravity(int gravity) { this.gravity = gravity; rebuild(); }
+    private void rebuild() {
+      if (getWidth() <= 0 || getHeight() <= 0) return;
+      layer.clear();
+      Text.Alignment alignment = (gravity & Gravity.CENTER_HORIZONTAL) != 0
+          ? Text.Alignment.CENTER : (gravity & Gravity.END) != 0
+              ? Text.Alignment.END : Text.Alignment.START;
+      layer.add(new Text.Builder(getContext(), "value", value,
+          new RectF(getPaddingLeft(), getPaddingTop(),
+              getWidth() - getPaddingRight(), getHeight() - getPaddingBottom()))
+          .setFont(NativeFonts.INTER)
+          .setFontVariations(bold ? FontVariation.BOLD : FontVariation.REGULAR)
+          .setTextColor(color).setTextSizePx(sizeSp * getResources().getDisplayMetrics().scaledDensity)
+          .setAlignment(alignment).setVerticalAlignment(Text.VerticalAlignment.CENTER)
+          .setMaxLines(3));
+      invalidate();
+    }
+    @Override protected void onMeasure(int widthSpec, int heightSpec) {
+      android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+      paint.setTextSize(sizeSp * getResources().getDisplayMetrics().scaledDensity);
+      int desiredWidth = (int) Math.ceil(paint.measureText(value)) + getPaddingLeft() + getPaddingRight();
+      int desiredHeight = (int) Math.ceil(paint.getFontMetrics().descent - paint.getFontMetrics().ascent)
+          + getPaddingTop() + getPaddingBottom();
+      setMeasuredDimension(resolveSize(desiredWidth, widthSpec), resolveSize(desiredHeight, heightSpec));
+    }
+    @Override protected void onSizeChanged(int w, int h, int ow, int oh) { rebuild(); }
+    @Override protected void onDraw(Canvas canvas) { layers.draw(canvas); }
+    void release() { layers.release(); }
+  }
+
+  private final class NativeImageSlot extends View {
+    private final ZLayerGroup layers = new ZLayerGroup(this);
+    private final ZLayer layer = layers.addLayer("chat_info_image");
+    private Bitmap bitmap;
+    private boolean ownsBitmap;
+    NativeImageSlot() { super(ChatInfoActivity.this); }
+    void setImageResource(int resource) { replace(BitmapFactory.decodeResource(getResources(), resource), true); }
+    void setImageBitmap(Bitmap bitmap) { replace(bitmap, false); }
+    private void replace(Bitmap next, boolean owned) {
+      if (ownsBitmap && bitmap != null && bitmap != next && !bitmap.isRecycled()) bitmap.recycle();
+      bitmap = next; ownsBitmap = owned; rebuild();
+    }
+    private void rebuild() {
+      layer.clear();
+      if (getWidth() <= 0 || getHeight() <= 0 || bitmap == null || bitmap.isRecycled()) return;
+      layer.add(new Image.Builder(getContext(), "image", bitmap,
+          new RectF(0, 0, getWidth(), getHeight())).setScaleType(Image.ScaleType.CENTER_CROP));
+      invalidate();
+    }
+    @Override protected void onSizeChanged(int w, int h, int ow, int oh) { rebuild(); }
+    @Override protected void onDraw(Canvas canvas) { layers.draw(canvas); }
+    void release() {
+      layers.release();
+      if (ownsBitmap && bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
+    }
+  }
+
+  private final class NativeProgressSlot extends View {
+    private final ZLayerGroup layers = new ZLayerGroup(this);
+    private final ZLayer layer = layers.addLayer("chat_info_progress");
+    NativeProgressSlot() { super(ChatInfoActivity.this); }
+    @Override protected void onSizeChanged(int w, int h, int ow, int oh) {
+      layer.clear();
+      if (w <= 0 || h <= 0) return;
+      layer.add(new Progress.Builder(getContext(), "progress", new RectF(0, 0, w, h))
+          .setStyle(Progress.Style.CIRCULAR).setMode(Progress.Mode.INDETERMINATE)
+          .setTrackColor(0x22019CC4).setProgressColor(0xFF019CC4));
+    }
+    @Override protected void onDraw(Canvas canvas) { layers.draw(canvas); invalidate(); }
+    void release() { layers.release(); }
+  }
+
   @Override
   protected void onDestroy() {
+    if (pageScroll != null) pageScroll.release();
+    if (mediaScroll != null) mediaScroll.release();
+    for (NativeImageSlot image : mediaImages.values()) image.release();
     removePrompt();
     if (detailsMenu != null) detailsMenu.release();
     detailsMenu = null;

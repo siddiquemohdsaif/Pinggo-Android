@@ -8,11 +8,7 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.ContactsContract;
-import android.text.InputType;
-import android.text.Editable;
-import android.text.TextWatcher;
 import android.view.ViewGroup;
-import android.widget.EditText;
 import android.widget.FrameLayout;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
 import com.w3n.pinggo.Util.PhoneNumberFormatter;
@@ -171,36 +167,15 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
     }
     FrameLayout root = new FrameLayout(this);
     root.addView(newChatView, new FrameLayout.LayoutParams(-1, -1));
-    EditText search = new EditText(this);
-    search.setSingleLine(true);
-    search.setHint("Search name or phone number");
-    search.setTextSize(15f);
-    search.setPadding(dp(16), 0, dp(16), 0);
-    search.setBackgroundColor(0xFFFFFFFF);
-    search.setElevation(dp(2));
-    FrameLayout.LayoutParams searchParams = new FrameLayout.LayoutParams(-1, dp(48));
-    searchParams.leftMargin = dp(16);
-    searchParams.rightMargin = dp(16);
-    root.addView(search, searchParams);
     setContentView(root);
     ViewCompat.setOnApplyWindowInsetsListener(
         newChatView,
         (v, i) -> {
           Insets b = i.getInsets(WindowInsetsCompat.Type.systemBars());
           newChatView.setInsets(b.top, b.bottom);
-          FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) search.getLayoutParams();
-          params.topMargin = b.top + dp(64);
-          search.setLayoutParams(params);
           return i;
         });
     ViewCompat.requestApplyInsets(newChatView);
-    search.addTextChangedListener(new TextWatcher() {
-      @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-      @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
-        newChatView.setSearchQuery(s == null ? "" : s.toString());
-      }
-      @Override public void afterTextChanged(Editable s) {}
-    });
     loadContactsWithPermission();
   }
 
@@ -534,6 +509,7 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
           return;
         }
         ((ViewGroup) groupDetails.getParent()).removeView(groupDetails);
+        groupDetails.release();
         groupDetails = null;
         groupPhotoBase64 = null;
       }
@@ -872,6 +848,7 @@ public class NewChatActivity extends AppCompatActivity implements NewChatView.Li
 
   @Override
   protected void onDestroy() {
+    if (groupDetails != null) { groupDetails.release(); groupDetails = null; }
     com.w3n.pinggo.call.ActiveCallRegistry.getInstance().clearCallPicker(this);
     removeGroupCrop();
     discoveryGeneration.incrementAndGet();

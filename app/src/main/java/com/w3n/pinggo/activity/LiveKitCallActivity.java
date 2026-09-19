@@ -10,6 +10,7 @@ import android.graphics.BitmapFactory;
 import android.graphics.BitmapShader;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioManager;
@@ -26,8 +27,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.GridLayout;
-import android.widget.ImageView;
-import android.widget.TextView;
 import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -49,6 +48,13 @@ import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.views.call.VideoActiveCallView;
 import com.w3n.pinggo.views.call.VoiceActiveCallView;
+import com.ogfa.nativeviews.button.Button;
+import com.ogfa.nativeviews.font.NativeFonts;
+import com.ogfa.nativeviews.image.Image;
+import com.ogfa.nativeviews.text.FontVariation;
+import com.ogfa.nativeviews.text.Text;
+import com.ogfa.nativeviews.zlayer.ZLayer;
+import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import io.livekit.android.LiveKit;
 import io.livekit.android.ConnectOptions;
 import io.livekit.android.RoomOptions;
@@ -601,7 +607,6 @@ public final class LiveKitCallActivity extends AppCompatActivity
     track.addRenderer(renderer);
     renderers.put(key, new RenderedTrack(track, renderer));
     tile.addView(renderer, new FrameLayout.LayoutParams(-1, -1));
-    tile.name.bringToFront();
     updateRemoteVideoLayout();
   }
 
@@ -817,9 +822,7 @@ public final class LiveKitCallActivity extends AppCompatActivity
       ((ViewGroup) renderer.getParent()).removeView(renderer);
     if (index >= 0) destination.addView(renderer, Math.min(index, destination.getChildCount()), params);
     else destination.addView(renderer, 0, params);
-    if (destination == pipLocalTile) pipLocalTile.name.bringToFront();
     renderer.bringToFront();
-    if (destination == pipLocalTile) pipLocalTile.name.bringToFront();
   }
 
   private FrameLayout.LayoutParams localVideoLayoutParams() {
@@ -1410,18 +1413,24 @@ public final class LiveKitCallActivity extends AppCompatActivity
   }
 
   private final class ParticipantTile extends FrameLayout {
-    final TextView name;
+    final ZLayerGroup avatarLayers = new ZLayerGroup(this);
+    final ZLayerGroup labelLayers = new ZLayerGroup(this);
+    final ZLayer avatarLayer = avatarLayers.addLayer("participant_avatar");
+    final ZLayer labelLayer = labelLayers.addLayer("participant_label");
+    Text name;
     final String displayName;
     final Bitmap avatarBitmap;
-    final View avatar;
+    final Bitmap avatarBackground=Bitmap.createBitmap(1,1,Bitmap.Config.ARGB_8888);
+    final Bitmap labelBackground=Bitmap.createBitmap(1,1,Bitmap.Config.ARGB_8888);
     private String mediaLabel = "";
+    private boolean compact;
 
     void setMediaState(boolean micOff, boolean cameraOff) {
       String label = displayName + (micOff ? " • Mic off" : "")
           + (cameraOff ? " • Camera off" : "");
       if (label.equals(mediaLabel)) return;
       mediaLabel = label;
-      name.setText(label);
+      if (name != null) name.setText(label);
     }
 
     ParticipantTile(android.content.Context context, String identity) {
@@ -1443,52 +1452,67 @@ public final class LiveKitCallActivity extends AppCompatActivity
         profilePath = ChatProfilePhotoStore.getLocalPath(context, identity);
       Bitmap bitmap = profilePath == null ? null : BitmapFactory.decodeFile(profilePath);
       avatarBitmap = bitmap == null ? null : circularBitmap(bitmap);
-      int avatarSize = dp(isVideo() ? 156 : 232);
-      GradientDrawable avatarBackground = new GradientDrawable();
-      avatarBackground.setShape(GradientDrawable.OVAL);
-      avatarBackground.setColor(0xFF315063);
-      if (avatarBitmap != null && !avatarBitmap.isRecycled()) {
-        ImageView image = new ImageView(context);
-        image.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        image.setImageBitmap(avatarBitmap);
-        image.setBackground(avatarBackground);
-        avatar = image;
-      } else {
-        TextView initial = new TextView(context);
-        initial.setText(displayName == null || displayName.trim().isEmpty()
-            ? "?" : displayName.trim().substring(0, 1)
-                .toUpperCase(java.util.Locale.ROOT));
-        initial.setTextColor(Color.WHITE);
-        initial.setTextSize(isVideo() ? 48f : 72f);
-        initial.setGravity(Gravity.CENTER);
-        initial.setBackground(avatarBackground);
-        avatar = initial;
-      }
-      addView(avatar, new FrameLayout.LayoutParams(avatarSize, avatarSize, Gravity.CENTER));
-      name = new TextView(context);
-      name.setText(displayName);
-      name.setTextColor(Color.WHITE);
-      name.setTextSize(14f);
-      name.setGravity(Gravity.CENTER_VERTICAL);
-      name.setPadding(dp(12), 0, dp(12), 0);
-      name.setBackgroundColor(0x99000000);
-      FrameLayout.LayoutParams label = new FrameLayout.LayoutParams(-1, dp(40),
-          Gravity.BOTTOM);
-      addView(name, label);
+      avatarBackground.eraseColor(0xFF315063);
+      labelBackground.eraseColor(0x99000000);
+      setWillNotDraw(false);
+      setClickable(true);
     }
 
     void release() {
+      avatarLayers.release();
+      labelLayers.release();
       if (avatarBitmap != null && !avatarBitmap.isRecycled()) avatarBitmap.recycle();
+      if (!avatarBackground.isRecycled()) avatarBackground.recycle();
+      if (!labelBackground.isRecycled()) labelBackground.recycle();
     }
 
     void setCompact(boolean compact) {
-      int avatarSize = dp(compact ? 64 : isVideo() ? 156 : 232);
-      avatar.setLayoutParams(new FrameLayout.LayoutParams(
-          avatarSize, avatarSize, Gravity.CENTER));
-      name.setTextSize(compact ? 10f : 14f);
-      name.setPadding(dp(compact ? 4 : 12), 0, dp(compact ? 4 : 12), 0);
-      name.setLayoutParams(new FrameLayout.LayoutParams(
-          -1, dp(compact ? 22 : 40), Gravity.BOTTOM));
+      this.compact=compact;
+      buildNativeTile(getWidth(),getHeight());
+    }
+
+    @Override protected void onSizeChanged(int width,int height,int oldWidth,int oldHeight){
+      super.onSizeChanged(width,height,oldWidth,oldHeight);
+      buildNativeTile(width,height);
+    }
+
+    private void buildNativeTile(int width,int height){
+      if(width<=0||height<=0)return;
+      avatarLayer.clear();labelLayer.clear();
+      float avatarSize=dp(compact?64:isVideo()?156:232);
+      float left=(width-avatarSize)/2f,top=(height-avatarSize)/2f;
+      avatarLayer.add(new Button.Builder(getContext(),"participant_avatar",
+          avatarBitmap!=null&&!avatarBitmap.isRecycled()?avatarBitmap:avatarBackground,"",
+          new RectF(left,top,left+avatarSize,top+avatarSize))
+          .setImageScaleType(Image.ScaleType.CENTER_CROP).setCornerRadiusPx(avatarSize/2f)
+          .setRippleEnabled(false));
+      if(avatarBitmap==null||avatarBitmap.isRecycled()){
+        String initial=displayName==null||displayName.trim().isEmpty()?"?":displayName.trim().substring(0,1).toUpperCase(java.util.Locale.ROOT);
+        avatarLayer.add(new Text.Builder(getContext(),"participant_initial",initial,
+            new RectF(left,top,left+avatarSize,top+avatarSize)).setFont(NativeFonts.INTER)
+            .setFontVariations(FontVariation.BOLD).setTextColor(Color.WHITE)
+            .setTextSizePx(dp(compact?28:isVideo()?48:72)).setAlignment(Text.Alignment.CENTER)
+            .setVerticalAlignment(Text.VerticalAlignment.CENTER).setMaxLines(1));
+      }
+      float labelHeight=dp(compact?22:40);
+      labelLayer.add(new Button.Builder(getContext(),"participant_label_background",labelBackground,"",
+          new RectF(0,height-labelHeight,width,height)).setRippleEnabled(false));
+      name=labelLayer.add(new Text.Builder(getContext(),"participant_name",
+          mediaLabel.isEmpty()?displayName:mediaLabel,new RectF(dp(compact?4:12),height-labelHeight,width-dp(compact?4:12),height))
+          .setFont(NativeFonts.INTER).setFontVariations(FontVariation.MEDIUM)
+          .setTextColor(Color.WHITE).setTextSizePx(dp(compact?10:14))
+          .setVerticalAlignment(Text.VerticalAlignment.CENTER).setMaxLines(1));
+      invalidate();
+    }
+
+    @Override protected void onDraw(Canvas canvas){
+      super.onDraw(canvas);avatarLayers.draw(canvas);
+    }
+    @Override protected void dispatchDraw(Canvas canvas){
+      super.dispatchDraw(canvas);labelLayers.draw(canvas);
+    }
+    @Override public boolean onTouchEvent(MotionEvent event){
+      return labelLayers.onTouchEvent(event)||avatarLayers.onTouchEvent(event)||super.onTouchEvent(event);
     }
   }
 }

@@ -21,23 +21,27 @@ import android.provider.MediaStore;
 import android.database.Cursor;
 import android.content.ContentUris;
 import android.util.Size;
-import android.view.Gravity;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
-import android.widget.ImageView;
-import android.widget.TextView;
 import android.widget.Toast;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
-import androidx.recyclerview.widget.LinearLayoutManager;
-import androidx.recyclerview.widget.RecyclerView;
+
+import com.ogfa.nativeviews.list.ComponentList;
+import com.ogfa.nativeviews.zlayer.ZLayerGroup;
+import com.ogfa.nativeviews.zlayer.ZLayer;
+import com.ogfa.nativeviews.image.Image;
+import com.ogfa.nativeviews.text.Text;
+import android.graphics.RectF;
+import android.graphics.Canvas;
+import android.view.MotionEvent;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -63,8 +67,10 @@ public class CameraCaptureOverlayView extends NativeMediaScreenView {
   private final FrameLayout root;
   private SurfaceView cameraPreview;
   private FrameLayout modeControls;
-  private RecyclerView galleryRecycler;
-  private GalleryAdapter galleryAdapter;
+  private final ZLayerGroup galleryLayers = new ZLayerGroup(this);
+  private final ZLayer galleryLayer = galleryLayers.addLayer("camera_gallery_list");
+  private final GalleryAdapter galleryAdapter = new GalleryAdapter();
+  private ComponentList<GalleryItem> galleryList;
   private NativeCameraChromeView chrome;
   private Camera camera;
   private MediaRecorder recorder;
@@ -118,21 +124,6 @@ public class CameraCaptureOverlayView extends NativeMediaScreenView {
     });
 
     modeControls = new FrameLayout(getContext());
-    galleryRecycler = new RecyclerView(getContext());
-    galleryRecycler.setHorizontalScrollBarEnabled(false);
-    galleryRecycler.setClipToPadding(false);
-    galleryRecycler.setPadding(0, 0, px(170.5f), 0);
-    LinearLayoutManager galleryLayout =
-        new LinearLayoutManager(getContext(), RecyclerView.HORIZONTAL, false);
-    galleryLayout.setItemPrefetchEnabled(false);
-    galleryRecycler.setLayoutManager(galleryLayout);
-    galleryRecycler.setItemAnimator(null);
-    galleryAdapter = new GalleryAdapter();
-    galleryRecycler.setAdapter(galleryAdapter);
-    FrameLayout.LayoutParams galleryParams = new FrameLayout.LayoutParams(
-        ViewGroup.LayoutParams.MATCH_PARENT, px(210f), Gravity.BOTTOM);
-    galleryParams.bottomMargin = px(700f);
-    modeControls.addView(galleryRecycler, galleryParams);
     chrome = new NativeCameraChromeView(getContext(), new NativeCameraChromeView.Listener() {
       @Override public void onBack() { handleBack(); }
       @Override public void onPhoto() { selectMode(false); }
@@ -152,6 +143,44 @@ public class CameraCaptureOverlayView extends NativeMediaScreenView {
     });
     updateChrome();
 
+  }
+
+  @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
+    super.onSizeChanged(width, height, oldWidth, oldHeight);
+    if (width <= 0 || height <= 0) return;
+    galleryLayer.clear();
+    galleryList = galleryLayer.add(new ComponentList.Builder<GalleryItem>(
+        getContext(), "camera_gallery_component_list",
+        new RectF(0f, height - px(910f), width, height - px(700f)))
+        .setOrientation(ComponentList.Orientation.HORIZONTAL)
+        .setItemSize(px(209f))
+        .setItemSpacingPx(px(19.25f))
+        .setPaddingPx(0f, 0f, px(170.5f), 0f)
+        .setAdapter(galleryAdapter)
+        .setClipToBounds(true)
+        .setScrollEnabled(true)
+        .setOverscrollEnabled(false)
+        .setOnItemClickListener((component, item, position) -> toggleGalleryItem(item)));
+  }
+
+  @Override protected void dispatchDraw(Canvas canvas) {
+    if (cameraPreview != null && cameraPreview.getVisibility() == View.VISIBLE) {
+      drawChild(canvas, cameraPreview, getDrawingTime());
+    }
+    if (isGalleryListVisible()) galleryLayers.draw(canvas);
+    if (modeControls != null && modeControls.getVisibility() == View.VISIBLE) {
+      drawChild(canvas, modeControls, getDrawingTime());
+    }
+  }
+
+  @Override public boolean dispatchTouchEvent(MotionEvent event) {
+    if (isGalleryListVisible() && galleryLayers.onTouchEvent(event)) return true;
+    return super.dispatchTouchEvent(event);
+  }
+
+  private boolean isGalleryListVisible() {
+    return !videoModeSelected && !showingResult && galleryList != null
+        && modeControls != null && modeControls.getVisibility() == View.VISIBLE;
   }
 
   private void requestMediaPermissions() {
@@ -275,22 +304,10 @@ public class CameraCaptureOverlayView extends NativeMediaScreenView {
   }
 
   private void rebuildGalleryTiles() {
-    if (galleryAdapter != null) galleryAdapter.notifyDataSetChanged();
+    galleryAdapter.notifyDataSetChanged();
   }
 
-  private void applyGalleryTileSelection(FrameLayout tile, TextView check, boolean selected) {
-    check.setVisibility(selected ? View.VISIBLE : View.GONE);
-    tile.setBackground(rounded(selected ? ACCENT : 0xFF15171C, selected ? px(22f) : 0f));
-    int padding = selected ? px(8.25f) : 0;
-    tile.setPadding(padding, padding, padding, padding);
-  }
-
-  private GalleryItem galleryItemAt(int position) {
-    if (position < temporaryCaptures.size()) return temporaryCaptures.get(position);
-    return galleryItems.get(position - temporaryCaptures.size());
-  }
-
-  private void toggleGalleryItem(GalleryItem item, GalleryTileHolder holder) {
+  private void toggleGalleryItem(GalleryItem item) {
     if (temporaryCaptures.contains(item)) {
       removeTemporaryCapture(item, true);
       rebuildGalleryTiles();
@@ -306,105 +323,50 @@ public class CameraCaptureOverlayView extends NativeMediaScreenView {
       selectedGallery.put(key, item);
       selected = true;
     }
-    applyGalleryTileSelection(holder.tile, holder.check, selected);
+    galleryAdapter.notifyDataSetChanged();
     updateChrome();
   }
 
-  private void requestGalleryThumbnail(GalleryItem item, GalleryTileHolder holder) {
+  private GalleryItem galleryItemAt(int position) {
+    return position < temporaryCaptures.size() ? temporaryCaptures.get(position)
+        : galleryItems.get(position - temporaryCaptures.size());
+  }
+
+  private void requestGalleryThumbnail(GalleryItem item) {
     if (item.thumbnailRequested || released) return;
     item.thumbnailRequested = true;
     try {
       galleryExecutor.execute(() -> {
-        if (released || holder.boundItem != item) {
-          item.thumbnailRequested = false;
-          return;
-        }
+        if (released) return;
         Bitmap thumbnail = loadGalleryThumbnail(item.uri, item.video);
         post(() -> {
-          if (released) {
-            if (thumbnail != null && !thumbnail.isRecycled()) thumbnail.recycle();
-            return;
-          }
+          if (released) { if (thumbnail != null) thumbnail.recycle(); return; }
           item.thumbnail = thumbnail;
-          if (holder.boundItem == item) holder.thumbnail.setImageBitmap(thumbnail);
+          galleryAdapter.notifyDataSetChanged();
         });
       });
-    } catch (RuntimeException ignored) {
-      item.thumbnailRequested = false;
-    }
+    } catch (RuntimeException ignored) { item.thumbnailRequested = false; }
   }
 
-  private final class GalleryAdapter extends RecyclerView.Adapter<GalleryTileHolder> {
-    @Override public GalleryTileHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-      FrameLayout tile = new FrameLayout(getContext());
-      tile.setBackgroundColor(0xFF15171C);
-      RecyclerView.LayoutParams itemParams =
-          new RecyclerView.LayoutParams(px(209f), px(209f));
-      itemParams.setMarginEnd(px(19.25f));
-      tile.setLayoutParams(itemParams);
-
-      ImageView thumbnail = new ImageView(getContext());
-      thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
-      tile.addView(thumbnail, match());
-
-      TextView video = new TextView(getContext());
-      video.setText("▶");
-      video.setTextColor(Color.WHITE);
-      video.setTextSize(18);
-      video.setGravity(Gravity.CENTER);
-      video.setBackgroundColor(0x55000000);
-      tile.addView(video, match());
-
-      TextView check = new TextView(getContext());
-      check.setText("✓");
-      check.setTextColor(Color.WHITE);
-      check.setTextSize(15);
-      check.setGravity(Gravity.CENTER);
-      check.setBackground(circle(ACCENT, 0, ACCENT));
-      FrameLayout.LayoutParams checkParams = new FrameLayout.LayoutParams(
-          px(68.75f), px(68.75f), Gravity.TOP | Gravity.END);
-      checkParams.setMargins(px(8.25f), px(8.25f), px(8.25f), px(8.25f));
-      tile.addView(check, checkParams);
-      return new GalleryTileHolder(tile, thumbnail, video, check);
+  private final class GalleryAdapter extends ComponentList.Adapter<GalleryItem> {
+    private final Bitmap empty = Bitmap.createBitmap(1,1,Bitmap.Config.ARGB_8888);
+    @Override public int getItemCount() { return temporaryCaptures.size()+galleryItems.size(); }
+    @Override public GalleryItem getItem(int position) { return galleryItemAt(position); }
+    @Override public long getItemId(int position) { return getItem(position).uri.toString().hashCode(); }
+    @Override public void onCreateItem(ComponentList.Item item, int type) {
+      float w=item.getScope().width(),h=item.getScope().height();
+      ZLayer row=item.addLayer("tile");
+      row.add(new Image.Builder(getContext(),item.getScope().id("thumbnail"),empty,new RectF(0,0,w,h)).setScaleType(Image.ScaleType.CENTER_CROP));
+      row.add(new Text.Builder(getContext(),item.getScope().id("video"),"▶",new RectF(0,0,w,h)).setTextColor(Color.WHITE).setTextSizePx(px(55f)).setAlignment(Text.Alignment.CENTER).setVerticalAlignment(Text.VerticalAlignment.CENTER));
+      row.add(new Text.Builder(getContext(),item.getScope().id("check"),"✓",new RectF(w-px(75f),0,w,px(75f))).setTextColor(ACCENT).setTextSizePx(px(65f)).setAlignment(Text.Alignment.CENTER));
     }
-
-    @Override public void onBindViewHolder(GalleryTileHolder holder, int position) {
-      GalleryItem item = galleryItemAt(position);
-      holder.boundItem = item;
-      holder.thumbnail.setImageBitmap(item.thumbnail);
-      holder.video.setVisibility(item.video ? View.VISIBLE : View.GONE);
-      boolean selected = temporaryCaptures.contains(item)
-          || selectedGallery.containsKey(item.uri.toString());
-      applyGalleryTileSelection(holder.tile, holder.check, selected);
-      holder.tile.setOnClickListener(view -> toggleGalleryItem(item, holder));
-      if (item.thumbnail == null) requestGalleryThumbnail(item, holder);
+    @Override public void onBindItem(ComponentList.Item holder,GalleryItem item,int position) {
+      holder.find("thumbnail",Image.class).setBitmap(item.thumbnail==null?empty:item.thumbnail);
+      holder.find("video",Text.class).setVisible(item.video);
+      holder.find("check",Text.class).setVisible(temporaryCaptures.contains(item)||selectedGallery.containsKey(item.uri.toString()));
+      if(item.thumbnail==null)requestGalleryThumbnail(item);
     }
-
-    @Override public void onViewRecycled(GalleryTileHolder holder) {
-      holder.boundItem = null;
-      holder.thumbnail.setImageDrawable(null);
-      holder.tile.setOnClickListener(null);
-    }
-
-    @Override public int getItemCount() {
-      return temporaryCaptures.size() + galleryItems.size();
-    }
-  }
-
-  private static final class GalleryTileHolder extends RecyclerView.ViewHolder {
-    final FrameLayout tile;
-    final ImageView thumbnail;
-    final TextView video;
-    final TextView check;
-    volatile GalleryItem boundItem;
-
-    GalleryTileHolder(FrameLayout tile, ImageView thumbnail, TextView video, TextView check) {
-      super(tile);
-      this.tile = tile;
-      this.thumbnail = thumbnail;
-      this.video = video;
-      this.check = check;
-    }
+    void release() { empty.recycle(); }
   }
 
   private void showGalleryResult() {
@@ -495,7 +457,7 @@ public class CameraCaptureOverlayView extends NativeMediaScreenView {
   private void selectMode(boolean video) {
     if (recording || showingResult) return;
     videoModeSelected = video;
-    if (galleryRecycler != null) galleryRecycler.setVisibility(video ? View.GONE : View.VISIBLE);
+    invalidate();
     if (flashEnabled && !supportsFlash(video)) {
       flashEnabled = false;
       updateCameraFlash();
@@ -713,7 +675,7 @@ public class CameraCaptureOverlayView extends NativeMediaScreenView {
     Bitmap thumbnail = loadCapturedThumbnail(file);
     temporaryCaptures.add(0, new GalleryItem(Uri.fromFile(file), false, thumbnail, file));
     rebuildGalleryTiles();
-    galleryRecycler.scrollToPosition(0);
+    if (galleryList != null) galleryList.scrollToPosition(0);
     updateChrome();
     restartPreview();
   }
@@ -880,7 +842,8 @@ public class CameraCaptureOverlayView extends NativeMediaScreenView {
       if (item.thumbnail != null && !item.thumbnail.isRecycled()) item.thumbnail.recycle();
     }
     galleryItems.clear();
-    if (galleryRecycler != null) galleryRecycler.setAdapter(null);
+    galleryLayers.release();
+    galleryAdapter.release();
     if (chrome != null) chrome.release();
     super.release();
   }

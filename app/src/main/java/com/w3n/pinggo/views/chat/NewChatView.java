@@ -57,6 +57,8 @@ public final class NewChatView extends View {
   private final Set<String> selectedMembers = new LinkedHashSet<>();
   private final List<Item> sourceItems = new ArrayList<>();
   private String searchQuery = "";
+  private com.ogfa.nativeviews.textfield.TextField searchField;
+  private String searchValue = "";
   private boolean chatSections;
   private final Set<String> existingAccounts = new LinkedHashSet<>();
 
@@ -68,6 +70,7 @@ public final class NewChatView extends View {
 
   public NewChatView(Context context, Listener listener) {
     super(context);
+    setFocusableInTouchMode(true);
     this.listener = listener;
     setBackgroundColor(0xFFF7F9FB);
     setClickable(true);
@@ -212,7 +215,15 @@ public final class NewChatView extends View {
           new RectF(w - px(154f), top, w - px(22f), top + px(132f)),
           PRIMARY, id -> listener.onMore());
     }
-    // Leave room for the platform EditText search field overlaid by NewChatActivity.
+    searchField = content.add(new com.ogfa.nativeviews.textfield.TextField.Builder(getContext(), "contact_search",
+        new RectF(px(44f), top + px(172f), w - px(44f), top + px(304f)))
+        .setText(searchValue).setHint("Search name or phone number").setMaxLength(80)
+        .setInputType(android.text.InputType.TYPE_CLASS_TEXT).setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE)
+        .setFont(NativeFonts.INTER).setFontVariations(FontVariation.REGULAR)
+        .setTextSizePx(sp(15)).setTextColor(PRIMARY).setHintColor(SECONDARY)
+        .setBackgroundColor(0xFFF7F9FB, Color.WHITE).setStrokeColor(0xFFE5EAF0, ACCENT)
+        .setCornerRadiusPx(px(33f)).setPaddingPx(px(33f), px(22f))
+        .setOnTextChangedListener((id, value) -> { searchValue = value; setSearchQuery(value); }));
     float listTop = top + px(330f);
     list =
         content.add(
@@ -274,6 +285,14 @@ public final class NewChatView extends View {
   @Override
   public boolean onTouchEvent(MotionEvent e) {
     return layers.onTouchEvent(e) || super.onTouchEvent(e);
+  }
+
+  @Override public boolean onCheckIsTextEditor() { return layers.onCheckIsTextEditor(); }
+  @Override public android.view.inputmethod.InputConnection onCreateInputConnection(android.view.inputmethod.EditorInfo info) {
+    return layers.onCreateInputConnection(info);
+  }
+  @Override public boolean onKeyDown(int keyCode, android.view.KeyEvent event) {
+    return layers.onKeyDown(keyCode, event) || super.onKeyDown(keyCode, event);
   }
 
   public void release() {

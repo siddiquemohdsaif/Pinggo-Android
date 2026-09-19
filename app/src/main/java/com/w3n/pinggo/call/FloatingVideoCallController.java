@@ -3,7 +3,10 @@ package com.w3n.pinggo.call;
 import android.app.Activity;
 import android.app.Application;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.RectF;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.view.Gravity;
@@ -13,7 +16,13 @@ import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
-import android.widget.TextView;
+import com.ogfa.nativeviews.button.Button;
+import com.ogfa.nativeviews.font.NativeFonts;
+import com.ogfa.nativeviews.image.Image;
+import com.ogfa.nativeviews.text.FontVariation;
+import com.ogfa.nativeviews.text.Text;
+import com.ogfa.nativeviews.zlayer.ZLayer;
+import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.activity.HomeActivity;
 import com.w3n.pinggo.activity.VideoCallActivity;
 import java.lang.ref.WeakReference;
@@ -27,7 +36,9 @@ public final class FloatingVideoCallController implements Application.ActivityLi
   private WeakReference<Activity> previousActivity = new WeakReference<>(null);
   private WeakReference<Activity> overlayHost = new WeakReference<>(null);
   private View overlay;
-  private TextView statusView;
+  private Text statusView;
+  private ZLayerGroup overlayLayers;
+  private Bitmap[] overlayBitmaps;
   private boolean active, minimized;
   private String status = "Connecting…";
   private Runnable endAction;
@@ -80,19 +91,36 @@ public final class FloatingVideoCallController implements Application.ActivityLi
       }
     });
 
-    statusView = new TextView(activity); statusView.setText(status); statusView.setTextColor(Color.WHITE);
-    statusView.setTextSize(12); statusView.setGravity(Gravity.CENTER); statusView.setBackgroundColor(0x88000000);
-    FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(-1, px(activity, 88f), Gravity.BOTTOM);
-    card.addView(statusView, statusParams);
-
-    TextView end = new TextView(activity); end.setText("End"); end.setTextColor(Color.WHITE);
-    end.setTextSize(12); end.setGravity(Gravity.CENTER);
-    GradientDrawable endBg = new GradientDrawable(); endBg.setColor(0xFFE53935);
-    endBg.setCornerRadius(px(activity, 44f)); end.setBackground(endBg);
-    FrameLayout.LayoutParams endParams = new FrameLayout.LayoutParams(px(activity, 143f),
-        px(activity, 88f), Gravity.TOP | Gravity.END); endParams.setMargins(0, px(activity, 16.5f), px(activity, 16.5f), 0);
-    card.addView(end, endParams);
-    end.setOnClickListener(view -> { if (endAction != null) endAction.run(); });
+    Bitmap shade=color(0x88000000), danger=color(0xFFE53935);
+    overlayBitmaps=new Bitmap[]{shade,danger};
+    final ZLayerGroup[] layerRef={null};
+    View nativeChrome=new View(activity){
+      final ZLayerGroup layers=new ZLayerGroup(this);
+      final ZLayer content=layers.addLayer("floating_video_controls");
+      {layerRef[0]=layers;}
+      @Override protected void onSizeChanged(int w,int h,int ow,int oh){
+        content.clear();
+        content.add(new com.ogfa.nativeviews.image.Image.Builder(activity,"status_shade",shade,
+            new RectF(0,h-px(activity,88f),w,h)).setScaleType(Image.ScaleType.FIT_XY));
+        statusView=content.add(new Text.Builder(activity,"status",status,
+            new RectF(0,h-px(activity,88f),w,h))
+            .setFont(NativeFonts.INTER).setFontVariations(FontVariation.MEDIUM)
+            .setTextSizePx(px(activity,33f)).setTextColor(Color.WHITE)
+            .setAlignment(Text.Alignment.CENTER).setVerticalAlignment(Text.VerticalAlignment.CENTER)
+            .setMaxLines(1).setShadowPx(0,px(activity,1f),px(activity,4f),Color.BLACK));
+        content.add(new Button.Builder(activity,"end",danger,"End",
+            new RectF(w-px(activity,159.5f),px(activity,16.5f),w-px(activity,16.5f),px(activity,104.5f)))
+            .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(px(activity,44f))
+            .setFont(NativeFonts.INTER).setFontVariations(FontVariation.BOLD)
+            .setTextSizePx(px(activity,33f)).setTextColor(Color.WHITE)
+            .setRippleEnabled(true).setOnClickListener(id->{if(endAction!=null)endAction.run();}));
+      }
+      @Override protected void onDraw(Canvas canvas){super.onDraw(canvas);layers.draw(canvas);}
+      @Override public boolean onTouchEvent(MotionEvent event){return layers.onTouchEvent(event)||super.onTouchEvent(event);}
+    };
+    nativeChrome.setClickable(true);
+    card.addView(nativeChrome,new FrameLayout.LayoutParams(-1,-1));
+    overlayLayers=layerRef[0];
     makeDraggable(card, () -> restore(activity));
 
     FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(px(activity, 330f),
@@ -139,7 +167,10 @@ public final class FloatingVideoCallController implements Application.ActivityLi
     if (overlay != null && overlay.getParent() instanceof ViewGroup)
       ((ViewGroup) overlay.getParent()).removeView(overlay);
     overlay = null; statusView = null; overlayHost.clear();
+    if(overlayLayers!=null){overlayLayers.release();overlayLayers=null;}
+    if(overlayBitmaps!=null){for(Bitmap bitmap:overlayBitmaps)if(bitmap!=null&&!bitmap.isRecycled())bitmap.recycle();overlayBitmaps=null;}
   }
+  private static Bitmap color(int value){Bitmap bitmap=Bitmap.createBitmap(1,1,Bitmap.Config.ARGB_8888);bitmap.eraseColor(value);return bitmap;}
   private static int px(Activity activity, float value) {
     return Math.round(FIGMA_CONFIG.toRuntime(value,
         Math.max(1, activity.getResources().getDisplayMetrics().widthPixels)));

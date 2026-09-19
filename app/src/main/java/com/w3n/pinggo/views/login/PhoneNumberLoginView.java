@@ -128,6 +128,7 @@ public class PhoneNumberLoginView extends View {
     private boolean formattingPhoneNumber;
     private float contentTranslationY;
     private OnNextListener nextListener;
+    private Runnable companionLinkListener;
     private int statusBarInset;
     private int navigationBarInset;
     private int keyboardInset;
@@ -203,6 +204,10 @@ public class PhoneNumberLoginView extends View {
         nextListener = listener;
     }
 
+    public void setOnCompanionLinkListener(Runnable listener) {
+        companionLinkListener = listener;
+    }
+
     public void showPhoneError(String message) {
         if (phoneErrorText != null) {
             phoneErrorText.setText(message).setVisible(true);
@@ -248,6 +253,7 @@ public class PhoneNumberLoginView extends View {
                 position(0f, 0f), new Size(designUnits(getWidth()),designUnits(getHeight()))).setScaleType(Image.ScaleType.CENTER_CROP));
         addHeader();
         addLegalNotice();
+        addCompanionLinkButton();
         addLoginCard();
         updateKeyboardTranslation();
         Log.d("WaveLayout",
@@ -290,6 +296,28 @@ public class PhoneNumberLoginView extends View {
                 .setVerticalAlignment(Text.VerticalAlignment.CENTER)
                 .horizontalCenter(true)
                 .setMaxLines(2));
+    }
+
+    private void addCompanionLinkButton() {
+        Position linkPosition = new Position(this, figmaConfig,
+                Position.HorizontalMarginFrom.LEFT, Position.VerticalMarginFrom.BOTTOM,
+                0f, 167f + designUnits(navigationBarInset));
+        foregroundLayer.add(new Button.Builder(getContext(), "link_as_companion",
+                transparentBitmap, getString(R.string.link_as_companion_device),
+                linkPosition, new Size(620f, 82f))
+                .horizontalCenter(true)
+                .setImageScaleType(Image.ScaleType.FIT_XY)
+                .setCornerRadius(20f)
+                .setFont(NativeFonts.INTER)
+                .setFontVariations(FontVariation.MEDIUM)
+                .setTextSize(31f)
+                .setTextColor(ACCENT_COLOR)
+                .setRippleEnabled(true)
+                .setWaitForRippleBeforeClick(true)
+                .setRippleColor(0x22019CC4)
+                .setOnClickListener(id -> {
+                    if (companionLinkListener != null) companionLinkListener.run();
+                }));
     }
 
     private void addLoginCard() {

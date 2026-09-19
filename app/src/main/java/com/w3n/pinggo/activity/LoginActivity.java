@@ -6,7 +6,6 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
 import android.view.ViewGroup;
-import android.content.Intent;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
@@ -34,8 +33,6 @@ public class LoginActivity extends AppCompatActivity {
         setContentView(R.layout.activity_login);
         installStatusBarScrim();
         ExitAppController.install(this, getSupportFragmentManager());
-        findViewById(R.id.link_as_companion).setOnClickListener(view ->
-                startActivity(new Intent(this, CompanionLinkActivity.class)));
         String logoutMessage = getIntent().getStringExtra(EXTRA_LOGOUT_MESSAGE);
         String pendingMessage = SessionLogoutManager.consumeLogoutMessage(this);
         if (logoutMessage == null || logoutMessage.trim().isEmpty()) {

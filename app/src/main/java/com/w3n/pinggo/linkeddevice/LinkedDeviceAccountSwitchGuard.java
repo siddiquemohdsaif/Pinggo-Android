@@ -1,8 +1,14 @@
 package com.w3n.pinggo.linkeddevice;
 
 import android.app.Activity;
+import android.view.ViewGroup;
 
-import androidx.appcompat.app.AlertDialog;
+import androidx.activity.ComponentActivity;
+import androidx.activity.OnBackPressedCallback;
+import androidx.lifecycle.Lifecycle;
+import androidx.lifecycle.LifecycleEventObserver;
+
+import com.w3n.pinggo.views.common.NativePromptDialogView;
 
 import com.google.gson.JsonObject;
 import com.w3n.pinggo.Database.CloudFunction.RestApi.APIAuth;
@@ -30,13 +36,39 @@ public final class LinkedDeviceAccountSwitchGuard {
             return;
         }
 
-        new AlertDialog.Builder(activity)
-                .setTitle(R.string.link_device_logout_title)
-                .setMessage(R.string.link_device_logout_message)
-                .setNegativeButton(R.string.cancel, null)
-                .setPositiveButton(R.string.logout_and_link,
-                        (dialog, which) -> logoutThenContinue(activity, completeLink))
-                .show();
+        ViewGroup root = activity.findViewById(android.R.id.content);
+        NativePromptDialogView[] current = {null};
+        OnBackPressedCallback[] back = {null};
+        LifecycleEventObserver[] observer = {null};
+        Runnable dismiss = () -> {
+            NativePromptDialogView view = current[0];
+            current[0] = null;
+            if (back[0] != null) back[0].remove();
+            if (activity instanceof ComponentActivity && observer[0] != null) {
+                ((ComponentActivity) activity).getLifecycle().removeObserver(observer[0]);
+            }
+            if (view != null) {
+                root.removeView(view);
+                view.release();
+            }
+        };
+        current[0] = NativePromptDialogView.confirm(activity,
+                activity.getString(R.string.link_device_logout_title),
+                activity.getString(R.string.link_device_logout_message),
+                activity.getString(R.string.logout_and_link),
+                () -> logoutThenContinue(activity, completeLink), dismiss);
+        root.addView(current[0], new ViewGroup.LayoutParams(-1, -1));
+        if (activity instanceof ComponentActivity) {
+            ComponentActivity owner = (ComponentActivity) activity;
+            back[0] = new OnBackPressedCallback(true) {
+                @Override public void handleOnBackPressed() { dismiss.run(); }
+            };
+            owner.getOnBackPressedDispatcher().addCallback(owner, back[0]);
+            observer[0] = (source, event) -> {
+                if (event == Lifecycle.Event.ON_DESTROY) dismiss.run();
+            };
+            owner.getLifecycle().addObserver(observer[0]);
+        }
     }
 
     private static void logoutThenContinue(Activity activity, Runnable completeLink) {

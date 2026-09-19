@@ -1,6 +1,7 @@
 package com.w3n.pinggo.fragment.login;
 
 import android.os.Bundle;
+import android.content.Intent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -14,6 +15,7 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.fragment.app.Fragment;
 
 import com.w3n.pinggo.AppContextProvider;
+import com.w3n.pinggo.activity.CompanionLinkActivity;
 import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.OtpHandler;
@@ -37,6 +39,8 @@ public class PhoneNumberFragment extends Fragment {
                              @Nullable Bundle savedInstanceState) {
         loginView = new PhoneNumberLoginView(requireContext());
         loginView.setOnNextListener(this::checkUserAndContinue);
+        loginView.setOnCompanionLinkListener(() -> startActivity(
+                new Intent(requireContext(), CompanionLinkActivity.class)));
         return loginView;
     }
 
@@ -285,6 +289,7 @@ public class PhoneNumberFragment extends Fragment {
         removeReactivationDialog();
         if (loginView != null) {
             loginView.setOnNextListener(null);
+            loginView.setOnCompanionLinkListener(null);
         }
         View view = getView();
         if (view != null) ViewCompat.setOnApplyWindowInsetsListener(view, null);

@@ -4,7 +4,9 @@ import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.RectF;
 import android.media.AudioManager;
 import android.media.Ringtone;
 import android.media.RingtoneManager;
@@ -13,11 +15,11 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.widget.FrameLayout;
-import android.widget.TextView;
 import android.widget.Toast;
 import android.util.Log;
 import androidx.activity.result.ActivityResultLauncher;
@@ -37,6 +39,9 @@ import com.w3n.pinggo.call.CallPictureInPicture;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import com.w3n.pinggo.notification.PingGoNotificationManager;
 import com.w3n.pinggo.views.call.VideoActiveCallView;
+import com.ogfa.nativeviews.text.Text;
+import com.ogfa.nativeviews.zlayer.ZLayer;
+import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import java.util.Map;
 
 public class VideoCallActivity extends AppCompatActivity implements VideoActiveCallView.Listener,
@@ -49,7 +54,8 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
   private VideoCallController controller;
   private FrameLayout videoRoot;
   private SurfaceView remoteSurface, localSurface;
-  private TextView remoteCameraOffView, localCameraOffView;
+  private View remoteCameraOffView, localCameraOffView;
+  private final java.util.List<ZLayerGroup> cameraDisabledLayers = new java.util.ArrayList<>();
   private boolean speakerOn = true;
   private boolean callConnected;
   private boolean pipEligible;
@@ -195,14 +201,21 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
       permissions.launch(new String[] { Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO });
   }
 
-  private TextView cameraDisabledView() {
-    TextView view = new TextView(this);
-    view.setBackgroundColor(Color.BLACK);
-    view.setText("Camera disabled");
-    view.setTextColor(Color.WHITE);
-    view.setTextSize(16);
-    view.setGravity(Gravity.CENTER);
-    return view;
+  private View cameraDisabledView() {
+    return new View(this) {
+      final ZLayerGroup layers = new ZLayerGroup(this);
+      final ZLayer content = layers.addLayer("camera_disabled");
+      { cameraDisabledLayers.add(layers); setBackgroundColor(Color.BLACK); }
+      @Override protected void onSizeChanged(int width,int height,int oldWidth,int oldHeight){
+        content.clear();
+        content.add(new Text.Builder(VideoCallActivity.this,"camera_disabled_text","Camera disabled",
+            new RectF(0,0,width,height)).setTextColor(Color.WHITE)
+            .setTextSizePx(16f*getResources().getDisplayMetrics().scaledDensity).setAlignment(Text.Alignment.CENTER)
+            .setVerticalAlignment(Text.VerticalAlignment.CENTER).setMaxLines(1));
+      }
+      @Override protected void onDraw(Canvas canvas){super.onDraw(canvas);layers.draw(canvas);}
+      @Override public boolean onTouchEvent(MotionEvent event){return layers.onTouchEvent(event)||super.onTouchEvent(event);}
+    };
   }
 
   private void onPermissionsResult(Map<String, Boolean> result) {
@@ -620,6 +633,8 @@ public class VideoCallActivity extends AppCompatActivity implements VideoActiveC
       audioManager.setSpeakerphoneOn(false);
     if (callView != null)
       callView.release();
+    for (ZLayerGroup layers : cameraDisabledLayers) layers.release();
+    cameraDisabledLayers.clear();
     callView = null;
     ActiveCallRegistry.getInstance().clear(this);
     super.onDestroy();
