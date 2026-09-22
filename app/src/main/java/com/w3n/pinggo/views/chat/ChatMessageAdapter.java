@@ -430,7 +430,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         int insertedRangeStart = existingStart == 0 ? oldCount : 0;
         notifyItemRangeInserted(insertedRangeStart, insertedCount);
         if (changedEnd >= changedStart) {
-          notifyItemRangeChanged(changedStart, changedEnd - changedStart + 1);
+          notifyRowsChangedAfterLayout(changedStart, changedEnd - changedStart + 1);
         }
       } else {
         if (oldCount > nextMessages.size()) {
@@ -441,7 +441,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         } else {
           // Rebind the affected range without invalidating unrelated list chrome.
           int common = Math.min(oldCount, nextMessages.size());
-          if (common > 0) notifyItemRangeChanged(0, common);
+          if (common > 0) notifyRowsChangedAfterLayout(0, common);
           if (nextMessages.size() > oldCount) {
             notifyItemRangeInserted(oldCount, nextMessages.size() - oldCount);
           }
@@ -453,7 +453,7 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
         messages.set(index, nextMessages.get(index));
         dateLabels.set(index, nextDateLabels.get(index));
         if (!previousSignature.equals(nextSignatures.get(index))) {
-          notifyItemChanged(index);
+          notifyRowChangedAfterLayout(index);
           changedCount++;
         }
       }
@@ -469,6 +469,23 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
           movedCount);
     }
     return changed;
+  }
+
+  /**
+   * ComponentList binds a changed holder before rebuilding its variable-height table. The first
+   * notification therefore measures the new row but still binds its children against the old
+   * scope. A second notification binds once more with the recalculated scope. When the height is
+   * unchanged, {@link #boundRows} makes the second pass effectively free.
+   */
+  private void notifyRowChangedAfterLayout(int position) {
+    notifyItemChanged(position);
+    notifyItemChanged(position);
+  }
+
+  /** Same two-phase correction for a changed range (including date-separator height changes). */
+  private void notifyRowsChangedAfterLayout(int start, int count) {
+    notifyItemRangeChanged(start, count);
+    notifyItemRangeChanged(start, count);
   }
 
   String messageIdAt(int position) {
@@ -1010,6 +1027,14 @@ final class ChatMessageAdapter extends ComponentList.Adapter<MessageEntity> {
 
   void refreshMeasuredRows() {
     if (!messages.isEmpty()) notifyItemRangeChanged(0, messages.size());
+  }
+
+  /** Drops holder and height state after the host was covered while messages could change. */
+  void resetLayoutState() {
+    boundRows.clear();
+    synchronized (metricsCache) {
+      metricsCache.clear();
+    }
   }
 
   void refreshMeasuredRows(String mediaSource) {

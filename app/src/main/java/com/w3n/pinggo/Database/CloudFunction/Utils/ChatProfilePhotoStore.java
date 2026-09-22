@@ -73,7 +73,8 @@ public class ChatProfilePhotoStore {
           normalizedUrl, temporaryFile, MAX_PROFILE_PHOTO_BYTES);
       Bitmap bitmap = BitmapFactory.decodeFile(downloadedFile.getAbsolutePath());
       if (bitmap == null) return null;
-      String localPath = saveBitmap(context, normalizedPhoneNumber, bitmap);
+      String localPath = saveBitmap(
+          context, normalizedPhoneNumber, bitmap, normalizedUrl);
       bitmap.recycle();
       if (localPath != null) {
         LOCAL_PATH_CACHE.put(normalizedPhoneNumber, localPath);
@@ -81,6 +82,7 @@ public class ChatProfilePhotoStore {
             .putString(normalizedPhoneNumber, localPath)
             .putString(URL_KEY_PREFIX + normalizedPhoneNumber, normalizedUrl)
             .apply();
+        deleteReplacedFile(cachedPath, localPath);
       }
       return localPath;
     } catch (IOException ignored) {
@@ -97,26 +99,39 @@ public class ChatProfilePhotoStore {
       return null;
     }
     String normalized = normalizePhoneNumber(identifier);
-    String localPath = saveBitmap(context, normalized, bitmap);
+    String normalizedUrl = isEmpty(profilePhotoUrl)
+        ? "" : normalizeProfilePhotoUrl(profilePhotoUrl);
+    String previousPath = getLocalPath(context, normalized);
+    String localPath = saveBitmap(context, normalized, bitmap, normalizedUrl);
     if (localPath == null) return null;
     LOCAL_PATH_CACHE.put(normalized, localPath);
     SharedPreferences.Editor editor = getPrefs(context).edit().putString(normalized, localPath);
-    if (!isEmpty(profilePhotoUrl)) {
-      editor.putString(URL_KEY_PREFIX + normalized,
-          normalizeProfilePhotoUrl(profilePhotoUrl));
+    if (!normalizedUrl.isEmpty()) {
+      editor.putString(URL_KEY_PREFIX + normalized, normalizedUrl);
     }
     editor.apply();
+    deleteReplacedFile(previousPath, localPath);
     return localPath;
   }
 
-  private static String saveBitmap(Context context, String phoneNumber, Bitmap bitmap) {
-    File file = new File(context.getFilesDir(), FILE_PREFIX + phoneNumber + FILE_EXTENSION);
+  private static String saveBitmap(Context context, String phoneNumber, Bitmap bitmap,
+                                   String profilePhotoUrl) {
+    String version = isEmpty(profilePhotoUrl) ? "legacy"
+        : Integer.toUnsignedString(profilePhotoUrl.hashCode(), 16);
+    File file = new File(context.getFilesDir(),
+        FILE_PREFIX + phoneNumber + "_" + version + FILE_EXTENSION);
     try (FileOutputStream outputStream = new FileOutputStream(file)) {
       bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, outputStream);
       return file.getAbsolutePath();
     } catch (IOException e) {
       return null;
     }
+  }
+
+  private static void deleteReplacedFile(String previousPath, String currentPath) {
+    if (isEmpty(previousPath) || previousPath.equals(currentPath)) return;
+    File previous = new File(previousPath);
+    if (previous.exists()) previous.delete();
   }
 
   private static SharedPreferences getPrefs(Context context) {

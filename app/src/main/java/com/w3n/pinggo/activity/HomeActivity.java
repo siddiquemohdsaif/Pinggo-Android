@@ -75,6 +75,7 @@ public class HomeActivity extends PingGoActivity implements HomeView.Listener {
     private int callRowBuildGeneration;
     private int chatRowBuildGeneration;
     private int contactNameGeneration;
+    private boolean chatLaunchInFlight;
     private final ActivityResultLauncher<String> notificationPermission = registerForActivityResult(
             new ActivityResultContracts.RequestPermission(), granted -> {
             });
@@ -205,6 +206,9 @@ public class HomeActivity extends PingGoActivity implements HomeView.Listener {
 
     @Override
     public void onOpenChat(Chat chat) {
+        if (chat == null || chatLaunchInFlight)
+            return;
+        chatLaunchInFlight = true;
         Intent intent = new Intent(this, ChatActivity.class);
         intent.putExtra(ChatActivity.EXTRA_CHAT_NAME, chat.getContactName());
         intent.putExtra(ChatActivity.EXTRA_CHAT_ID, chat.getChatId());
@@ -216,12 +220,18 @@ public class HomeActivity extends PingGoActivity implements HomeView.Listener {
         }
         intent.putExtra(ChatActivity.EXTRA_LOCAL_PROFILE_PHOTO_PATH, localPath);
         intent.putExtra(ChatActivity.EXTRA_OPEN_REQUEST_NANOS, SystemClock.elapsedRealtimeNanos());
-        startActivity(intent);
+        try {
+            startActivity(intent);
+        } catch (RuntimeException error) {
+            chatLaunchInFlight = false;
+            throw error;
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        chatLaunchInFlight = false;
         if (repository == null)
             return;
         refreshServerCalls();
@@ -414,15 +424,17 @@ public class HomeActivity extends PingGoActivity implements HomeView.Listener {
                     reusedCount++;
                     continue;
                 }
+                List<String> participantIds = call.conference
+                        ? conferenceParticipantIds(call.participantIdsJson, ownId, otherId)
+                        : java.util.Collections.emptyList();
                 String contact = DeviceContactResolver.cachedNameOrPhone(otherId);
                 if (call.conference) {
-                    contact = chat != null && chat.isGroup && chat.contactName != null
+                    String groupName = chat != null && chat.isGroup && chat.contactName != null
                             && !chat.contactName.trim().isEmpty()
-                            ? chat.contactName.trim() : "Conference call";
-                    if (chat == null || !chat.isGroup) {
-                        String names = conferenceParticipantNames(call.participantIdsJson, ownId);
-                        if (!names.isEmpty()) contact += "\n" + names;
-                    }
+                            ? chat.contactName.trim() : "";
+                    String names = conferenceParticipantNames(participantIds);
+                    contact = !groupName.isEmpty() ? groupName
+                            : !names.isEmpty() ? names : contact;
                 }
                 long endedAt = call.endedAt;
                 boolean outgoing = ownId.equals(normalizeAccountId(callerId));
@@ -433,9 +445,6 @@ public class HomeActivity extends PingGoActivity implements HomeView.Listener {
                         && !chatId.startsWith("grp_")) {
                     profilePath = ChatProfilePhotoStore.getLocalPath(appContext, otherId);
                 }
-                List<String> participantIds = call.conference
-                        ? conferenceParticipantIds(call.participantIdsJson, ownId, otherId)
-                        : java.util.Collections.emptyList();
                 for (String participantId : participantIds)
                     ChatProfilePhotoStore.getLocalPath(appContext, participantId);
                 CallLog prepared = new CallLog(chatId, call.callId, call.messageId, otherId,
@@ -481,20 +490,11 @@ public class HomeActivity extends PingGoActivity implements HomeView.Listener {
         return value == null || value.isJsonNull() ? "" : value.getAsString();
     }
 
-    private static String conferenceParticipantNames(String json, String ownId) {
-        if (json == null || json.trim().isEmpty()) return "";
-        try {
-            JsonArray ids = com.google.gson.JsonParser.parseString(json).getAsJsonArray();
-            List<String> names = new ArrayList<>();
-            for (JsonElement item : ids) {
-                String id = normalizeAccountId(item.getAsString());
-                if (!id.isEmpty() && !id.equals(ownId))
-                    names.add(DeviceContactResolver.cachedNameOrPhone(id));
-            }
-            return android.text.TextUtils.join(", ", names);
-        } catch (RuntimeException ignored) {
-            return "";
-        }
+    private static String conferenceParticipantNames(List<String> participantIds) {
+        List<String> names = new ArrayList<>();
+        for (String participantId : participantIds)
+            names.add(DeviceContactResolver.cachedNameOrPhone(participantId));
+        return android.text.TextUtils.join(", ", names);
     }
 
     private static List<String> conferenceParticipantIds(String json, String ownId,
@@ -513,7 +513,14 @@ public class HomeActivity extends PingGoActivity implements HomeView.Listener {
         }
         String fallback = normalizeAccountId(fallbackOtherId);
         if (!fallback.isEmpty() && !fallback.equals(ownId)) participants.add(fallback);
-        return new ArrayList<>(participants);
+        List<String> ordered = new ArrayList<>(participants);
+        ordered.sort((left, right) -> {
+            String leftName = DeviceContactResolver.cachedNameOrPhone(left);
+            String rightName = DeviceContactResolver.cachedNameOrPhone(right);
+            int byName = leftName.compareToIgnoreCase(rightName);
+            return byName != 0 ? byName : left.compareTo(right);
+        });
+        return ordered;
     }
 
     private static long jsonLong(JsonObject object, String name) {
@@ -559,13 +566,25 @@ public class HomeActivity extends PingGoActivity implements HomeView.Listener {
     }
 
     private void openCall(String chatId, String phoneNumber, String profilePath, boolean video) {
-        Intent intent = new Intent(this, video ? VideoCallActivity.class : VoiceCallActivity.class);
-        intent.putExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID, chatId);
-        intent.putExtra(VoiceCallActivity.EXTRA_CALL_ID, java.util.UUID.randomUUID().toString());
-        intent.putExtra(VoiceCallActivity.EXTRA_CALLER_ID, phoneNumber);
-        intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER,
+        com.w3n.pinggo.call.CallEngineChooser.show(
+                this, video ? "video" : "audio", chatId,
+                engine -> startOutgoingCall(
+                        chatId, phoneNumber, profilePath, video, engine));
+    }
+
+    private void startOutgoingCall(String chatId, String phoneNumber, String profilePath,
+                                   boolean video, String engine) {
+        Intent intent = new Intent(this, CallActivity.class);
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_CHAT_ID, chatId);
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_ID, java.util.UUID.randomUUID().toString());
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALLER_ID, phoneNumber);
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PHONE_NUMBER,
                 DeviceContactResolver.cachedNameOrPhone(phoneNumber));
-        intent.putExtra(VoiceCallActivity.EXTRA_PROFILE_PATH, profilePath);
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PROFILE_PATH, profilePath);
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_VIDEO, video);
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_MEDIA_TYPE, video ? "video" : "audio");
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_ENGINE,
+                engine);
         startActivity(intent);
     }
 
@@ -773,9 +792,14 @@ public class HomeActivity extends PingGoActivity implements HomeView.Listener {
         if (entities == null)
             return chats;
         for (ChatEntity entity : entities) {
+            String deviceContact = entity.isGroup ? ""
+                    : DeviceContactResolver.cachedDeviceContactName(entity.otherUserId);
+            String serverName = entity.contactName == null ? "" : entity.contactName.trim();
             String contact = entity.isGroup
                     ? safeGroupName(entity.contactName)
-                    : DeviceContactResolver.cachedNameOrPhone(entity.otherUserId);
+                    : !deviceContact.isEmpty() ? deviceContact
+                    : !serverName.isEmpty() && !serverName.equals(entity.otherUserId)
+                    ? serverName : DeviceContactResolver.fallback(entity.otherUserId);
             String localPath = entity.localProfilePhotoPath;
             if (!entity.isGroup && (localPath == null || localPath.isEmpty())) {
                 localPath = ChatProfilePhotoStore.getLocalPath(appContext, entity.otherUserId);

@@ -46,6 +46,7 @@ import com.w3n.pinggo.data.local.PresenceEntity;
 import com.w3n.pinggo.data.local.PingGoDatabase;
 import com.w3n.pinggo.data.local.TransferDao;
 import com.w3n.pinggo.data.local.TransferEntity;
+import com.w3n.pinggo.data.cache.ProfileBitmapCache;
 import com.w3n.pinggo.data.worker.AttachmentUploadWorker;
 import com.w3n.pinggo.data.worker.AttachmentDownloadWorker;
 
@@ -61,6 +62,7 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArraySet;
 import java.nio.charset.StandardCharsets;
 import java.io.File;
 import java.io.IOException;
@@ -222,7 +224,11 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     };
     private int chatListGeneration;
     private volatile int latestTotalUnread = -1;
-    private volatile CallEventListener callEventListener;
+    // More than one call can exist during call waiting (one held and one active).
+    // Each session filters events by callId, so keep all session listeners instead
+    // of letting the newest Activity silently replace the previous one.
+    private final CopyOnWriteArraySet<CallEventListener> callEventListeners =
+            new CopyOnWriteArraySet<>();
     private IncomingCallListener incomingCallListener;
     private String currentUserId;
     private volatile String activeChatId = "";
@@ -358,19 +364,18 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     public synchronized void setCallEventListener(CallEventListener listener) {
-        callEventListener = listener;
+        if (listener != null) callEventListeners.add(listener);
     }
 
     /** Removes a call listener only when it is still owned by the caller. */
     public synchronized void clearCallEventListener(CallEventListener listener) {
-        if (listener != null && callEventListener == listener) {
-            callEventListener = null;
+        if (listener != null && callEventListeners.remove(listener)) {
             Log.i("PingGoCallTrace", "call_listener_cleared owner="
                     + listener.getClass().getSimpleName());
         } else {
             Log.i("PingGoCallTrace", "call_listener_clear_ignored owner="
                     + (listener == null ? "null" : listener.getClass().getSimpleName())
-                    + " reason=newer_listener_active");
+                    + " reason=listener_not_registered");
         }
     }
 
@@ -699,7 +704,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
 
     /** Calls can populate the same profile store even when ChatsView has never loaded. */
     public void loadCallProfilePhoto(String chatId, String otherId,
-                                    java.util.function.Consumer<String> callback) {
+                                     java.util.function.Consumer<String> callback) {
         ioExecutor.execute(() -> {
             String path = ChatProfilePhotoStore.getLocalPath(appContext, otherId);
             if (path != null) {
@@ -742,12 +747,20 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         });
     }
 
+    /** Loads one conference participant without borrowing another chat's profile URL. */
+    public void loadUserProfilePhoto(String userId,
+                                     java.util.function.Consumer<String> callback) {
+        loadCallProfilePhoto("", userId, callback);
+    }
+
     private void storeCallProfilePhoto(String chatId, String otherId, String url,
                                       java.util.function.Consumer<String> callback) {
         profilePhotoExecutor.execute(() -> {
             String path = ChatProfilePhotoStore.downloadAndStore(appContext, otherId, url);
-            if (path != null) chatDao.updateLocalProfilePhotoPath(
-                    chatId, url, path, System.currentTimeMillis());
+            if (path != null && chatId != null && !chatId.trim().isEmpty()) {
+                chatDao.updateLocalProfilePhotoPath(
+                        chatId, url, path, System.currentTimeMillis());
+            }
             mainHandler.post(() -> callback.accept(path));
         });
     }
@@ -2340,12 +2353,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         retryPersistedPendingMessages();
         String phoneNumber = LoginStateManager.getInstance().getUID(appContext);
         syncAfterReconnect(phoneNumber);
-        if (callEventListener != null) {
+        if (!callEventListeners.isEmpty()) {
             JsonObject event = new JsonObject();
             event.addProperty("type", "call_socket_reconnected");
-            mainHandler.post(() -> {
-                if (callEventListener != null) callEventListener.onCallEvent(event);
-            });
+            mainHandler.post(() -> notifyCallEventListeners(event));
         }
     }
 
@@ -2418,7 +2429,7 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             Log.i("PingGoCallTrace", "socket_call_event_received type=" + type
                     + " callId=" + JsonParserUtil.getString(event, "callId")
                     + " incomingListener=" + (incomingCallListener != null)
-                    + " callListener=" + (callEventListener != null));
+                    + " callListeners=" + callEventListeners.size());
         }
         int totalUnreadBeforeEvent = latestTotalUnread;
         int serverTotalUnread = -1;
@@ -2431,11 +2442,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             mainHandler.post(() -> incomingCallListener.onIncomingCall(event));
         }
         if ((type.startsWith("call_") || "ice_candidate".equals(type))
-                && callEventListener != null) {
-            CallEventListener listener = callEventListener;
-            mainHandler.post(() -> {
-                if (callEventListener == listener) listener.onCallEvent(event);
-            });
+                && !callEventListeners.isEmpty()) {
+            mainHandler.post(() -> notifyCallEventListeners(event));
         }
         if ("message_ack".equals(type) || "group_message_ack".equals(type)) {
             handleMessageAck(event);
@@ -2488,6 +2496,8 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     : currentUserId;
             if (!affectedUserId.isEmpty() && !affectedUserId.equals(signedInUserId)) return;
             boolean active = "group_added".equals(type);
+            if (active && event.has("group") && event.get("group").isJsonObject())
+                updateGroupMetadata(event.getAsJsonObject("group"));
             if (!active && !changedGroupId.isEmpty()) {
                 JsonObject membershipMessage = event.has("message")
                         && event.get("message").isJsonObject()
@@ -2507,23 +2517,35 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 if (eventListener == listener)
                     listener.onGroupMembershipChanged(changedGroupId, active);
             });
-        } else if ("group_updated".equals(type)) {
+        } else if ("group_updated".equals(type) || "group_created".equals(type)) {
             JsonObject group = event.has("group") && event.get("group").isJsonObject()
                     ? event.getAsJsonObject("group") : null;
             String changedGroupId = group == null ? ""
                     : JsonParserUtil.getString(group, "groupId");
+            updateGroupMetadata(group);
             EventListener listener = eventListener;
             if (listener != null && !changedGroupId.isEmpty()) mainHandler.post(() -> {
                 if (eventListener == listener) listener.onGroupUpdated(changedGroupId);
             });
         } else if ("calls_list_updated".equals(type)) {
             notifyCallsChanged();
+            JsonObject changedCall = event.has("call") && event.get("call").isJsonObject()
+                    ? event.getAsJsonObject("call") : null;
+            String changedChatId = changedCall == null ? ""
+                    : JsonParserUtil.getString(changedCall, "chatId");
+            if (!changedChatId.isEmpty()) {
+                Log.d("PingGoMessageTrace", "stage=call_complete_chat_sync"
+                        + " chatId=" + changedChatId);
+                scheduleNewChatListRefresh(changedChatId);
+            }
         } else if ("chat_settings_updated".equals(type)) {
             handleChatSettingsUpdated(event);
         } else if ("chat_cleared".equals(type)) {
             handleChatCleared(event);
         } else if ("chat_block_status".equals(type)) {
             handleBlockStatus(event);
+        } else if ("user_profile_updated".equals(type)) {
+            handleUserProfileUpdated(event);
         } else if ("message_seen".equals(type)) {
             handleMessageSeen(event);
         } else if ("message_seen_ack".equals(type)) {
@@ -2615,6 +2637,87 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                 eventChatId, value, System.currentTimeMillis()));
     }
 
+    /** Persist a full group object returned by REST or delivered over the socket. */
+    public void updateGroupMetadata(JsonObject responseOrGroup) {
+        if (responseOrGroup == null) return;
+        JsonObject group = responseOrGroup.has("group")
+                && responseOrGroup.get("group").isJsonObject()
+                ? responseOrGroup.getAsJsonObject("group") : responseOrGroup;
+        String groupId = JsonParserUtil.getString(group, "groupId");
+        if (groupId.isEmpty()) return;
+        String ownId = normalizeAccountId(LoginStateManager.getInstance().getUID(appContext));
+        ioExecutor.execute(() -> persistGroupMetadata(groupId, group, ownId));
+    }
+
+    private void persistGroupMetadata(String groupId, JsonObject group, String ownId) {
+        ChatEntity existing = chatDao.findByChatId(groupId);
+        String name = group.has("name")
+                ? JsonParserUtil.getString(group, "name")
+                : existing == null ? "Group" : existing.contactName;
+        String description = group.has("description")
+                ? JsonParserUtil.getString(group, "description")
+                : existing == null ? "" : existing.groupDescription;
+        String icon = group.has("icon")
+                ? JsonParserUtil.getString(group, "icon")
+                : existing == null ? "" : existing.profilePhotoUrl;
+        long membershipVersion = group.has("membershipVersion")
+                ? JsonParserUtil.getLong(group, "membershipVersion")
+                : existing == null ? 0L : existing.membershipVersion;
+        int memberCount = existing == null ? 0 : existing.groupMemberCount;
+        String ownRole = existing == null ? "" : existing.ownGroupRole;
+        if (group.has("members") && group.get("members").isJsonArray()) {
+            memberCount = 0;
+            ownRole = "";
+            for (JsonElement value : group.getAsJsonArray("members")) {
+                if (value == null || !value.isJsonObject()) continue;
+                JsonObject member = value.getAsJsonObject();
+                if (!"active".equalsIgnoreCase(JsonParserUtil.getString(member, "status")))
+                    continue;
+                memberCount++;
+                if (ownId.equals(normalizeAccountId(
+                        JsonParserUtil.getString(member, "userId")))) {
+                    ownRole = JsonParserUtil.getString(member, "role");
+                }
+            }
+        }
+        String localPath = existing != null && icon.equals(existing.profilePhotoUrl)
+                ? existing.localProfilePhotoPath : "";
+        long updatedAt = JsonParserUtil.getLong(group, "updatedAt");
+        if (updatedAt <= 0L) updatedAt = System.currentTimeMillis();
+        int updated = chatDao.updateGroupMetadata(groupId, name, icon, localPath,
+                description, memberCount, ownRole, membershipVersion, updatedAt);
+        if (updated == 0) {
+            ChatEntity entity = new ChatEntity(groupId, name, "", icon, localPath,
+                    "", "", 0L, "", null, null, "", "text", "",
+                    0, false, 0L, false, false, 0L, updatedAt);
+            entity.isGroup = true;
+            entity.groupDescription = description;
+            entity.groupMemberCount = memberCount;
+            entity.ownGroupRole = ownRole;
+            entity.membershipVersion = membershipVersion;
+            chatDao.upsert(entity);
+        }
+        if (!icon.isEmpty() && (localPath == null || localPath.trim().isEmpty()))
+            cacheUpdatedGroupPhoto(groupId, icon);
+    }
+
+    private void cacheUpdatedGroupPhoto(String groupId, String icon) {
+        String downloadKey = groupId + PIN_USER_SEPARATOR + icon;
+        if (!profilePhotoDownloads.add(downloadKey)) return;
+        profilePhotoExecutor.execute(() -> {
+            try {
+                String localPath = ChatProfilePhotoStore.downloadAndStore(
+                        appContext, groupId, icon);
+                if (localPath != null && !localPath.trim().isEmpty()) {
+                    ioExecutor.execute(() -> chatDao.updateLocalProfilePhotoPath(
+                            groupId, icon, localPath, System.currentTimeMillis()));
+                }
+            } finally {
+                profilePhotoDownloads.remove(downloadKey);
+            }
+        });
+    }
+
     private void handleChatCleared(JsonObject event) {
         String eventChatId = JsonParserUtil.getString(event, "chatId");
         if (eventChatId.isEmpty()) return;
@@ -2630,6 +2733,50 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
         EventListener listener = eventListener;
         if (listener != null) mainHandler.post(() -> {
             if (eventListener == listener) listener.onBlockStatus(eventChatId, blocked);
+        });
+    }
+
+    private void handleUserProfileUpdated(JsonObject event) {
+        String userId = normalizeAccountId(JsonParserUtil.getString(event, "userId"));
+        if (userId.isEmpty()) return;
+        String name = JsonParserUtil.getString(event, "name");
+        String photoUrl = JsonParserUtil.getString(event, "profilePhotoUrl");
+        long updatedAt = JsonParserUtil.getLong(event, "updatedAt");
+        final long eventTime = updatedAt > 0L ? updatedAt : System.currentTimeMillis();
+        ioExecutor.execute(() -> {
+            String cachedPath = ChatProfilePhotoStore.getLocalPath(appContext, userId);
+            ChatEntity directChat = chatDao.findDirectChatByUserId(userId);
+            boolean samePhoto = directChat != null
+                    && photoUrl.equals(directChat.profilePhotoUrl);
+            String localPath = samePhoto && cachedPath != null ? cachedPath : "";
+            chatDao.updateDirectUserProfile(
+                    userId, name, photoUrl, localPath, eventTime);
+            if (photoUrl.isEmpty()) {
+                ChatProfilePhotoStore.remove(appContext, userId);
+                if (cachedPath != null) ProfileBitmapCache.get().invalidatePath(cachedPath);
+                return;
+            }
+            cacheUpdatedUserPhoto(userId, photoUrl);
+        });
+    }
+
+    private void cacheUpdatedUserPhoto(String userId, String photoUrl) {
+        String downloadKey = userId + PIN_USER_SEPARATOR + photoUrl;
+        if (!profilePhotoDownloads.add(downloadKey)) return;
+        profilePhotoExecutor.execute(() -> {
+            try {
+                String oldPath = ChatProfilePhotoStore.getLocalPath(appContext, userId);
+                // The store returns immediately when both the cached URL and file match.
+                String localPath = ChatProfilePhotoStore.downloadAndStore(
+                        appContext, userId, photoUrl);
+                if (localPath == null || localPath.trim().isEmpty()) return;
+                if (oldPath != null) ProfileBitmapCache.get().invalidatePath(oldPath);
+                ProfileBitmapCache.get().invalidatePath(localPath);
+                ioExecutor.execute(() -> chatDao.updateLocalProfilePhotoPathForUser(
+                        userId, photoUrl, localPath, System.currentTimeMillis()));
+            } finally {
+                profilePhotoDownloads.remove(downloadKey);
+            }
         });
     }
 
@@ -2652,12 +2799,23 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
     }
 
     private void notifyCallSocketDisconnected() {
-        if (callEventListener == null) return;
+        if (callEventListeners.isEmpty()) return;
         JsonObject event = new JsonObject();
         event.addProperty("type", "call_socket_disconnected");
         mainHandler.post(() -> {
-            if (callEventListener != null) callEventListener.onCallEvent(event);
+            notifyCallEventListeners(event);
         });
+    }
+
+    private void notifyCallEventListeners(JsonObject event) {
+        for (CallEventListener listener : callEventListeners) {
+            try {
+                listener.onCallEvent(event);
+            } catch (RuntimeException error) {
+                Log.e("PingGoCallTrace", "call_listener_failed owner="
+                        + listener.getClass().getSimpleName(), error);
+            }
+        }
     }
 
     private void handleMessageAck(JsonObject event) {
@@ -2758,7 +2916,17 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
                     + " sentTime=" + message.sentTime);
             updateChatSummary(message);
             boolean incoming = !normalizeAccountId(message.senderId).equals(currentUserId);
-            if (incoming && isNewMessage) {
+            boolean alreadySeen = message.readTime != null
+                    || MessageStatus.SEEN.equalsIgnoreCase(message.status);
+            Log.d("PingGoMessageTrace", "stage=unread_decision"
+                    + " chatId=" + message.chatId
+                    + " messageId=" + message.messageId
+                    + " incoming=" + incoming
+                    + " isNew=" + isNewMessage
+                    + " alreadySeen=" + alreadySeen
+                    + " status=" + message.status
+                    + " readTime=" + message.readTime);
+            if (incoming && isNewMessage && !alreadySeen) {
                 if (message.chatId.equals(activeChatId)) {
                     chatDao.clearUnreadCount(message.chatId);
                     locallyReadChats.add(message.chatId);
@@ -3252,9 +3420,10 @@ public class ChatRepository implements ChatWebSocketClient.Listener {
             return null;
         }
         String profilePhotoUrl = JsonParserUtil.getString(profile, "profilePhotoUrl");
+        String serverProfileName = JsonParserUtil.getString(profile, "serverProfileName");
         ChatEntity entity = new ChatEntity(
                 chatId,
-                phoneNumber,
+                serverProfileName.isEmpty() ? phoneNumber : serverProfileName,
                 normalizeAccountId(phoneNumber),
                 profilePhotoUrl,
                 "",

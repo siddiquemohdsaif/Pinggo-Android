@@ -46,7 +46,8 @@ public final class VideoCallController {
   private WebRTCCallClient audioClient;
   private PingGoVideoCallClient videoClient;
   private Surface localSurface, remoteSurface;
-  private boolean resumed, muted, remoteMuted, cameraEnabled = true, remoteCameraEnabled = true;
+  private boolean resumed, muted, held, peerHeld, remoteMuted;
+  private boolean cameraEnabled = true, remoteCameraEnabled = true;
   private long connectedElapsedAt, connectedServerAt, mediaReconnectDeadline;
   private boolean terminated;
   private final ChatRepository.CallEventListener preAcceptListener;
@@ -70,7 +71,12 @@ public final class VideoCallController {
   public boolean isConnected() { return state == CallState.CONNECTED; }
   public boolean isMuted() { return muted; }
   public boolean isCameraEnabled() { return cameraEnabled; }
-  public void onPermissionsReady() { if (!incoming) startAudio(); }
+  public void onPermissionsReady() {
+    // Start the local camera preview as soon as permission and its Surface are
+    // available. Joining the video transport still waits for the audio call.
+    ensureVideoPreview();
+    if (!incoming) startAudio();
+  }
   public void accept() {
     if (state != CallState.RINGING || terminated) return;
     state = CallState.CONNECTING; publish("Connecting…"); startAudio();
@@ -95,14 +101,43 @@ public final class VideoCallController {
   }
   public void flipCamera() { if (videoClient != null && state == CallState.CONNECTED) videoClient.switchCamera(); }
   public void toggleCamera() {
-    if (videoClient == null || state != CallState.CONNECTED) return;
-    cameraEnabled = !cameraEnabled; videoClient.setCameraEnabled(cameraEnabled);
+    setCameraEnabled(!cameraEnabled);
+  }
+  public void setCameraEnabled(boolean enabled) {
+    if (videoClient == null || state != CallState.CONNECTED || cameraEnabled == enabled) return;
+    cameraEnabled = enabled; videoClient.setCameraEnabled(cameraEnabled);
+    if (audioClient != null) audioClient.setCameraEnabledSignal(cameraEnabled);
     listener.onCameraEnabled(cameraEnabled);
   }
   public void toggleMute() {
-    if (audioClient == null || state != CallState.CONNECTED) return;
-    muted = !muted; audioClient.setMuted(muted); listener.onState(state, signaling, audio, video,
+    setMuted(!muted);
+  }
+  public void setMuted(boolean value) {
+    if (audioClient == null || state != CallState.CONNECTED || muted == value) return;
+    muted = value; audioClient.setMuted(muted); listener.onState(state, signaling, audio, video,
         formatElapsed());
+  }
+
+  /** Pauses media for call waiting while preserving transport state. */
+  public void setHeld(boolean held) {
+    setHeld(held, () -> { });
+  }
+  public void setHeld(boolean held, Runnable onApplied) {
+    if (terminated) { onApplied.run(); return; }
+    this.held = held;
+    if (audioClient != null) audioClient.setHeld(held, muted, onApplied);
+    else onApplied.run();
+    if (videoClient != null) videoClient.setCameraEnabled(!held && cameraEnabled);
+    if (held) {
+      if (videoClient != null) videoClient.onPause();
+      publish("On hold");
+    } else {
+      if (resumed && videoClient != null) videoClient.onResume();
+      publish(state == CallState.CONNECTED ? formatElapsed() : "Connecting…");
+    }
+  }
+  public void setManualHeld(boolean held) {
+    sendControl(held ? "call_hold" : "call_resume");
   }
 
   private void startAudio() {
@@ -130,6 +165,22 @@ public final class VideoCallController {
     @Override public void onRemoteMuteChanged(boolean value) {
       remoteMuted = value; handler.post(() -> listener.onRemoteMuted(value));
     }
+    @Override public void onRemoteCameraChanged(boolean enabled) {
+      remoteCameraEnabled = enabled;
+      handler.post(() -> listener.onRemoteCameraEnabled(enabled));
+    }
+    @Override public void onPeerHoldChanged(boolean held) {
+      peerHeld = held;
+      Runnable applied = () -> handler.post(() -> publish(held ? "Call on hold" :
+          (state == CallState.CONNECTED ? formatElapsed() : "Resuming…")));
+      if (audioClient != null) audioClient.setHeld(held, muted, applied);
+      else applied.run();
+      if (videoClient != null) {
+        videoClient.setCameraEnabled(!held && cameraEnabled);
+        if (held) videoClient.onPause();
+        else if (resumed) videoClient.onResume();
+      }
+    }
     @Override public void onServerConnectedAt(long value) { connectedServerAt = value; }
     @Override public void onSignalingConnectionChanged(boolean connected) {
       handler.post(() -> {
@@ -151,13 +202,24 @@ public final class VideoCallController {
 
   private void startVideo(boolean reconnecting) {
     if (terminated || audio != ChannelState.CONNECTED) return;
-    if (videoClient != null) videoClient.release(reconnecting ? "reconnect" : "replace");
+    if (reconnecting && videoClient != null) {
+      videoClient.release("reconnect");
+      videoClient = null;
+    }
     video = reconnecting ? ChannelState.RECONNECTING : ChannelState.CONNECTING;
     publish(reconnecting ? "Reconnecting video…" : "Connecting video…");
-    videoClient = new PingGoVideoCallClient(context, videoListener);
+    ensureVideoPreview();
     videoClient.attachLocalSurface(localSurface); videoClient.attachRemoteSurface(remoteSurface);
     if (resumed) videoClient.onResume();
     videoClient.start(callId, localId, credential, mediaUrl);
+  }
+
+  private void ensureVideoPreview() {
+    if (terminated || videoClient != null) return;
+    videoClient = new PingGoVideoCallClient(context, videoListener);
+    videoClient.attachLocalSurface(localSurface);
+    videoClient.attachRemoteSurface(remoteSurface);
+    if (resumed) videoClient.onResume();
   }
 
   private final PingGoVideoCallClient.Listener videoListener = new PingGoVideoCallClient.Listener() {
@@ -192,6 +254,7 @@ public final class VideoCallController {
   private final Runnable timer = new Runnable() {
     @Override public void run() {
       if (state != CallState.CONNECTED || terminated) return;
+      if (held || peerHeld) { handler.postDelayed(this, 1000L); return; }
       listener.onElapsed(formatElapsed()); handler.postDelayed(this, 1000L);
     }
   };

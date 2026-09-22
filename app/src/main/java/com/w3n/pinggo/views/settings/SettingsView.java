@@ -33,9 +33,10 @@ public final class SettingsView extends View {
   private Text nameValue, phoneValue;
   private String currentName = "";
   private String currentPhone = "";
-  private Button logout;
+  private Button logoutThis, logoutAll;
   private int topInset, bottomInset;
   private boolean profileMode;
+  private boolean companionDevice;
 
   public SettingsView(Context c, Listener l) {
     super(c);
@@ -65,8 +66,15 @@ public final class SettingsView extends View {
   }
 
   public void setLoading(boolean loading) {
-    if (logout != null) logout.setEnabled(!loading).setAlpha(loading ? .55f : 1f);
+    if (logoutThis != null) logoutThis.setEnabled(!loading).setAlpha(loading ? .55f : 1f);
+    if (logoutAll != null) logoutAll.setEnabled(!loading).setAlpha(loading ? .55f : 1f);
     invalidate();
+  }
+
+  public void setCompanionDevice(boolean companion) {
+    if (companionDevice == companion) return;
+    companionDevice = companion;
+    if (getWidth() > 0 && !profileMode) build();
   }
 
   public boolean isProfileMode() { return profileMode; }
@@ -90,7 +98,8 @@ public final class SettingsView extends View {
   private void build() {
     bg.clear();
     content.clear();
-    logout = null;
+    logoutThis = null;
+    logoutAll = null;
     if (!profileMode) {
       buildSettings();
       return;
@@ -172,12 +181,23 @@ public final class SettingsView extends View {
     addMenuRow("linked", "▣", "Linked devices", "Use PingGo on other devices", row,
         id -> listener.onLinkedDevices());
     row += px(209f);
-    addMenuRow("account", "⚿", "Account", "Log out, delete account", row, id -> listener.onAccount());
-    row += px(209f);
+    if (!companionDevice) {
+      addMenuRow("account", "⚿", "Account", "Delete account", row, id -> listener.onAccount());
+      row += px(209f);
+    }
     addMenuRow("privacy", "▢", "Privacy", "Blocked accounts", row, id -> listener.onPrivacy());
     row += px(209f);
     addMenuRow("invite", "♧", "Invite a friend", "Share PingGo with friends", row,
         id -> listener.onInvite());
+    row += px(209f);
+    logoutThis = button("logout_this", danger, "Log out from this device",
+        new RectF(px(55f), row + px(11f), w - px(55f), row + px(154f)),
+        Color.WHITE, id -> listener.onLogoutThisDevice());
+    if (!companionDevice) {
+      logoutAll = button("logout_all", white, "Log out from all devices",
+          new RectF(px(55f), row + px(176f), w - px(55f), row + px(319f)),
+          0xFFCF3344, id -> listener.onLogoutAllDevices());
+    }
     invalidate();
   }
 
@@ -310,7 +330,9 @@ public final class SettingsView extends View {
 
     void onPhone();
 
-    void onLogout();
+    void onLogoutThisDevice();
+
+    void onLogoutAllDevices();
 
     void onEditProfile();
 

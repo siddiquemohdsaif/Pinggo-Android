@@ -20,6 +20,7 @@ public class NotificationActionReceiver extends BroadcastReceiver {
         Context appContext = context.getApplicationContext();
         String action = intent.getAction();
         String callId = value(intent, PingGoNotificationManager.EXTRA_CALL_ID);
+        String invitationId = value(intent, PingGoNotificationManager.EXTRA_INVITATION_ID);
         Log.i("PingGoCallTrace", "notification_action action=" + action
                 + " callId=" + callId);
         if (!LoginStateManager.getInstance().isLoggedIn(appContext)) {
@@ -33,7 +34,8 @@ public class NotificationActionReceiver extends BroadcastReceiver {
 
         ChatRepository repository = ChatRepository.getInstance(appContext);
         if (PingGoNotificationManager.ACTION_CALL_DECLINE.equals(action)) {
-            PingGoNotificationManager.rememberCallAction(appContext, callId, action);
+            PingGoNotificationManager.rememberCallAction(
+                    appContext, callId, invitationId, action);
             JsonObject event = new JsonObject();
             event.addProperty("type", "call_reject");
             event.addProperty("callId", callId);
@@ -44,7 +46,8 @@ public class NotificationActionReceiver extends BroadcastReceiver {
             return;
         }
         if (PingGoNotificationManager.ACTION_CALL_ANSWER.equals(action)) {
-            PingGoNotificationManager.rememberCallAction(appContext, callId, action);
+            PingGoNotificationManager.rememberCallAction(
+                    appContext, callId, invitationId, action);
             Log.i("PingGoCallTrace", "answer_saved_connecting_socket callId=" + callId
                     + " chatId=" + chatId);
             repository.connect();
@@ -53,7 +56,8 @@ public class NotificationActionReceiver extends BroadcastReceiver {
             return;
         }
         if (PingGoNotificationManager.ACTION_CALL_OPEN.equals(action)) {
-            PingGoNotificationManager.rememberCallAction(appContext, callId, action);
+            PingGoNotificationManager.rememberCallAction(
+                    appContext, callId, invitationId, action);
             Log.i("PingGoCallTrace", "open_saved_connecting_socket callId=" + callId
                     + " chatId=" + chatId);
             repository.connect();

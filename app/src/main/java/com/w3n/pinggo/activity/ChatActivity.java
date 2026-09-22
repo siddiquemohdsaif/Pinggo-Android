@@ -40,7 +40,6 @@ import android.widget.Toast;
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import androidx.core.graphics.Insets;
@@ -118,7 +117,8 @@ public class ChatActivity extends PingGoActivity implements ChatViewListener {
       EXTRA_CHAT_ID = "com.w3n.pinggo.EXTRA_CHAT_ID",
       EXTRA_PROFILE_PHOTO_URL = "com.w3n.pinggo.EXTRA_PROFILE_PHOTO_URL",
       EXTRA_LOCAL_PROFILE_PHOTO_PATH = "com.w3n.pinggo.EXTRA_LOCAL_PROFILE_PHOTO_PATH",
-      EXTRA_OPEN_REQUEST_NANOS = "com.w3n.pinggo.EXTRA_OPEN_REQUEST_NANOS";
+      EXTRA_OPEN_REQUEST_NANOS = "com.w3n.pinggo.EXTRA_OPEN_REQUEST_NANOS",
+      EXTRA_STARTED_FROM_NEW_CHAT = "com.w3n.pinggo.EXTRA_STARTED_FROM_NEW_CHAT";
   private final Handler typingHandler = new Handler(Looper.getMainLooper());
   private long lastSocketErrorToastAt;
   private ChatView chatView;
@@ -217,6 +217,7 @@ public class ChatActivity extends PingGoActivity implements ChatViewListener {
   private String chatId, currentUser, receiverId, replyingId, editingId;
   private String chatName;
   private boolean groupChat;
+  private boolean startedFromNewChat;
   private ChatEntity currentChatDetails;
   private String profilePhotoPath;
   private String groupProfilePhotoUrl;
@@ -305,6 +306,7 @@ public class ChatActivity extends PingGoActivity implements ChatViewListener {
   private boolean contactBlocked;
   private boolean contactExists;
   private boolean addContactAfterLookup;
+  private boolean refreshMessageLayoutAfterCall;
   private int contactLookupGeneration;
   private final Runnable refreshTyping = new Runnable() {
     @Override
@@ -345,6 +347,7 @@ public class ChatActivity extends PingGoActivity implements ChatViewListener {
     long createStartedNanos = SystemClock.elapsedRealtimeNanos();
     String name;
     chatId = getIntent().getStringExtra(EXTRA_CHAT_ID);
+    startedFromNewChat = getIntent().getBooleanExtra(EXTRA_STARTED_FROM_NEW_CHAT, false);
     groupChat = chatId != null && chatId.startsWith("grp_");
     contactBlocked = !groupChat && getSharedPreferences("chat_menu_state", MODE_PRIVATE)
         .getBoolean("blocked:" + String.valueOf(chatId), false);
@@ -457,10 +460,15 @@ public class ChatActivity extends PingGoActivity implements ChatViewListener {
       currentChatDetails = chat;
       long mutedUntil = chat == null ? 0L : chat.notificationMuted;
       notificationsMuted = mutedUntil == -1L || mutedUntil > System.currentTimeMillis();
-      if (groupChat && chat != null) {
-        String observedName = chat.contactName == null || chat.contactName.trim().isEmpty()
-            ? "Group"
-            : chat.contactName.trim();
+      if (chat != null) {
+        String deviceContact = groupChat ? ""
+            : DeviceContactResolver.cachedDeviceContactName(receiverId);
+        String storedName = chat.contactName == null ? "" : chat.contactName.trim();
+        String observedName = groupChat
+            ? (storedName.isEmpty() ? "Group" : storedName)
+            : (!deviceContact.isEmpty() ? deviceContact
+            : (!storedName.isEmpty() && !storedName.equals(receiverId)
+            ? storedName : DeviceContactResolver.fallback(receiverId)));
         if (!observedName.equals(chatName)) {
           chatName = observedName;
           chatView.setChatName(chatName);
@@ -471,9 +479,11 @@ public class ChatActivity extends PingGoActivity implements ChatViewListener {
           profilePhotoPath = chat.localProfilePhotoPath;
           chatView.setProfilePhoto(profilePhotoPath);
         }
-        chatView.setPresence(chat.groupMemberCount > 0
-            ? chat.groupMemberCount + (chat.groupMemberCount == 1 ? " member" : " members")
-            : "group");
+        if (groupChat) {
+          chatView.setPresence(chat.groupMemberCount > 0
+              ? chat.groupMemberCount + (chat.groupMemberCount == 1 ? " member" : " members")
+              : "group");
+        }
       }
       if (conversationMenuDialog != null) {
         conversationMenuDialog.setMuted(notificationsMuted);
@@ -497,6 +507,8 @@ public class ChatActivity extends PingGoActivity implements ChatViewListener {
 
           @Override
           public void onSocketError(String error) {
+            if (startedFromNewChat && isNoUserFound(error))
+              return;
             long now = System.currentTimeMillis();
             if (now - lastSocketErrorToastAt < 15000L)
               return;
@@ -568,6 +580,14 @@ public class ChatActivity extends PingGoActivity implements ChatViewListener {
       });
     observe();
     profiler.activityCreated(createStartedNanos);
+  }
+
+  private static boolean isNoUserFound(String message) {
+    if (message == null)
+      return false;
+    String normalized = message.trim();
+    return "No user found".equalsIgnoreCase(normalized)
+        || "No user found.".equalsIgnoreCase(normalized);
   }
 
   private void ensurePingGoStorageAccess() {
@@ -1792,14 +1812,14 @@ public class ChatActivity extends PingGoActivity implements ChatViewListener {
     if (!requireGroupCallPermission())
       return;
     if (isGroupChat()) {
-      openCall(VideoCallActivity.class);
+      openCall(true);
       return;
     }
     if (contactBlocked) {
       Toast.makeText(this, "Unblock this contact to make a call.", Toast.LENGTH_SHORT).show();
       return;
     }
-    openCall(VideoCallActivity.class);
+    openCall(true);
   }
 
   @Override
@@ -1807,18 +1827,18 @@ public class ChatActivity extends PingGoActivity implements ChatViewListener {
     if (!requireGroupCallPermission())
       return;
     if (isGroupChat()) {
-      openCall(VoiceCallActivity.class);
+      openCall(false);
       return;
     }
     if (contactBlocked) {
       Toast.makeText(this, "Unblock this contact to make a call.", Toast.LENGTH_SHORT).show();
       return;
     }
-    openCall(VoiceCallActivity.class);
+    openCall(false);
   }
 
-  private void openCall(Class<? extends AppCompatActivity> activityClass) {
-    String requestedType = activityClass == VideoCallActivity.class
+  private void openCall(boolean video) {
+    String requestedType = video
         ? ActiveCallRegistry.TYPE_VIDEO
         : ActiveCallRegistry.TYPE_VOICE;
     ActiveCallRegistry registry = ActiveCallRegistry.getInstance();
@@ -1832,14 +1852,31 @@ public class ChatActivity extends PingGoActivity implements ChatViewListener {
       Toast.makeText(this, activeType + " call is already" + state + ".", Toast.LENGTH_SHORT).show();
       return;
     }
-    Intent intent = new Intent(this, activityClass);
-    intent.putExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID, chatId);
-    intent.putExtra(VoiceCallActivity.EXTRA_CALL_ID, UUID.randomUUID().toString());
-    intent.putExtra(VoiceCallActivity.EXTRA_CALLER_ID, receiverId);
-    intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER,
+    com.w3n.pinggo.call.CallEngineChooser.show(
+        this, video ? "video" : "audio", chatId,
+        engine -> startOutgoingCall(video, engine));
+  }
+
+  private void startOutgoingCall(boolean video, String engine) {
+    Intent intent = new Intent(this, CallActivity.class);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_CHAT_ID, chatId);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_ID, UUID.randomUUID().toString());
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALLER_ID, receiverId);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PHONE_NUMBER,
         DeviceContactResolver.cachedNameOrPhone(receiverId));
-    intent.putExtra(VoiceCallActivity.EXTRA_PROFILE_PATH, profilePhotoPath);
-    startActivity(intent);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PROFILE_PATH, profilePhotoPath);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_VIDEO, video);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_MEDIA_TYPE,
+        video ? "video" : "audio");
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_ENGINE,
+        engine);
+    refreshMessageLayoutAfterCall = true;
+    try {
+      startActivity(intent);
+    } catch (RuntimeException error) {
+      refreshMessageLayoutAfterCall = false;
+      throw error;
+    }
   }
 
   private void finishComposeAction() {
@@ -3844,6 +3881,10 @@ public class ChatActivity extends PingGoActivity implements ChatViewListener {
   @Override
   protected void onResume() {
     super.onResume();
+    if (refreshMessageLayoutAfterCall && chatView != null) {
+      refreshMessageLayoutAfterCall = false;
+      chatView.refreshMessageLayoutAfterCall();
+    }
     if (groupChat && repository != null)
       refreshGroupMembership();
     if (videoPreviewView != null)

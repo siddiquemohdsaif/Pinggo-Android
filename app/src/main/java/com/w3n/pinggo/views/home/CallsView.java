@@ -74,6 +74,7 @@ public final class CallsView extends View {
     private final LruCache<String, Bitmap> conferenceCollageCache = new LruCache<>(32);
     private final Set<String> selectedCallIds = new java.util.LinkedHashSet<>();
     private final Set<String> requestedProfiles = new java.util.HashSet<>();
+    private final Set<String> requestedConferenceProfiles = new java.util.HashSet<>();
     private final Map<String, String> loadedProfiles = new java.util.HashMap<>();
     private OnSelectionChangedListener selectionChangedListener;
     private ComponentList<CallLog> list;
@@ -440,6 +441,16 @@ public final class CallsView extends View {
                 }
             }
         }
+        void notifyConferenceParticipantChanged(String participantId) {
+            rowBindings.clear();
+            for (int position = 0; position < calls.size(); position++) {
+                CallLog call = calls.get(position);
+                if (usesConferenceCollage(call)
+                        && call.getParticipantIds().contains(participantId)) {
+                    notifyItemChanged(position);
+                }
+            }
+        }
         @Override public long getItemId(int position) {
             if (position >= calls.size()) return Long.MIN_VALUE;
             return callKey(calls.get(position)).hashCode();
@@ -522,12 +533,6 @@ public final class CallsView extends View {
             item.find("name", Text.class).setText(call.getContactName());
             String duration = call.getDuration() == null ? "" : call.getDuration().trim();
             String details = call.getCalledTime() == null ? "" : call.getCalledTime().trim();
-            if (call.isConference()) {
-                String type = call.isGroupCall()
-                        ? (call.isVideoCall() ? "Group video call" : "Group voice call")
-                        : (call.isVideoCall() ? "Conference video call" : "Conference voice call");
-                details = type + (details.isEmpty() ? "" : " · " + details);
-            }
             if (!duration.isEmpty()) details += (details.isEmpty() ? "" : " · ") + duration;
             item.find("details", Text.class).setText(details);
             item.find("type", Image.class)
@@ -607,6 +612,11 @@ public final class CallsView extends View {
 
     private void bindConferenceAvatar(ComponentList.Item item, CallLog call) {
         int size = Math.max(1, Math.round(px(132f)));
+        for (String participantId : call.getParticipantIds()) {
+            String path = participantPhotoPath(participantId);
+            if (path == null || path.trim().isEmpty())
+                loadMissingConferenceProfile(participantId);
+        }
         String collageKey = conferenceCollageKey(call, size);
         Bitmap collage = conferenceCollageCache.get(collageKey);
         if (collage == null || collage.isRecycled()) {
@@ -769,7 +779,21 @@ public final class CallsView extends View {
     }
 
     private String participantPhotoPath(String participantId) {
-        return ChatProfilePhotoStore.getLocalPath(getContext(), participantId);
+        String loaded = loadedProfiles.get(participantId);
+        return loaded != null ? loaded
+                : ChatProfilePhotoStore.getLocalPath(getContext(), participantId);
+    }
+
+    private void loadMissingConferenceProfile(String participantId) {
+        if (participantId == null || participantId.trim().isEmpty()
+                || !requestedConferenceProfiles.add(participantId)) return;
+        ChatRepository.getInstance(getContext()).loadUserProfilePhoto(participantId, path -> {
+            if (path == null || path.trim().isEmpty()) return;
+            loadedProfiles.put(participantId, path);
+            conferenceCollageCache.evictAll();
+            adapter.notifyConferenceParticipantChanged(participantId);
+            Log.d(TESTING_TAG, "call_profile phase=conference_participant_loaded");
+        });
     }
 
     private String avatarCacheKey(String path, int size) {

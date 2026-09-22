@@ -9,6 +9,7 @@ import com.w3n.pinggo.Database.CloudFunction.RestApi.AppRestAPI;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.CallLogHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LiveKitTokenHandler;
+import com.w3n.pinggo.Database.CloudFunction.Utils.WebRtcIceServerHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.EmailOtpHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.GoogleAuthHandler;
 import com.w3n.pinggo.Database.CloudFunction.Utils.GroupHandler;
@@ -141,6 +142,10 @@ public class AppFunctionManager {
 
   public void getLiveKitToken(String callId, String chatId, String mediaType, Callback callback) {
     LiveKitTokenHandler.getToken(appApi, callId, chatId, mediaType, callback);
+  }
+
+  public void getWebRtcIceServers(Callback callback) {
+    WebRtcIceServerHandler.getServers(appApi, callback);
   }
 
   public void getCallLogs(String phoneNumber, String chatId, int pageSize, String cursor,

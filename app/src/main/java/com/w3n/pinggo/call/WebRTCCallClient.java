@@ -6,6 +6,9 @@ import android.os.SystemClock;
 import android.util.Log;
 import android.util.Base64;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.w3n.pinggo.Database.CloudFunction.AppFunction.AppFunctionManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
 import com.w3n.pinggo.data.repository.ChatRepository;
 import java.util.ArrayList;
@@ -21,6 +24,7 @@ import org.webrtc.AudioTrack;
 import org.webrtc.IceCandidate;
 import org.webrtc.MediaConstraints;
 import org.webrtc.MediaStream;
+import org.webrtc.MediaStreamTrack;
 import org.webrtc.PeerConnection;
 import org.webrtc.PeerConnectionFactory;
 import org.webrtc.RtpReceiver;
@@ -36,11 +40,16 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
   private static final String TAG = "PingGoRtcSignal";
   private static final String CONNECTION_TAG = "PingGoCallConnection";
   private static final String DISCONNECT_HOOK_TAG = "PingGoDisconnectHook";
+  private static final Object AUDIO_RUNTIME_LOCK = new Object();
+  private static PeerConnectionFactory sharedFactory;
+  private static JavaAudioDeviceModule sharedAudioDeviceModule;
   public interface Listener {
     void onState(String state);
     void onRemoteMuteChanged(boolean muted);
     default void onServerConnectedAt(long connectedAtMs) {}
     default void onSignalingConnectionChanged(boolean connected) {}
+    default void onPeerHoldChanged(boolean held) {}
+    default void onRemoteCameraChanged(boolean enabled) {}
     void onEnded(String reason);
     void onError(String message);
   }
@@ -50,6 +59,7 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
   private final Listener listener;
   private final ExecutorService rtcThread = Executors.newSingleThreadExecutor();
   private final List<IceCandidate> pendingCandidates = new ArrayList<>();
+  private final List<MediaStreamTrack> remoteAudioTracks = new ArrayList<>();
   private PeerConnectionFactory factory;
   private PeerConnection peerConnection;
   private JavaAudioDeviceModule audioDeviceModule;
@@ -57,8 +67,10 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
   private AudioTrack audioTrack;
   private String callId, chatId, localUserId, remoteUserId, mediaType = "audio";
   private JsonObject lastLocalDescriptionEvent;
-  private boolean remoteDescriptionSet, ended;
+  private boolean remoteDescriptionSet, ended, remoteBusyOnOtherCall;
+  private boolean localMuted, localCameraEnabled = true;
   private int localCandidateCount, remoteCandidateCount;
+  private List<PeerConnection.IceServer> iceServers = defaultIceServers();
 
   public WebRTCCallClient(Context context, ChatRepository repository, Listener listener) {
     this.context = context.getApplicationContext();
@@ -79,7 +91,7 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
     this.mediaType = "video".equals(mediaType) ? "video" : "audio";
     logConnection("outgoing_start", "mediaType=" + this.mediaType);
     repository.setCallEventListener(this);
-    rtcThread.execute(() -> {
+    loadIceServers(() -> rtcThread.execute(() -> {
       if (!initialize()) return;
       notifyState("Calling…");
       peerConnection.createOffer(new SimpleSdpObserver() {
@@ -88,7 +100,7 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
         }
         @Override public void onCreateFailure(String error) { fail(error); }
       }, audioConstraints());
-    });
+    }));
   }
 
   public void startIncoming(String callId, String chatId, String localUserId, String remoteUserId,
@@ -108,7 +120,7 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
     logConnection("incoming_start", "mediaType=" + this.mediaType
         + " offerLength=" + normalizedOffer.length() + " offerHash=" + sdpHash(normalizedOffer));
     repository.setCallEventListener(this);
-    rtcThread.execute(() -> {
+    loadIceServers(() -> rtcThread.execute(() -> {
       if (!initialize()) return;
       notifyState("Connecting…");
       SessionDescription remote = new SessionDescription(SessionDescription.Type.OFFER, normalizedOffer);
@@ -128,23 +140,50 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
         }
         @Override public void onSetFailure(String error) { fail(error); }
       }, remote);
+    }));
+  }
+
+  private void loadIceServers(Runnable completion) {
+    AppFunctionManager.getInstance().getWebRtcIceServers(new AppFunctionManager.Callback() {
+      @Override public void onSuccess(Object value) {
+        if (value instanceof JsonObject) {
+          List<PeerConnection.IceServer> configured = parseIceServers((JsonObject) value);
+          if (!configured.isEmpty()) iceServers = configured;
+        }
+        completion.run();
+      }
+
+      @Override public void onError(String error) {
+        logConnection("ice_config_fallback", "message=" + normalizeText(error));
+        completion.run();
+      }
     });
   }
 
   private boolean initialize() {
     try {
-      PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(context)
-          .setEnableInternalTracer(false).createInitializationOptions());
-      audioDeviceModule = JavaAudioDeviceModule.builder(context)
-          .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
-          .setUseHardwareNoiseSuppressor(true)
-          .setUseHardwareAcousticEchoCanceler(true)
-          .setUseLowLatency(true)
-          .createAudioDeviceModule();
-      factory = PeerConnectionFactory.builder().setAudioDeviceModule(audioDeviceModule).createPeerConnectionFactory();
-      PeerConnection.RTCConfiguration config = new PeerConnection.RTCConfiguration(Collections.singletonList(
-          PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()));
-      logConnection("rtc_initialized", "iceServers=1 turnServers=0 mediaType=" + mediaType);
+      synchronized (AUDIO_RUNTIME_LOCK) {
+        if (sharedFactory == null) {
+          PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions
+              .builder(context).setEnableInternalTracer(false).createInitializationOptions());
+          sharedAudioDeviceModule = JavaAudioDeviceModule.builder(context)
+              .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+              .setUseHardwareNoiseSuppressor(true)
+              .setUseHardwareAcousticEchoCanceler(true)
+              .setUseLowLatency(true)
+              .createAudioDeviceModule();
+          sharedFactory = PeerConnectionFactory.builder()
+              .setAudioDeviceModule(sharedAudioDeviceModule).createPeerConnectionFactory();
+        }
+        factory = sharedFactory;
+        audioDeviceModule = sharedAudioDeviceModule;
+      }
+      PeerConnection.RTCConfiguration config = new PeerConnection.RTCConfiguration(iceServers);
+      int turnServerCount = 0;
+      for (PeerConnection.IceServer server : iceServers)
+        for (String url : server.urls) if (url.startsWith("turn:")) turnServerCount++;
+      logConnection("rtc_initialized", "iceServers=" + iceServers.size()
+          + " turnServers=" + turnServerCount + " mediaType=" + mediaType);
       config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
       peerConnection = factory.createPeerConnection(config, observer);
       if (peerConnection == null) throw new IllegalStateException("Could not create PeerConnection.");
@@ -182,7 +221,10 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
     }
     @Override public void onConnectionChange(PeerConnection.PeerConnectionState state) {
       logConnection("peer_connection", "state=" + state.name());
-      if (state == PeerConnection.PeerConnectionState.CONNECTED) notifyState("Connected");
+      if (state == PeerConnection.PeerConnectionState.CONNECTED) {
+        send("call_connected", null, null);
+        notifyState("Connected");
+      }
       else if (state == PeerConnection.PeerConnectionState.DISCONNECTED) notifyState("Reconnecting…");
       else if (state == PeerConnection.PeerConnectionState.FAILED) fail("Voice connection failed.");
       else if (state == PeerConnection.PeerConnectionState.CLOSED) notifyState("Ended");
@@ -202,7 +244,12 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
     @Override public void onRemoveStream(MediaStream stream) {}
     @Override public void onDataChannel(org.webrtc.DataChannel channel) {}
     @Override public void onRenegotiationNeeded() {}
-    @Override public void onAddTrack(RtpReceiver receiver, MediaStream[] streams) {}
+    @Override public void onAddTrack(RtpReceiver receiver, MediaStream[] streams) {
+      MediaStreamTrack track = receiver == null ? null : receiver.track();
+      if (track != null && "audio".equals(track.kind())) {
+        synchronized (remoteAudioTracks) { remoteAudioTracks.add(track); }
+      }
+    }
   };
 
   private void setLocalAndSend(SessionDescription description, String eventType) {
@@ -241,21 +288,47 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
       return;
     }
     if (!callId.equals(JsonParserUtil.getString(event, "callId"))) return;
+    if ("call_invite_ack".equals(type)) {
+      if (event.has("receiverBusy") && event.get("receiverBusy").getAsBoolean()) {
+        remoteBusyOnOtherCall = true;
+        notifyState("Busy on another call");
+      }
+      return;
+    }
     if ("call_answer_ack".equals(type)) {
+      return;
+    }
+    if ("call_connected_ack".equals(type) || "call_connected".equals(type)) {
       long serverTime = event.has("serverTime") ? event.get("serverTime").getAsLong() : 0L;
       if (serverTime > 0) listener.onServerConnectedAt(serverTime);
       return;
     }
-    if ("call_ringing".equals(type)) notifyState("Ringing…");
+    if ("call_ringing".equals(type))
+      notifyState(remoteBusyOnOtherCall ? "Busy on another call" : "Ringing…");
+    else if ("call_waiting".equals(type)) {
+      remoteBusyOnOtherCall = true;
+      notifyState("Busy on another call");
+    }
     else if ("call_answer".equals(type)) {
-      long serverTime = event.has("serverTime") ? event.get("serverTime").getAsLong() : 0L;
-      if (serverTime > 0) listener.onServerConnectedAt(serverTime);
+      remoteBusyOnOtherCall = false;
       applyAnswer(event);
     }
     else if ("ice_candidate".equals(type)) addCandidate(event);
     else if ("call_mute".equals(type)) {
       boolean remoteMuted = event.has("muted") && event.get("muted").getAsBoolean();
-      context.getMainExecutor().execute(() -> listener.onRemoteMuteChanged(remoteMuted));
+      boolean remoteCamera = !event.has("cameraEnabled")
+          || event.get("cameraEnabled").getAsBoolean();
+      context.getMainExecutor().execute(() -> {
+        listener.onRemoteMuteChanged(remoteMuted);
+        listener.onRemoteCameraChanged(remoteCamera);
+      });
+    }
+    else if ("call_hold".equals(type) || "call_resume".equals(type)) {
+      String affectedUser = JsonParserUtil.getString(event,
+          "call_hold".equals(type) ? "heldUserId" : "resumedUserId");
+      if (normalize(affectedUser).equals(localUserId)) return;
+      boolean held = "call_hold".equals(type);
+      context.getMainExecutor().execute(() -> listener.onPeerHoldChanged(held));
     }
     else if ("call_reject".equals(type) || "call_busy".equals(type)
         || "call_unavailable".equals(type) || "call_no_answer".equals(type)
@@ -296,14 +369,39 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
     pendingCandidates.clear();
   }
   public void setMuted(boolean muted) {
+    localMuted = muted;
     if (audioTrack != null) audioTrack.setEnabled(!muted);
+    sendMediaState();
+  }
+  public void setCameraEnabledSignal(boolean enabled) {
+    localCameraEnabled = enabled;
+    sendMediaState();
+  }
+  private void sendMediaState() {
     JsonObject event = new JsonObject();
     event.addProperty("type", "call_mute");
     event.addProperty("callId", callId);
     event.addProperty("senderId", localUserId);
     event.addProperty("receiverId", remoteUserId);
-    event.addProperty("muted", muted);
+    event.addProperty("muted", localMuted);
+    event.addProperty("cameraEnabled", localCameraEnabled);
     repository.sendCallEvent(event);
+  }
+  /** Pauses both directions locally without tearing down the peer connection. */
+  public void setHeld(boolean held) {
+    setHeld(held, false);
+  }
+  public void setHeld(boolean held, boolean keepMuted) {
+    setHeld(held, keepMuted, () -> { });
+  }
+  public void setHeld(boolean held, boolean keepMuted, Runnable onApplied) {
+    rtcThread.execute(() -> {
+      if (audioTrack != null) audioTrack.setEnabled(!held && !keepMuted);
+      synchronized (remoteAudioTracks) {
+        for (MediaStreamTrack track : remoteAudioTracks) track.setEnabled(!held);
+      }
+      context.getMainExecutor().execute(onApplied);
+    });
   }
   public void endCall() { endCall("hangup"); }
   public void endCall(String reason) {
@@ -349,7 +447,10 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
     if (ended) return;
     logConnection("failure", "message=" + error);
     Log.e(TAG, "failure callId=" + callId + " message=" + error);
-    context.getMainExecutor().execute(() -> listener.onError(error));
+    context.getMainExecutor().execute(() -> {
+      listener.onError(error);
+      listener.onEnded("connection_failed");
+    });
     // A local ICE/SDP failure is terminal for this call. Notify signaling before disposing the
     // peer so the server releases both participants and an immediate retry is not reported busy.
     endCall("connection_failed");
@@ -365,8 +466,8 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
       if (peerConnection != null) { peerConnection.close(); peerConnection.dispose(); }
       if (audioTrack != null) audioTrack.dispose();
       if (audioSource != null) audioSource.dispose();
-      if (factory != null) factory.dispose();
-      if (audioDeviceModule != null) { audioDeviceModule.release(); }
+      // The factory and audio device are process-scoped so a held call and an
+      // accepted waiting call can coexist. Android releases them with the app process.
       rtcThread.shutdown();
     });
   }
@@ -383,6 +484,40 @@ public final class WebRTCCallClient implements ChatRepository.CallEventListener 
   }
   private static String normalizeText(String value) {
     return value == null ? "" : value.trim();
+  }
+  private static List<PeerConnection.IceServer> defaultIceServers() {
+    List<PeerConnection.IceServer> result = new ArrayList<>();
+    result.add(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302")
+        .createIceServer());
+    result.add(PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478")
+        .createIceServer());
+    return result;
+  }
+  private static List<PeerConnection.IceServer> parseIceServers(JsonObject response) {
+    List<PeerConnection.IceServer> result = new ArrayList<>();
+    JsonArray servers = response.has("iceServers") && response.get("iceServers").isJsonArray()
+        ? response.getAsJsonArray("iceServers") : new JsonArray();
+    for (JsonElement raw : servers) {
+      if (!raw.isJsonObject()) continue;
+      JsonObject value = raw.getAsJsonObject();
+      List<String> urls = new ArrayList<>();
+      if (value.has("urls") && value.get("urls").isJsonArray()) {
+        for (JsonElement url : value.getAsJsonArray("urls"))
+          if (url.isJsonPrimitive() && !url.getAsString().trim().isEmpty())
+            urls.add(url.getAsString().trim());
+      } else if (value.has("urls") && value.get("urls").isJsonPrimitive()) {
+        String url = value.get("urls").getAsString().trim();
+        if (!url.isEmpty()) urls.add(url);
+      }
+      if (urls.isEmpty()) continue;
+      PeerConnection.IceServer.Builder builder = PeerConnection.IceServer.builder(urls);
+      String username = JsonParserUtil.getString(value, "username");
+      String credential = JsonParserUtil.getString(value, "credential");
+      if (!username.isEmpty()) builder.setUsername(username);
+      if (!credential.isEmpty()) builder.setPassword(credential);
+      result.add(builder.createIceServer());
+    }
+    return result;
   }
   private static String candidateType(String candidate) {
     if (candidate == null) return "unknown";

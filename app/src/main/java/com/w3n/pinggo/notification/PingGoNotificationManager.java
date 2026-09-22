@@ -23,9 +23,7 @@ import com.w3n.pinggo.R;
 import com.w3n.pinggo.activity.ChatActivity;
 import com.w3n.pinggo.activity.HomeActivity;
 import com.w3n.pinggo.activity.LinkedDevicesActivity;
-import com.w3n.pinggo.activity.VoiceCallActivity;
-import com.w3n.pinggo.activity.VideoCallActivity;
-import com.w3n.pinggo.activity.LiveKitCallActivity;
+import com.w3n.pinggo.activity.SettingsActivity;
 import com.w3n.pinggo.call.CallEngineToggle;
 import com.w3n.pinggo.contacts.DeviceContactResolver;
 import com.w3n.pinggo.call.WebRTCCallClient;
@@ -57,12 +55,14 @@ public final class PingGoNotificationManager {
     public static final String EXTRA_CALL_ID = "notificationCallId";
     public static final String EXTRA_CALLER_NAME = "notificationCallerName";
     public static final String EXTRA_CALL_MEDIA_TYPE = "notificationCallMediaType";
+    public static final String EXTRA_INVITATION_ID = "notificationInvitationId";
     private static final String CALL_CHANNEL_ID = "pinggo_calls";
     private static final String GROUP_KEY = "pinggo_message_batch";
     private static final int SUMMARY_NOTIFICATION_ID = 0x4f000001;
     private static final String CALL_ACTION_PREFS = "PingGoCallNotificationActions";
     private static final String OFFER_NOTIFICATION_PREFIX = "offer-notification:";
     private static final String RESOLVED_NOTIFICATION_PREFIX = "resolved-notification:";
+    private static final String ACTIVE_INVITATION_PREFIX = "active-invitation:";
     private static final long OFFER_NOTIFICATION_TTL_MS = 2 * 60 * 60 * 1000L;
 
     private PingGoNotificationManager() { }
@@ -94,11 +94,16 @@ public final class PingGoNotificationManager {
         String reason = value(data, "reason");
         String deviceId = value(data, "deviceId");
         String deviceName = value(data, "deviceName");
-        if (deviceName.isEmpty()) deviceName = "Companion device";
+        if (deviceName.isEmpty()) {
+            deviceName = "device_login".equals(type) ? "Android device" : "Companion device";
+        }
 
         String title;
         String detail;
-        if ("device_linked".equals(type)) {
+        if ("device_login".equals(type)) {
+            title = "New device login";
+            detail = deviceName + " signed in to your Pinggo account.";
+        } else if ("device_linked".equals(type)) {
             title = "Device linked";
             detail = deviceName + " was linked to your PingGo account.";
         } else if ("self_logout".equals(reason)) {
@@ -111,7 +116,9 @@ public final class PingGoNotificationManager {
 
         int notificationId = 0x53000000
                 | ((deviceId.isEmpty() ? type : deviceId).hashCode() & 0x0fffffff);
-        Intent openLinkedDevices = new Intent(context, LinkedDevicesActivity.class)
+        Class<?> destination = "device_login".equals(type)
+                ? SettingsActivity.class : LinkedDevicesActivity.class;
+        Intent openLinkedDevices = new Intent(context, destination)
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent contentIntent = PendingIntent.getActivity(
                 context, notificationId, openLinkedDevices,
@@ -201,6 +208,7 @@ public final class PingGoNotificationManager {
         String chatId = value(data, "chatId");
         String callerId = value(data, "callerId");
         String callerName = value(data, "callerName");
+        String invitationId = value(data, "invitationId");
         boolean video = "video".equals(value(data, "mediaType"));
         boolean liveKit = "livekit".equals(value(data, "engine"));
         boolean conference = "group".equals(value(data, "callMode"))
@@ -208,14 +216,16 @@ public final class PingGoNotificationManager {
         if (callId.isEmpty() || callerId.isEmpty()) return;
         android.content.SharedPreferences callPreferences = context.getSharedPreferences(
                 CALL_ACTION_PREFS, Context.MODE_PRIVATE);
-        long resolvedAt = callPreferences.getLong(RESOLVED_NOTIFICATION_PREFIX + callId, 0L);
+        String invitationKey = callId + (invitationId.isEmpty() ? "" : ":" + invitationId);
+        long resolvedAt = callPreferences.getLong(
+                RESOLVED_NOTIFICATION_PREFIX + invitationKey, 0L);
         if (resolvedAt > 0L
                 && System.currentTimeMillis() - resolvedAt < OFFER_NOTIFICATION_TTL_MS) {
             Log.i("PingGoCallTrace", "notification_duplicate_resolved_skipped callId=" + callId);
             return;
         }
         long richerNotificationAt = callPreferences.getLong(
-                OFFER_NOTIFICATION_PREFIX + callId, 0L);
+                OFFER_NOTIFICATION_PREFIX + invitationKey, 0L);
         if (offer.isEmpty() && richerNotificationAt > 0L
                 && System.currentTimeMillis() - richerNotificationAt < OFFER_NOTIFICATION_TTL_MS) {
             Log.i("PingGoCallTrace", "notification_fcm_downgrade_skipped callId=" + callId
@@ -223,9 +233,13 @@ public final class PingGoNotificationManager {
             return;
         }
         if (!offer.isEmpty()) {
-            callPreferences.edit().putLong(OFFER_NOTIFICATION_PREFIX + callId,
+            callPreferences.edit().putLong(OFFER_NOTIFICATION_PREFIX + invitationKey,
                     System.currentTimeMillis()).apply();
         }
+        android.content.SharedPreferences.Editor activeInvite = callPreferences.edit();
+        if (invitationId.isEmpty()) activeInvite.remove(ACTIVE_INVITATION_PREFIX + callId);
+        else activeInvite.putString(ACTIVE_INVITATION_PREFIX + callId, invitationId);
+        activeInvite.apply();
         Log.i("PingGoCallTrace", "notification_build_incoming callId=" + callId
                 + " chatId=" + chatId + " media=" + (video ? "video" : "audio")
                 + " engine=" + (liveKit ? "livekit" : "legacy")
@@ -248,17 +262,17 @@ public final class PingGoNotificationManager {
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         } else {
             answerIntent = callActionIntent(context, ACTION_CALL_ANSWER, callId, chatId,
-                    callerId, callerName, video, false);
+                    callerId, callerName, video, false, invitationId);
             answer = PendingIntent.getBroadcast(context, id, answerIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
             content = PendingIntent.getBroadcast(context, id ^ 0x24680,
                     callActionIntent(context, ACTION_CALL_OPEN, callId, chatId,
-                            callerId, callerName, video, false),
+                            callerId, callerName, video, false, invitationId),
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         }
         PendingIntent decline = PendingIntent.getBroadcast(context, id ^ 0x13579,
                 callActionIntent(context, ACTION_CALL_DECLINE, callId, chatId,
-                        callerId, callerName, video, liveKit),
+                        callerId, callerName, video, liveKit, invitationId),
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Bitmap avatar = downloadBitmap(value(data, "profilePhotoUrl"));
         Bitmap icon = avatar != null ? avatar : BitmapFactory.decodeResource(
@@ -317,27 +331,43 @@ public final class PingGoNotificationManager {
     }
 
     public static void clearCallNotification(Context context, String callId) {
+        clearCallNotification(context, callId, "");
+    }
+
+    public static void clearCallNotification(
+            Context context, String callId, String invitationId) {
         Log.i("PingGoCallTrace", "notification_cleared callId=" + callId);
         if (callId != null && !callId.trim().isEmpty()) {
-            context.getSharedPreferences(CALL_ACTION_PREFS, Context.MODE_PRIVATE).edit()
-                    .putLong(RESOLVED_NOTIFICATION_PREFIX + callId,
+            android.content.SharedPreferences preferences = context.getSharedPreferences(
+                    CALL_ACTION_PREFS, Context.MODE_PRIVATE);
+            String activeInvitationId = preferences.getString(
+                    ACTIVE_INVITATION_PREFIX + callId, "");
+            String requestedInvitationId = invitationId == null ? "" : invitationId.trim();
+            String resolvedInvitationId = requestedInvitationId;
+            if (resolvedInvitationId.isEmpty()) resolvedInvitationId = activeInvitationId;
+            String invitationKey = callId + (resolvedInvitationId.isEmpty()
+                    ? "" : ":" + resolvedInvitationId);
+            preferences.edit()
+                    .putLong(RESOLVED_NOTIFICATION_PREFIX + invitationKey,
                             System.currentTimeMillis())
-                    .remove(OFFER_NOTIFICATION_PREFIX + callId)
+                    .remove(OFFER_NOTIFICATION_PREFIX + invitationKey)
                     .apply();
+            if (!requestedInvitationId.isEmpty() && !activeInvitationId.isEmpty()
+                    && !requestedInvitationId.equals(activeInvitationId)) return;
+            preferences.edit().remove(ACTIVE_INVITATION_PREFIX + callId).apply();
         }
         NotificationManagerCompat.from(context).cancel(callNotificationId(callId));
     }
 
     /** Keeps an opened incoming call in the shade without showing it again as a heads-up call. */
     public static void markCallNotificationOpened(Context context, Intent activityIntent) {
-        String callId = stringExtra(activityIntent, VoiceCallActivity.EXTRA_CALL_ID);
+        String callId = stringExtra(activityIntent, com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_ID);
         if (callId.isEmpty()) return;
-        String callerName = stringExtra(activityIntent, VoiceCallActivity.EXTRA_PHONE_NUMBER);
+        String callerName = stringExtra(activityIntent, com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PHONE_NUMBER);
         boolean video = "video".equals(stringExtra(activityIntent,
-                LiveKitCallActivity.EXTRA_MEDIA_TYPE))
-                || activityIntent.getComponent() != null
-                && VideoCallActivity.class.getName().equals(
-                activityIntent.getComponent().getClassName());
+                com.w3n.pinggo.call.session.CallActivityContract.EXTRA_MEDIA_TYPE))
+                || activityIntent.getBooleanExtra(
+                com.w3n.pinggo.call.session.CallActivityContract.EXTRA_VIDEO, false);
         Intent reopen = new Intent(activityIntent)
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent content = PendingIntent.getActivity(context,
@@ -365,17 +395,24 @@ public final class PingGoNotificationManager {
         return value == null ? "" : value.trim();
     }
 
-    public static void rememberCallAction(Context context, String callId, String action) {
+    public static void rememberCallAction(Context context, String callId,
+            String invitationId, String action) {
         context.getSharedPreferences(CALL_ACTION_PREFS, Context.MODE_PRIVATE).edit()
-                .putString(callId, action).apply();
+                .putString(callActionKey(callId, invitationId), action).apply();
     }
 
-    public static String consumeCallAction(Context context, String callId) {
+    public static String consumeCallAction(Context context, String callId, String invitationId) {
         android.content.SharedPreferences preferences = context.getSharedPreferences(
                 CALL_ACTION_PREFS, Context.MODE_PRIVATE);
-        String action = preferences.getString(callId, "");
-        if (!action.isEmpty()) preferences.edit().remove(callId).apply();
+        String key = callActionKey(callId, invitationId);
+        String action = preferences.getString(key, "");
+        if (!action.isEmpty()) preferences.edit().remove(key).apply();
         return action;
+    }
+
+    private static String callActionKey(String callId, String invitationId) {
+        String attempt = invitationId == null ? "" : invitationId.trim();
+        return callId + (attempt.isEmpty() ? "" : ":" + attempt);
     }
 
     private static int callNotificationId(String callId) {
@@ -385,24 +422,25 @@ public final class PingGoNotificationManager {
     private static Intent callActivityIntent(Context context, String callId, String chatId,
             String callerId, String callerName, boolean video, String offer, boolean autoAccept,
             boolean liveKit, boolean conference, String participantIdsJson) {
-        Intent intent = new Intent(context, liveKit ? LiveKitCallActivity.class
-                : (video ? VideoCallActivity.class : VoiceCallActivity.class))
-                .putExtra(VoiceCallActivity.EXTRA_CALL_ID, callId)
-                .putExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID, chatId)
-                .putExtra(VoiceCallActivity.EXTRA_CALLER_ID, callerId)
-                .putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER, callerName)
-                .putExtra(VoiceCallActivity.EXTRA_PROFILE_PATH,
+        Intent intent = new Intent(context, com.w3n.pinggo.activity.CallActivity.class)
+                .putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_ID, callId)
+                .putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_CHAT_ID, chatId)
+                .putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALLER_ID, callerId)
+                .putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PHONE_NUMBER, callerName)
+                .putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PROFILE_PATH,
                         ChatProfilePhotoStore.getLocalPath(context, callerId))
-                .putExtra(VoiceCallActivity.EXTRA_SDP_OFFER, offer)
-                .putExtra(VoiceCallActivity.EXTRA_AUTO_ACCEPT, autoAccept)
-                .putExtra(VoiceCallActivity.EXTRA_CALL_ENGINE,
+                .putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_SDP_OFFER, offer)
+                .putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_AUTO_ACCEPT, autoAccept)
+                .putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_ENGINE,
                         liveKit ? CallEngineToggle.LIVEKIT : CallEngineToggle.LEGACY)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                .putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_VIDEO, video)
+                // Reuse the single call host; it selects the session by callId.
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         if (liveKit) {
-            intent.putExtra(LiveKitCallActivity.EXTRA_MEDIA_TYPE, video ? "video" : "audio");
-            intent.putExtra(LiveKitCallActivity.EXTRA_INCOMING, true);
-            intent.putExtra(LiveKitCallActivity.EXTRA_CONFERENCE_CALL, conference);
-            intent.putStringArrayListExtra(LiveKitCallActivity.EXTRA_PARTICIPANT_IDS,
+            intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_MEDIA_TYPE, video ? "video" : "audio");
+            intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_INCOMING, true);
+            intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CONFERENCE_CALL, conference);
+            intent.putStringArrayListExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PARTICIPANT_IDS,
                     parseParticipantIds(participantIdsJson));
         }
         return intent;
@@ -421,13 +459,15 @@ public final class PingGoNotificationManager {
     }
 
     private static Intent callActionIntent(Context context, String action, String callId,
-            String chatId, String callerId, String callerName, boolean video, boolean liveKit) {
+            String chatId, String callerId, String callerName, boolean video, boolean liveKit,
+            String invitationId) {
         return new Intent(context, NotificationActionReceiver.class).setAction(action)
                 .putExtra(EXTRA_CALL_ID, callId).putExtra(EXTRA_CHAT_ID, chatId)
                 .putExtra(EXTRA_SENDER_ID, callerId)
                 .putExtra(EXTRA_CALLER_NAME, callerName)
                 .putExtra(EXTRA_CALL_MEDIA_TYPE, video ? "video" : "audio")
-                .putExtra(VoiceCallActivity.EXTRA_CALL_ENGINE,
+                .putExtra(EXTRA_INVITATION_ID, invitationId)
+                .putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_ENGINE,
                         liveKit ? CallEngineToggle.LIVEKIT : CallEngineToggle.LEGACY);
     }
 

@@ -73,6 +73,9 @@ public interface AppRestAPI {
   @POST("calls/livekit/token")
   Call<JsonObject> getLiveKitToken(@Body RequestBody body);
 
+  @GET("calls/webrtc/ice")
+  Call<JsonObject> getWebRtcIceServers();
+
   @POST("chats/getChat")
   Call<JsonObject> getChat(@Body RequestBody body);
 
@@ -135,6 +138,9 @@ public interface AppRestAPI {
 
   @POST("devices/login")
   Call<JsonObject> recordDeviceLogin(@Body JsonObject body);
+
+  @POST("devices/logout")
+  Call<JsonObject> logoutDevice(@Body JsonObject body);
 
   @POST("devices/logout-account")
   Call<JsonObject> logoutAccount(@Body JsonObject body);

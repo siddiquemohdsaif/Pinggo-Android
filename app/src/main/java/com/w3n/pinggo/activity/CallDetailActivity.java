@@ -111,20 +111,29 @@ public class CallDetailActivity extends PingGoActivity implements CallDetailView
     String phone = value(EXTRA_PHONE_NUMBER, "");
     boolean conference = getIntent().getBooleanExtra(EXTRA_IS_CONFERENCE, false);
     ArrayList<String> participants = conferenceParticipants();
-    Intent intent = new Intent(this, conference ? LiveKitCallActivity.class
-        : video ? VideoCallActivity.class : VoiceCallActivity.class);
-    intent.putExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID, value(EXTRA_CHAT_ID, ""));
-    intent.putExtra(VoiceCallActivity.EXTRA_CALL_ID, UUID.randomUUID().toString());
-    intent.putExtra(VoiceCallActivity.EXTRA_CALLER_ID,
+    com.w3n.pinggo.call.CallEngineChooser.show(
+        this, video ? "video" : "audio", !conference,
+        engine -> startOutgoingCall(video, phone, conference, participants, engine));
+  }
+
+  private void startOutgoingCall(boolean video, String phone, boolean conference,
+      ArrayList<String> participants, String engine) {
+    Intent intent = new Intent(this, CallActivity.class);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_CHAT_ID, value(EXTRA_CHAT_ID, ""));
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_ID, UUID.randomUUID().toString());
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALLER_ID,
         conference && !participants.isEmpty() ? participants.get(0) : phone);
-    intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER,
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PHONE_NUMBER,
         conference ? value(EXTRA_CONTACT_NAME, "Conference call")
             : DeviceContactResolver.cachedNameOrPhone(phone));
-    intent.putExtra(VoiceCallActivity.EXTRA_PROFILE_PATH, value(EXTRA_PROFILE_PATH, ""));
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PROFILE_PATH, value(EXTRA_PROFILE_PATH, ""));
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_VIDEO, video);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_MEDIA_TYPE, video ? "video" : "audio");
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_ENGINE, engine);
     if (conference) {
-      intent.putExtra(LiveKitCallActivity.EXTRA_MEDIA_TYPE, video ? "video" : "audio");
-      intent.putExtra(LiveKitCallActivity.EXTRA_CONFERENCE_CALL, true);
-      intent.putStringArrayListExtra(LiveKitCallActivity.EXTRA_PARTICIPANT_IDS, participants);
+      intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_MEDIA_TYPE, video ? "video" : "audio");
+      intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CONFERENCE_CALL, true);
+      intent.putStringArrayListExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PARTICIPANT_IDS, participants);
     }
     startActivity(intent);
   }

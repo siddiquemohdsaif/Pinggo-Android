@@ -21,9 +21,9 @@ import com.ogfa.nativeviews.text.FontVariation;
 import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
-import com.w3n.pinggo.activity.VoiceCallActivity;
 import com.w3n.pinggo.activity.HomeActivity;
 import com.w3n.pinggo.activity.ChatActivity;
+import com.w3n.pinggo.activity.CallActivity;
 import java.lang.ref.WeakReference;
 
 /** In-app floating card for a minimized active voice call. */
@@ -77,7 +77,7 @@ public final class FloatingVoiceCallController implements Application.ActivityLi
   public void clear() { active = false; minimized = false; endAction = null; remove(); }
 
   private void attach(Activity activity) {
-    if (!active || !minimized || activity instanceof VoiceCallActivity) return;
+    if (!active || !minimized || activity instanceof CallActivity) return;
     remove();
     ViewGroup decor = (ViewGroup) activity.getWindow().getDecorView();
     Bitmap white=color(Color.WHITE), danger=color(0xFFE53935), fallback=color(0xFFD9F1F7);
@@ -96,9 +96,7 @@ public final class FloatingVoiceCallController implements Application.ActivityLi
         content.add(new Button.Builder(activity,"restore_call",white,"",new RectF(0,0,w,h))
             .setImageScaleType(Image.ScaleType.FIT_XY).setCornerRadiusPx(px(activity,49.5f))
             .setRippleEnabled(true).setOnClickListener(id->{
-              Intent intent=new Intent(activity,VoiceCallActivity.class);
-              intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT|Intent.FLAG_ACTIVITY_SINGLE_TOP);
-              activity.startActivity(intent);
+              ActiveCallRegistry.getInstance().openExisting(activity);
             }));
         content.add(new Button.Builder(activity,"avatar",avatarBitmap,"",
             new RectF(px(activity,33f),px(activity,33f),px(activity,165f),px(activity,165f)))
@@ -155,7 +153,7 @@ public final class FloatingVoiceCallController implements Application.ActivityLi
 
   @Override public void onActivityResumed(Activity activity) {
     resumedActivity = new WeakReference<>(activity);
-    if (activity instanceof VoiceCallActivity) {
+    if (activity instanceof CallActivity) {
       remove();
     } else {
       previousActivity = new WeakReference<>(activity);

@@ -9,6 +9,7 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.Shader;
+import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
 import com.ogfa.nativeviews.button.Button;
@@ -18,9 +19,12 @@ import com.ogfa.nativeviews.text.FontVariation;
 import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
+import java.util.ArrayList;
+import java.util.List;
 
 /** Self-contained active voice-call screen. */
 public final class VoiceActiveCallView extends View {
+  private static final String TILE_SWAP_TAG = "PingGoTileSwap";
   private final com.ogfa.nativeviews.component.FigmaConfig figmaConfig =
       new com.ogfa.nativeviews.component.FigmaConfig(1080f);
   private static final int ACCENT = 0xFF019CC4;
@@ -34,17 +38,20 @@ public final class VoiceActiveCallView extends View {
   private final Bitmap accept = color(0xFF2EAD62);
   private final Bitmap disabled = color(0xFFB8C0C8);
   private int topInset, bottomInset;
-  private boolean speakerOn, muted;
+  private boolean speakerOn, muted, held;
   private String callStatus = "Calling…";
   private boolean conferenceMode;
   private String participantSummary = "";
   private boolean remoteMuted;
+  private boolean peerHeld;
   private boolean incomingPrompt;
   private boolean callConnected;
   private boolean addMemberVisible;
   private boolean participantTileMode;
   private boolean pictureInPictureMode;
   private boolean pictureInPictureParticipantGrid;
+  private final ArrayList<String> heldCallIds = new ArrayList<>();
+  private final ArrayList<String> heldCallNames = new ArrayList<>();
 
   public VoiceActiveCallView(Context context, String phone, String profilePath, Listener listener) {
     super(context);
@@ -62,6 +69,11 @@ public final class VoiceActiveCallView extends View {
   public void setAudioState(boolean speaker, boolean mute) {
     if (speakerOn == speaker && muted == mute) return;
     speakerOn = speaker; muted = mute;
+    requestBuild();
+  }
+  public void setHeld(boolean value) {
+    if (held == value) return;
+    held = value;
     requestBuild();
   }
   private boolean buildPosted, released;
@@ -86,6 +98,11 @@ public final class VoiceActiveCallView extends View {
     remoteMuted = muted;
     requestBuild();
   }
+  public void setPeerHeld(boolean held) {
+    if (peerHeld == held) return;
+    peerHeld = held;
+    requestBuild();
+  }
   public void showIncomingPrompt() {
     incomingPrompt = true;
     callStatus = "Incoming voice call";
@@ -98,7 +115,7 @@ public final class VoiceActiveCallView extends View {
   public void setCallConnected(boolean connected) {
     if (callConnected == connected) return;
     callConnected = connected;
-    if (!connected) muted = false;
+    if (!connected) { muted = false; held = false; }
     if (getWidth() > 0) build();
   }
   public void setAddMemberVisible(boolean visible) {
@@ -115,6 +132,14 @@ public final class VoiceActiveCallView extends View {
     pictureInPictureParticipantGrid = enabled && participantGridVisible;
     if (getWidth() > 0) build();
   }
+  public void setHeldCalls(List<String> ids, List<String> names) {
+    ArrayList<String> newIds = ids == null ? new ArrayList<>() : new ArrayList<>(ids);
+    ArrayList<String> newNames = names == null ? new ArrayList<>() : new ArrayList<>(names);
+    if (heldCallIds.equals(newIds) && heldCallNames.equals(newNames)) return;
+    heldCallIds.clear(); heldCallIds.addAll(newIds);
+    heldCallNames.clear(); heldCallNames.addAll(newNames);
+    requestBuild();
+  }
   @Override protected void onSizeChanged(int w, int h, int oldw, int oldh) {
     super.onSizeChanged(w, h, oldw, oldh); if (w > 0 && h > 0) build();
   }
@@ -130,13 +155,13 @@ public final class VoiceActiveCallView extends View {
     background.add(new Image.Builder(getContext(), "bg",
         participantTileMode ? transparent : light, new RectF(0, 0, w, h))
         .setScaleType(Image.ScaleType.FIT_XY));
-    button("back", participantTileMode ? control : white, "‹",
+    button("back", white, "‹",
         new RectF(px(27.5f), top, px(159.5f), top + px(132f)),
-        participantTileMode ? Color.WHITE : 0xFF000E1A,
+        0xFF000E1A,
         id -> listener.onBack());
     text("phone", conferenceMode ? "Conference call" : phone,
         new RectF(px(187f), top, w - px(55f), top + px(132f)), sp(20),
-        participantTileMode ? Color.WHITE : 0xFF000E1A,
+        0xFF000E1A,
         FontVariation.SEMI_BOLD, Text.Alignment.START);
     float size = Math.min(px(462f), w * .44f), avatarTop = top + px(346.5f);
     if (!participantTileMode) {
@@ -145,18 +170,23 @@ public final class VoiceActiveCallView extends View {
           .setScaleType(Image.ScaleType.CENTER_CROP));
     }
     float statusTop = participantTileMode ? top + px(112f) : avatarTop + size + px(60.5f);
-    text("status", callStatus, new RectF(px(66f), statusTop, w - px(66f),
+    text("status", displayedStatus(), new RectF(px(66f), statusTop, w - px(66f),
         statusTop + px(126.5f)), sp(18), ACCENT, FontVariation.SEMI_BOLD, Text.Alignment.CENTER);
+    buildHeldCallList(w, statusTop + px(105f));
+    if (!participantTileMode && (remoteMuted || muted)) {
+      String muteStatus = remoteMuted ? phone + " is muted" : "You are muted";
+      float muteOffset = heldCallIds.isEmpty()
+          ? px(105f) : px(105f + heldCallIds.size() * 92f);
+      text("mute_status", muteStatus,
+          new RectF(px(66f), statusTop + muteOffset, w - px(66f),
+              statusTop + muteOffset + px(105f)),
+          sp(14), 0xFF687382, FontVariation.REGULAR, Text.Alignment.CENTER);
+    }
     if (!participantTileMode && conferenceMode && !participantSummary.isEmpty()) {
       text("participants", participantSummary,
           new RectF(px(66f), avatarTop + size + px(163f), w - px(66f),
               avatarTop + size + px(286f)), sp(14), 0xFF687382,
           FontVariation.REGULAR, Text.Alignment.CENTER);
-    }
-    if (remoteMuted) {
-      text("remote_mute", phone + " • Mic off",
-          new RectF(px(66f), avatarTop + size + px(181.5f), w - px(66f), avatarTop + size + px(286f)),
-          sp(14), 0xFF687382, FontVariation.REGULAR, Text.Alignment.CENTER);
     }
     if (incomingPrompt) incomingControls(w, h); else controls(w, h);
     invalidate();
@@ -203,23 +233,56 @@ public final class VoiceActiveCallView extends View {
     if (addMemberVisible) gap = px(22f);
     float width = Math.min(px(253f), (w - px(132f) - gap * (count - 1)) / count);
     float x = (w - (width * count + gap * (count - 1))) / 2;
-    button("speaker", speakerOn ? selected : control, speakerOn ? "Speaker on" : "Speaker",
-        new RectF(x, top, x + width, bottom), Color.WHITE, id -> listener.onSpeaker());
+    boolean interactive = callConnected && !peerHeld && !held;
+    boolean holdInteractive = callConnected && !peerHeld;
+    Button speakerButton = button("speaker", !interactive ? disabled
+            : speakerOn ? selected : control, speakerOn ? "Speaker on" : "Speaker",
+        new RectF(x, top, x + width, bottom), Color.WHITE,
+        id -> { if (interactive) listener.onSpeaker(); });
+    speakerButton.setEnabled(interactive);
     x += width + gap;
-    Button muteButton = button("mute", !callConnected ? disabled : muted ? selected : control,
+    Button muteButton = button("mute", !interactive ? disabled : muted ? selected : control,
         muted ? "Unmute" : "Mute", new RectF(x, top, x + width, bottom), Color.WHITE,
-        id -> { if (callConnected) listener.onMute(); });
-    muteButton.setEnabled(callConnected);
+        id -> { if (interactive) listener.onMute(); });
+    muteButton.setEnabled(interactive);
     x += width + gap;
     if (addMemberVisible) {
-      Button addButton = button("add_member", callConnected ? control : disabled, "Add",
+      Button addButton = button("add_member", interactive ? control : disabled, "Add",
           new RectF(x, top, x + width, bottom), Color.WHITE,
-          id -> { if (callConnected) listener.onAddMember(); });
-      addButton.setEnabled(callConnected);
+          id -> { if (interactive) listener.onAddMember(); });
+      addButton.setEnabled(interactive);
       x += width + gap;
     }
     button("end", danger, "End", new RectF(x, top, x + width, bottom), Color.WHITE,
         id -> listener.onEnd());
+    float holdWidth = px(253f), holdBottom = top - px(22f), holdTop = holdBottom - px(132f);
+    Button holdButton = button("hold", !holdInteractive ? disabled : held ? selected : control,
+        held ? "Resume" : "Hold",
+        new RectF(w / 2f - holdWidth / 2f, holdTop, w / 2f + holdWidth / 2f, holdBottom),
+        Color.WHITE, id -> { if (holdInteractive) listener.onHold(); });
+    holdButton.setEnabled(holdInteractive);
+  }
+
+  private void buildHeldCallList(float width, float top) {
+    float rowHeight = px(78f), gap = px(14f), swapWidth = px(190f);
+    for (int index = 0; index < heldCallIds.size(); index++) {
+      String callId = heldCallIds.get(index);
+      String callName = index < heldCallNames.size() && !heldCallNames.get(index).isEmpty()
+          ? heldCallNames.get(index) : "Another call";
+      float rowTop = top + index * (rowHeight + gap);
+      text("held_call_" + index, callName + " • On hold",
+          new RectF(px(66f), rowTop, width - swapWidth - px(88f), rowTop + rowHeight),
+          sp(14), 0xFF687382, FontVariation.SEMI_BOLD, Text.Alignment.START);
+      button("swap_call_" + index, selected, "Swap",
+          new RectF(width - swapWidth - px(66f), rowTop,
+              width - px(66f), rowTop + rowHeight), Color.WHITE,
+          id -> listener.onSwapCall(callId));
+    }
+  }
+
+  private String displayedStatus() {
+    if (!peerHeld || !callStatus.startsWith("Call on hold")) return callStatus;
+    return phone + " put the call on hold" + callStatus.substring("Call on hold".length());
   }
 
   private void text(String id, String value, RectF rect, float size, int color,
@@ -242,7 +305,20 @@ public final class VoiceActiveCallView extends View {
   }
   @Override protected void onDraw(Canvas canvas) { super.onDraw(canvas); layers.draw(canvas); }
   @Override public boolean onTouchEvent(MotionEvent event) {
-    return layers.onTouchEvent(event) || super.onTouchEvent(event);
+    boolean layersHandled = layers.onTouchEvent(event);
+    // In conference tile mode this view is a transparent full-screen control overlay.
+    // Unclaimed touches must fall through to the participant grid and swap controls.
+    boolean fallbackHandled = !layersHandled && !participantTileMode && super.onTouchEvent(event);
+    if (participantTileMode && (event.getActionMasked() == MotionEvent.ACTION_DOWN
+        || event.getActionMasked() == MotionEvent.ACTION_UP
+        || event.getActionMasked() == MotionEvent.ACTION_CANCEL)) {
+      Log.i(TILE_SWAP_TAG, "touch_voice_overlay action="
+          + MotionEvent.actionToString(event.getActionMasked())
+          + " x=" + event.getX() + " y=" + event.getY()
+          + " nativeLayers=" + layersHandled + " fallback=" + fallbackHandled
+          + " handled=" + (layersHandled || fallbackHandled));
+    }
+    return layersHandled || fallbackHandled;
   }
   public void release() { released = true; layers.release(); recycle(light, white, transparent, control, selected, danger, accept, disabled, profile); }
   private Bitmap avatar() {
@@ -281,6 +357,8 @@ public final class VoiceActiveCallView extends View {
   }
   public interface Listener {
     void onBack(); void onAccept(); void onReject(); void onSpeaker(); void onMute(); void onEnd();
+    default void onHold() {}
     default void onAddMember() {}
+    default void onSwapCall(String callId) {}
   }
 }

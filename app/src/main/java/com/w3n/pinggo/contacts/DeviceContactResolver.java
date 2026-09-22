@@ -45,6 +45,12 @@ public final class DeviceContactResolver {
         return name == null || name.trim().isEmpty() ? fallback(normalized) : name;
     }
 
+    /** Returns only a user-owned address-book name, without a phone-number fallback. */
+    public static String cachedDeviceContactName(String phoneNumber) {
+        String name = cachedContactName(normalize(phoneNumber));
+        return name == null ? "" : name.trim();
+    }
+
     /** Direct lookup for background notification creation, with phone fallback. */
     public static String nameOrPhone(Context context, String phoneNumber) {
         String normalized = normalize(phoneNumber);

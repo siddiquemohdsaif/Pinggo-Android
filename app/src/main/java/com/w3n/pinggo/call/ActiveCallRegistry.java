@@ -5,7 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import java.lang.ref.WeakReference;
 
-/** Tracks the single call activity owned by this app process. */
+/** Tracks the single foreground call host; media sessions live in CallSessionService. */
 public final class ActiveCallRegistry {
   public interface PictureInPictureHangupListener {
     void onPictureInPictureHangup();
@@ -24,6 +24,12 @@ public final class ActiveCallRegistry {
   public static ActiveCallRegistry getInstance() { return INSTANCE; }
 
   public synchronized void register(Activity activity, String chatId, String type) {
+    Activity current = this.activity.get();
+    if (current != null && current != activity && !current.isFinishing()
+        && !current.isDestroyed() && isIncoming(activity)) return;
+    activate(activity, chatId, type);
+  }
+  public synchronized void activate(Activity activity, String chatId, String type) {
     this.activity = new WeakReference<>(activity);
     this.chatId = normalize(chatId);
     this.type = normalize(type);
@@ -33,7 +39,7 @@ public final class ActiveCallRegistry {
     if (activity.get() != owner) return;
     connected = value;
     if (value && pickerCallId.equals(normalize(owner.getIntent().getStringExtra(
-        com.w3n.pinggo.activity.VoiceCallActivity.EXTRA_CALL_ID)))) {
+        com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_ID)))) {
       Activity picker = callPicker.get();
       callPicker.clear();
       pickerCallId = "";
@@ -93,4 +99,10 @@ public final class ActiveCallRegistry {
     callPicker.clear(); pickerCallId = "";
   }
   private static String normalize(String value) { return value == null ? "" : value.trim(); }
+  private static boolean isIncoming(Activity activity) {
+    Intent intent = activity.getIntent();
+    String offer = intent.getStringExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_SDP_OFFER);
+    return (offer != null && !offer.trim().isEmpty())
+        || intent.getBooleanExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_INCOMING, false);
+  }
 }

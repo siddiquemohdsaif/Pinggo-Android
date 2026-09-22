@@ -5,6 +5,7 @@ public final class LatestMediaState {
   private boolean desired, applied, pending, inFlight;
   public LatestMediaState(boolean initial) { desired = applied = initial; }
   public boolean toggle() { desired = !desired; return desired; }
+  public void request(boolean value) { desired = value; }
   public boolean desired() { return desired; }
   public boolean applied() { return applied; }
   public boolean needsApply() { return !pending && desired != applied; }

@@ -78,6 +78,7 @@ public class SettingsActivity extends PingGoActivity implements SettingsView.Lis
         ? p.getPhoneNumber()
         : user == null ? "" : user.getPhoneNumber();
     settingsView.setValues(p == null ? null : p.getName(), phone);
+    settingsView.setCompanionDevice(LoginStateManager.getInstance().isCompanionDevice(this));
     loadPhoto(p);
   }
 
@@ -137,24 +138,15 @@ public class SettingsActivity extends PingGoActivity implements SettingsView.Lis
 
   @Override
   public void onAccount() {
-    List<String> actions = new ArrayList<>();
-    actions.add("Log out");
-    actions.add("Delete account");
-    showPrompt(NativePromptDialogView.actions(this, actions, index -> {
-      if (index == 0) {
-        showPrompt(NativePromptDialogView.confirm(this, "Log out?",
-            "You will need to sign in again to use this account.", "Log out",
-            this::onLogout, this::removePrompt));
-      } else {
-        confirmAccountPhone();
-      }
-    }, this::removePrompt));
+    if (LoginStateManager.getInstance().isCompanionDevice(this)) return;
+    confirmAccountPhone();
   }
 
   private void confirmAccountPhone() {
-    showPrompt(NativePromptDialogView.input(this,
-        "Enter your phone number to permanently delete your account", "",
-        InputType.TYPE_CLASS_PHONE, value -> {
+    showPrompt(NativePromptDialogView.destructiveInput(this,
+        "Delete account",
+        "Enter the phone number linked to this account to permanently delete it.", "",
+        InputType.TYPE_CLASS_PHONE, "Delete account", value -> {
           if (!phoneDigits(value).equals(phoneDigits(phone))) {
             Toast.makeText(this, "Phone number does not match this account.", Toast.LENGTH_LONG).show();
             return false;
@@ -411,7 +403,21 @@ public class SettingsActivity extends PingGoActivity implements SettingsView.Lis
   }
 
   @Override
-  public void onLogout() {
+  public void onLogoutThisDevice() {
+    showPrompt(NativePromptDialogView.confirm(this, "Log out from this device?",
+        "Other devices signed in to this Pinggo account will stay active.", "Log out",
+        () -> performLogout(false), this::removePrompt));
+  }
+
+  @Override
+  public void onLogoutAllDevices() {
+    if (LoginStateManager.getInstance().isCompanionDevice(this)) return;
+    showPrompt(NativePromptDialogView.confirm(this, "Log out from all devices?",
+        "Your Pinggo account will be signed out on every registered device.",
+        "Log out all devices", () -> performLogout(true), this::removePrompt));
+  }
+
+  private void performLogout(boolean allDevices) {
     settingsView.setLoading(true);
     new Thread(
         () -> {
@@ -423,6 +429,10 @@ public class SettingsActivity extends PingGoActivity implements SettingsView.Lis
             retrofit2.Response<JsonObject> response;
             if (login.isCompanionDevice(this)) {
               response = api.unlinkDevice(deviceId).execute();
+            } else if (!allDevices) {
+              JsonObject body = new JsonObject();
+              body.addProperty("deviceId", deviceId);
+              response = api.logoutDevice(body).execute();
             } else {
               JsonObject body = new JsonObject();
               body.addProperty("deviceId", deviceId);

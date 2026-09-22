@@ -548,6 +548,7 @@ public class NewChatActivity extends PingGoActivity implements NewChatView.Liste
         item.displayName == null || item.displayName.trim().isEmpty()
             ? DeviceContactResolver.nameOrPhone(this, item.phoneNumber) : item.displayName);
     intent.putExtra(ChatActivity.EXTRA_CHAT_ID, item.chatId);
+    intent.putExtra(ChatActivity.EXTRA_STARTED_FROM_NEW_CHAT, true);
     intent.putExtra(ChatActivity.EXTRA_PROFILE_PHOTO_URL, item.profilePhotoUrl);
     intent.putExtra(
         ChatActivity.EXTRA_LOCAL_PROFILE_PHOTO_PATH,
@@ -835,20 +836,21 @@ public class NewChatActivity extends PingGoActivity implements NewChatView.Liste
       Collections.sort(pair);
       callChatId = pair.get(0) + "_" + pair.get(1);
     }
-    Intent intent = new Intent(this, liveKit ? LiveKitCallActivity.class
-        : video ? VideoCallActivity.class : VoiceCallActivity.class);
-    intent.putExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID, callChatId);
+    Intent intent = new Intent(this, CallActivity.class);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_CHAT_ID, callChatId);
     String outgoingCallId = java.util.UUID.randomUUID().toString();
-    intent.putExtra(VoiceCallActivity.EXTRA_CALL_ID, outgoingCallId);
-    intent.putExtra(VoiceCallActivity.EXTRA_CALLER_ID, receiver);
-    intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER, displayName);
-    intent.putExtra(VoiceCallActivity.EXTRA_PROFILE_PATH, ChatProfilePhotoStore.getLocalPath(this, receiver));
-    intent.putExtra(VoiceCallActivity.EXTRA_CALL_ENGINE, liveKit
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_ID, outgoingCallId);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALLER_ID, receiver);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PHONE_NUMBER, displayName);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PROFILE_PATH, ChatProfilePhotoStore.getLocalPath(this, receiver));
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_ENGINE, liveKit
         ? com.w3n.pinggo.call.CallEngineToggle.LIVEKIT : com.w3n.pinggo.call.CallEngineToggle.LEGACY);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_VIDEO, video);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_MEDIA_TYPE, video ? "video" : "audio");
     if (liveKit) {
-      intent.putExtra(LiveKitCallActivity.EXTRA_MEDIA_TYPE, video ? "video" : "audio");
-      intent.putExtra(LiveKitCallActivity.EXTRA_CONFERENCE_CALL, members.size() > 1);
-      intent.putStringArrayListExtra(LiveKitCallActivity.EXTRA_PARTICIPANT_IDS, members);
+      intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_MEDIA_TYPE, video ? "video" : "audio");
+      intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CONFERENCE_CALL, members.size() > 1);
+      intent.putStringArrayListExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PARTICIPANT_IDS, members);
     }
     registry.closePickerWhenConnected(this, outgoingCallId);
     startActivity(intent);

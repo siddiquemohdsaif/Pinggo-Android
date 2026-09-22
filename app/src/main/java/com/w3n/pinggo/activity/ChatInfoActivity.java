@@ -374,12 +374,22 @@ public final class ChatInfoActivity extends PingGoActivity {
       toast("Group call implementation pending.");
       return;
     }
-    Intent intent = new Intent(this, video ? VideoCallActivity.class : VoiceCallActivity.class);
-    intent.putExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID, chatId);
-    intent.putExtra(VoiceCallActivity.EXTRA_CALL_ID, UUID.randomUUID().toString());
-    intent.putExtra(VoiceCallActivity.EXTRA_CALLER_ID, phone);
-    intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER, name);
-    intent.putExtra(VoiceCallActivity.EXTRA_PROFILE_PATH, profilePath);
+    com.w3n.pinggo.call.CallEngineChooser.show(
+        this, video ? "video" : "audio", chatId,
+        engine -> startOutgoingCall(video, engine));
+  }
+
+  private void startOutgoingCall(boolean video, String engine) {
+    Intent intent = new Intent(this, CallActivity.class);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_CHAT_ID, chatId);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_ID, UUID.randomUUID().toString());
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALLER_ID, phone);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PHONE_NUMBER, name);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PROFILE_PATH, profilePath);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_VIDEO, video);
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_MEDIA_TYPE, video ? "video" : "audio");
+    intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_ENGINE,
+        engine);
     startActivity(intent);
   }
 
@@ -993,6 +1003,8 @@ public final class ChatInfoActivity extends PingGoActivity {
     return new AppFunctionManager.Callback() {
       @Override
       public void onSuccess(Object result) {
+        if (group && result instanceof JsonObject)
+          repository.updateGroupMetadata((JsonObject) result);
         runOnUiThread(() -> success.accept(result));
       }
 
@@ -1209,6 +1221,7 @@ public final class ChatInfoActivity extends PingGoActivity {
     api.uploadGroupProfilePhoto(userId, chatId, photo, new AppFunctionManager.Callback() {
       @Override public void onSuccess(Object result) {
         JsonObject response = asObject(result);
+        repository.updateGroupMetadata(response);
         String uploadedUrl = string(response, "profilePhotoUrl");
         photoExecutor.execute(() -> {
           String localPath = ChatProfilePhotoStore.storeBitmap(

@@ -109,6 +109,13 @@ public final class NativePromptDialogView extends View {
         null, handler, changedHandler, null, null, null, onDismiss);
   }
 
+  public static NativePromptDialogView destructiveInput(Context context, String title,
+      String message, String initialValue, int inputType, String confirmLabel,
+      InputHandler handler, Runnable onDismiss) {
+    return new NativePromptDialogView(context, Mode.INPUT, title, message, initialValue, inputType,
+        null, handler, null, null, confirmLabel, null, onDismiss);
+  }
+
   public static NativePromptDialogView actions(Context context, List<String> actions,
       ActionHandler handler, Runnable onDismiss) {
     return new NativePromptDialogView(context, Mode.ACTIONS, "", "", "", 0,
@@ -129,7 +136,7 @@ public final class NativePromptDialogView extends View {
     float dialogHeight = mode == Mode.ACTIONS
         ? px(88f + actions.size() * 159.5f)
         : mode == Mode.INFO ? Math.min(height - px(160f), px(1100f))
-        : mode == Mode.INPUT ? px(687.5f) : px(632.5f);
+        : mode == Mode.INPUT ? px(message.isEmpty() ? 687.5f : 850f) : px(632.5f);
     dialog = dialogLayer.add(new Dialog.Builder(getContext(), "native_prompt",
         new RectF(0, 0, dialogWidth, dialogHeight))
         .horizontalCenter(true).verticalCenter(true)
@@ -169,8 +176,18 @@ public final class NativePromptDialogView extends View {
           .setVerticalAlignment(Text.VerticalAlignment.CENTER)
           .setMaxLines(mode == Mode.INFO ? 14 : 3));
     } else {
+      if (!message.isEmpty()) {
+        messageText = content.add(new Text.Builder(getContext(), scope.id("input_message"), message,
+            scope.rect(px(60.5f), px(176f), width - px(121f), px(121f)))
+            .setFont(NativeFonts.INTER).setFontVariations(FontVariation.REGULAR)
+            .setTextSizePx(px(35.75f)).setTextColor(0xFF656565)
+            .setAlignment(Text.Alignment.CENTER)
+            .setVerticalAlignment(Text.VerticalAlignment.CENTER)
+            .setMaxLines(3));
+      }
+      float fieldTop = message.isEmpty() ? px(214.5f) : px(319f);
       field = content.add(new TextField.Builder(getContext(), scope.id("field"),
-          scope.rect(px(60.5f), px(214.5f), width - px(121f), px(159.5f)))
+          scope.rect(px(60.5f), fieldTop, width - px(121f), px(159.5f)))
           .setFont(NativeFonts.INTER).setFontVariations(FontVariation.REGULAR)
           .setText(initialValue).setInputType(inputType)
           .setOnTextChangedListener((id, value) -> {
@@ -185,10 +202,12 @@ public final class NativePromptDialogView extends View {
     if (mode == Mode.INPUT) {
       float gap = px(27.5f), pad = px(60.5f);
       float buttonWidth = (width - pad * 2 - gap) / 2;
+      boolean destructiveAction = confirmLabel != null && !confirmLabel.trim().isEmpty();
       content.add(button(scope, "cancel", secondary, getContext().getString(android.R.string.cancel),
           pad, buttonTop, buttonWidth, 0xFF000E1A,
           id -> nativeDialog.dismiss(Dialog.DismissReason.ACTION)));
-      content.add(button(scope, "confirm", primary, getContext().getString(R.string.confirm),
+      content.add(button(scope, "confirm", destructiveAction ? destructive : primary,
+          destructiveAction ? confirmLabel : getContext().getString(R.string.confirm),
           pad + buttonWidth + gap,
           buttonTop, buttonWidth, Color.WHITE, id -> {
             if (inputHandler.onSubmit(field.getText().trim())) {

@@ -74,6 +74,9 @@ public interface ChatDao {
     @Query("SELECT * FROM chats WHERE chatId = :chatId LIMIT 1")
     ChatEntity findByChatId(String chatId);
 
+    @Query("SELECT * FROM chats WHERE isGroup = 0 AND otherUserId = :userId LIMIT 1")
+    ChatEntity findDirectChatByUserId(String userId);
+
     @Query("SELECT * FROM chats WHERE chatId = :chatId LIMIT 1")
     LiveData<ChatEntity> observeChat(String chatId);
 
@@ -111,6 +114,28 @@ public interface ChatDao {
     @Query("UPDATE chats SET profilePhotoUrl = '', localProfilePhotoPath = '', updatedAt = :updatedAt "
             + "WHERE chatId = :chatId")
     void clearProfilePhoto(String chatId, long updatedAt);
+
+    @Query("UPDATE chats SET contactName = :name, profilePhotoUrl = :profilePhotoUrl, "
+            + "localProfilePhotoPath = :localProfilePhotoPath, isGroup = 1, "
+            + "groupDescription = :description, groupMemberCount = :memberCount, "
+            + "ownGroupRole = :ownRole, membershipVersion = :membershipVersion, "
+            + "updatedAt = :updatedAt WHERE chatId = :chatId")
+    int updateGroupMetadata(String chatId, String name, String profilePhotoUrl,
+                            String localProfilePhotoPath, String description,
+                            int memberCount, String ownRole, long membershipVersion,
+                            long updatedAt);
+
+    @Query("UPDATE chats SET contactName = :name, profilePhotoUrl = :profilePhotoUrl, "
+            + "localProfilePhotoPath = :localProfilePhotoPath, updatedAt = :updatedAt "
+            + "WHERE isGroup = 0 AND otherUserId = :userId")
+    int updateDirectUserProfile(String userId, String name, String profilePhotoUrl,
+                                String localProfilePhotoPath, long updatedAt);
+
+    @Query("UPDATE chats SET localProfilePhotoPath = :localPath, updatedAt = :updatedAt "
+            + "WHERE isGroup = 0 AND otherUserId = :userId "
+            + "AND profilePhotoUrl = :profilePhotoUrl")
+    int updateLocalProfilePhotoPathForUser(String userId, String profilePhotoUrl,
+                                           String localPath, long updatedAt);
 
     @Transaction
     default void updateLocalProfilePhotoPaths(List<ChatEntity> chats, long updatedAt) {

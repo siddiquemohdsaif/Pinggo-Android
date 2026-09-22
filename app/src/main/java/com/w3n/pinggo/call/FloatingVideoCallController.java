@@ -24,7 +24,7 @@ import com.ogfa.nativeviews.text.Text;
 import com.ogfa.nativeviews.zlayer.ZLayer;
 import com.ogfa.nativeviews.zlayer.ZLayerGroup;
 import com.w3n.pinggo.activity.HomeActivity;
-import com.w3n.pinggo.activity.VideoCallActivity;
+import com.w3n.pinggo.activity.CallActivity;
 import java.lang.ref.WeakReference;
 
 /** In-app floating live preview for a minimized video call. */
@@ -69,7 +69,7 @@ public final class FloatingVideoCallController implements Application.ActivityLi
   }
 
   private void attach(Activity activity) {
-    if (!active || !minimized || activity instanceof VideoCallActivity) return;
+    if (!active || !minimized || activity instanceof CallActivity) return;
     remove();
     ViewGroup decor = (ViewGroup) activity.getWindow().getDecorView();
     FrameLayout card = new FrameLayout(activity); card.setElevation(px(activity, 33f));
@@ -130,9 +130,7 @@ public final class FloatingVideoCallController implements Application.ActivityLi
   }
   private void restore(Activity host) {
     minimized = false; remove();
-    Intent intent = new Intent(host, VideoCallActivity.class);
-    intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-    host.startActivity(intent);
+    ActiveCallRegistry.getInstance().openExisting(host);
   }
   private void makeDraggable(View view, Runnable tapAction) {
     final float[] down = new float[4];
@@ -176,7 +174,7 @@ public final class FloatingVideoCallController implements Application.ActivityLi
         Math.max(1, activity.getResources().getDisplayMetrics().widthPixels)));
   }
   @Override public void onActivityResumed(Activity activity) {
-    if (activity instanceof VideoCallActivity) { minimized = false; remove(); }
+    if (activity instanceof CallActivity) { minimized = false; remove(); }
     else { previousActivity = new WeakReference<>(activity); attach(activity); }
   }
   @Override public void onActivityDestroyed(Activity activity) {}

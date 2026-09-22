@@ -19,9 +19,6 @@ import com.ogfa.nativeviews.component.FigmaConfig;
 import com.w3n.pinggo.Database.CloudFunction.Utils.LoginStateManager;
 import com.w3n.pinggo.Database.CloudFunction.Utils.JsonParserUtil;
 import com.w3n.pinggo.Database.CloudFunction.Utils.ChatProfilePhotoStore;
-import com.w3n.pinggo.activity.VoiceCallActivity;
-import com.w3n.pinggo.activity.VideoCallActivity;
-import com.w3n.pinggo.activity.LiveKitCallActivity;
 import com.w3n.pinggo.call.CallEngineToggle;
 import com.w3n.pinggo.call.FloatingVoiceCallController;
 import com.w3n.pinggo.call.FloatingVideoCallController;
@@ -92,7 +89,8 @@ public class AppContextProvider extends Application implements ChatRepository.In
         }
         String chatId = JsonParserUtil.getString(event, "chatId");
         String callId = JsonParserUtil.getString(event, "callId");
-        String requestedAction = PingGoNotificationManager.consumeCallAction(this, callId);
+        String requestedAction = PingGoNotificationManager.consumeCallAction(this, callId,
+                JsonParserUtil.getString(event, "invitationId"));
         Log.i("PingGoCallTrace", "invite_received callId=" + callId + " chatId=" + chatId
                 + " engine=" + (liveKit ? "livekit" : "legacy")
                 + " requestedAction=" + requestedAction + " activeChat="
@@ -110,33 +108,34 @@ public class AppContextProvider extends Application implements ChatRepository.In
         boolean video = "video".equals(JsonParserUtil.getString(event, "mediaType"));
         boolean conference = "group".equals(JsonParserUtil.getString(event, "callMode"))
                 || JsonParserUtil.getBoolean(event, "conference");
-        Intent intent = new Intent(this, liveKit ? LiveKitCallActivity.class
-                : (video ? VideoCallActivity.class : VoiceCallActivity.class));
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        intent.putExtra(VoiceCallActivity.EXTRA_PHONE_NUMBER,
+        Intent intent = new Intent(this, com.w3n.pinggo.activity.CallActivity.class);
+        // CallActivity is singleTask and routes each callId to its service-owned session.
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PHONE_NUMBER,
                 DeviceContactResolver.nameOrPhone(this, callerId));
-        intent.putExtra(VoiceCallActivity.EXTRA_PROFILE_PATH,
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PROFILE_PATH,
                 ChatProfilePhotoStore.getLocalPath(this, callerId));
-        intent.putExtra(VoiceCallActivity.EXTRA_CALL_ID,
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_ID,
                 callId);
-        intent.putExtra(VoiceCallActivity.EXTRA_CALLER_ID, callerId);
-        intent.putExtra(VoiceCallActivity.EXTRA_CALL_CHAT_ID,
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALLER_ID, callerId);
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_CHAT_ID,
                 chatId);
-        intent.putExtra(VoiceCallActivity.EXTRA_SDP_OFFER,
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_SDP_OFFER,
                 sdp == null ? "" : WebRTCCallClient.decodeSdp(sdp));
-        intent.putExtra(LiveKitCallActivity.EXTRA_MEDIA_TYPE, video ? "video" : "audio");
-        intent.putExtra(LiveKitCallActivity.EXTRA_INCOMING, true);
-        intent.putExtra(LiveKitCallActivity.EXTRA_CONFERENCE_CALL, conference);
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_MEDIA_TYPE, video ? "video" : "audio");
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_VIDEO, video);
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_INCOMING, true);
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CONFERENCE_CALL, conference);
         if (event.has("participantIds") && event.get("participantIds").isJsonArray()) {
             ArrayList<String> participantIds = new ArrayList<>();
             for (com.google.gson.JsonElement value : event.getAsJsonArray("participantIds"))
                 if (value != null && value.isJsonPrimitive()) participantIds.add(value.getAsString());
-            intent.putStringArrayListExtra(LiveKitCallActivity.EXTRA_PARTICIPANT_IDS,
+            intent.putStringArrayListExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_PARTICIPANT_IDS,
                     participantIds);
         }
-        intent.putExtra(VoiceCallActivity.EXTRA_CALL_ENGINE,
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_CALL_ENGINE,
                 liveKit ? CallEngineToggle.LIVEKIT : CallEngineToggle.LEGACY);
-        intent.putExtra(VoiceCallActivity.EXTRA_AUTO_ACCEPT, answerRequested);
+        intent.putExtra(com.w3n.pinggo.call.session.CallActivityContract.EXTRA_AUTO_ACCEPT, answerRequested);
         Log.i("PingGoCallTrace", "activity_launch_requested callId=" + callId
                 + " media=" + (video ? "video" : "audio") + " autoAccept=" + answerRequested
                 + " engine=" + (liveKit ? "livekit" : "legacy")

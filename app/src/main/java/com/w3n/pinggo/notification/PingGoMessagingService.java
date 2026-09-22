@@ -44,7 +44,8 @@ public class PingGoMessagingService extends FirebaseMessagingService {
                     + " callId=" + callId);
             return;
         }
-        if ("device_linked".equals(type) || "device_unlinked".equals(type)) {
+        if ("device_login".equals(type)
+                || "device_linked".equals(type) || "device_unlinked".equals(type)) {
             LoginStateManager login = LoginStateManager.getInstance();
             String currentAccount = login.getUID(this);
             String eventAccount = value(message, "accountId");
@@ -72,7 +73,7 @@ public class PingGoMessagingService extends FirebaseMessagingService {
             PingGoNotificationManager.showMissedCallNotification(this, message.getData());
         } else if ("call_cancelled".equals(message.getData().get("type"))) {
             PingGoNotificationManager.clearCallNotification(this,
-                    value(message, "callId"));
+                    value(message, "callId"), value(message, "invitationId"));
         }
     }
 

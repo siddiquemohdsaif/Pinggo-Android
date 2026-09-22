@@ -582,6 +582,21 @@ public final class ChatView extends View {
     adapter.prepareMetrics(values, availableWidth);
   }
 
+  /** Recreates the variable-height timeline after returning from the call host. */
+  public void refreshMessageLayoutAfterCall() {
+    if (adapter == null) return;
+    adapter.resetLayoutState();
+    post(() -> {
+      if (getWidth() <= 0 || getHeight() <= 0) {
+        requestLayout();
+        return;
+      }
+      // build() preserves the visible message (or the bottom position) while replacing
+      // ComponentList's stale position-to-height table with freshly measured rows.
+      build();
+    });
+  }
+
   /** Builds render models, dates, signatures, and row metrics without mutating the AAR list. */
   public PreparedMessages prepareMessages(List<MessageEntity> values, float availableWidth) {
     adapter.prepareMetrics(values, availableWidth);
